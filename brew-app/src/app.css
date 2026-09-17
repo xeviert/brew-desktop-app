@@ -1,0 +1,31 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  background: #16181d;
+  color: #e6e6e6;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  padding: 1.5rem;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+
+dt {
+  color: #9aa0a6;
+}
+
+dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}

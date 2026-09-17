@@ -38,23 +38,24 @@ MQTT lands later.
 
 ### Phase 1 — Skeleton
 **1a. Project shape**
-- [ ] `cargo create-tauri-app`, Tauri v2, Svelte + TypeScript
-- [ ] Split into a Cargo workspace: `crates/brewcore` (all logic, no Tauri dep) +
+- [x] `cargo create-tauri-app`, Tauri v2, Svelte + TypeScript
+- [x] Split into a Cargo workspace: `crates/brewcore` (all logic, no Tauri dep) +
       `src-tauri` (thin shell). Non-negotiable — it's what makes logic testable
       with plain `cargo test` and what lets v2's controller reuse the same crate
-- [ ] `src-tauri` depends on `brewcore`; `brewcore` never depends on `tauri`
-- [ ] Module skeleton inside `brewcore`: `db/`, `fermentrack/`, `calc/`, `config.rs`, `error.rs`
+- [x] `src-tauri` depends on `brewcore`; `brewcore` never depends on `tauri`
+- [x] Module skeleton inside `brewcore`: `db/`, `fermentrack/`, `calc/`, `config.rs`, `error.rs`
 
 **1b. Database**
-- [ ] `brewery.db` in Tauri's app-data dir; `BREWAPP_DB` env var overrides (tests, dev)
-- [ ] Connection setup applies pragmas every time: `journal_mode=WAL`,
+- [x] `brewery.db` in Tauri's app-data dir; `BREWAPP_DB` env var overrides (tests, dev)
+- [x] Connection setup applies pragmas every time: `journal_mode=WAL`,
       `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5000`
-- [ ] One writer connection owned by a task; reads via an `r2d2_sqlite` pool
-- [ ] Migration runner: `migrations/NNNN_name.sql` embedded with `include_str!`,
+- [x] One writer connection behind a `Mutex` (an actor task buys nothing until
+      Phase 2 wants batching); reads via an `r2d2_sqlite` pool
+- [x] Migration runner: `migrations/NNNN_name.sql` embedded with `include_str!`,
       each applied inside a transaction, `PRAGMA user_version` bumped in the same txn
-- [ ] Migrations are append-only and never edited after commit
-- [ ] Migration test: empty db → head, and vN → head, both asserted
-- [ ] Migration `0001`: the Tier 1 tables (`source`, `stream`, `reading`, `sync_state`)
+- [x] Migrations are append-only and never edited after commit
+- [x] Migration test: empty db → head, and vN → head, both asserted
+- [x] Migration `0001`: the Tier 1 tables (`source`, `stream`, `reading`, `sync_state`)
 
 **1c. Conventions locked now, not later**
 - [ ] Timestamps: UTC epoch **seconds**, `INTEGER`, everywhere. Format only at the UI edge
@@ -314,14 +315,20 @@ file, the rest do not. Apply them in one place that every connection goes
 through, or you will get `SQLITE_BUSY` and silently-ignored foreign keys.
 
 ```rust
-fn configure(conn: &Connection) -> Result<()> {
-    conn.pragma_update(None, "journal_mode", "WAL")?;   // persists in the file
+fn apply_pragmas(conn: &Connection) -> rusqlite::Result<String> {
+    // `PRAGMA journal_mode` RETURNS A ROW, so it cannot go through
+    // `pragma_update` — that uses `execute` and fails with
+    // `ExecuteReturnedResults`. Query it and check what you actually got.
+    let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
     conn.pragma_update(None, "synchronous", "NORMAL")?; // per-connection
     conn.pragma_update(None, "foreign_keys", "ON")?;    // per-connection, OFF by default
     conn.busy_timeout(Duration::from_secs(5))?;
-    Ok(())
+    Ok(mode)  // only `journal_mode` persists in the file
 }
 ```
+
+Neither `journal_mode` nor `foreign_keys` can be changed inside a transaction — the
+latter silently does nothing — so this runs immediately on open, before migrations.
 
 WAL is what lets a chart query run while the sync task is inserting. One writer
 at a time is still the rule — funnel writes through a single owned connection

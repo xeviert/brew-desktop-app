@@ -1,0 +1,22 @@
+[package]
+name = "brewcore"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# This crate must never depend on `tauri`, directly or transitively: it is what
+# makes every piece of logic testable with a plain `cargo test`, and what lets the
+# future controller (see docs/BUILDOUT.md "Keeping the Option 2 door open") reuse
+# it. `tests/no_tauri.rs` enforces this.
+[dependencies]
+rusqlite.workspace = true
+r2d2.workspace = true
+r2d2_sqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
