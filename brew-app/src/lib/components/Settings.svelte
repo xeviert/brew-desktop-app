@@ -3,17 +3,30 @@
 
   let { config, onsaved }: { config: Config; onsaved: (c: Config) => void } = $props();
 
+  /**
+   * Svelte's number binding is `value === "" ? null : +value`, so an empty field
+   * puts `null` in the draft. That is not a `Config`, and sending it anyway fails in
+   * serde *before* the command runs — Tauri answers with a raw string, not an
+   * `ApiError`, and the pane shows "invalid args `config` for command `set_config`".
+   * Modelling the hole instead lets Save refuse it with something readable.
+   */
+  type Draft = Omit<Config, "sync"> & { sync: { poll_interval_secs: number | null } };
+
   // A working copy behind an explicit Save, not save-on-keystroke: every save is an
   // fsync'd file write. `$state.snapshot` first — `structuredClone` on a `$state`
   // proxy throws `DataCloneError`.
   // svelte-ignore state_referenced_locally -- the one-shot read is the seed; the
   // `$effect` below keeps it in step afterwards.
-  let draft = $state<Config>(clone(config));
+  let draft = $state<Draft>(clone(config));
   let saving = $state(false);
   let error = $state<ApiError | null>(null);
   let saved = $state(false);
 
   const dirty = $derived(JSON.stringify(draft) !== JSON.stringify(config));
+
+  // Not coerced to a number on input: snapping an empty field back to 0 or to the
+  // default fights the user mid-keystroke. Let it stay empty and block Save.
+  const intervalMissing = $derived(!Number.isFinite(draft.sync.poll_interval_secs));
 
   // Re-seed from the stored value whenever it changes, so a save's normalised result
   // (trimmed URL, clamped interval) lands in the fields. Reads only `config`, so the
@@ -22,7 +35,7 @@
     draft = clone(config);
   });
 
-  function clone(c: Config): Config {
+  function clone(c: Config): Draft {
     return structuredClone($state.snapshot(c));
   }
 
@@ -31,8 +44,11 @@
     error = null;
     saved = false;
     try {
+      const snapshot = $state.snapshot(draft);
+      const poll_interval_secs = snapshot.sync.poll_interval_secs;
+      if (poll_interval_secs === null) return;
       // Adopt what was stored: the URL may come back trimmed, the interval clamped.
-      const stored = await setConfig($state.snapshot(draft));
+      const stored = await setConfig({ ...snapshot, sync: { poll_interval_secs } });
       onsaved(stored);
       saved = true;
     } catch (e) {
@@ -55,7 +71,11 @@
   <label>
     <span>Poll interval</span>
     <input type="number" min="5" max="86400" step="5" bind:value={draft.sync.poll_interval_secs} />
-    <small>seconds — takes effect in Phase 2</small>
+    {#if intervalMissing}
+      <small class="warn">required — 5 to 86400 seconds</small>
+    {:else}
+      <small>seconds — takes effect in Phase 2</small>
+    {/if}
   </label>
 
   <label>
@@ -76,7 +96,7 @@
   </label>
 
   <div class="actions">
-    <button onclick={save} disabled={!dirty || saving}>
+    <button onclick={save} disabled={!dirty || saving || intervalMissing}>
       {saving ? "Saving…" : "Save"}
     </button>
     {#if saved && !dirty}
@@ -119,6 +139,10 @@
   small {
     grid-column: 2;
     color: #6f757d;
+  }
+
+  small.warn {
+    color: #e0a35f;
   }
 
   .actions {

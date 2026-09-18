@@ -18,11 +18,20 @@ pub enum Error {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
-    // A separate variant from `Io` because `std::io::Error` carries no path: on
+    // Separate variants from `Io` because `std::io::Error` carries no path: on
     // Windows a failed save reads "Access is denied. (os error 5)" with no hint as
-    // to what was denied.
+    // to what was denied. Read and write are separate in turn because this message
+    // reaches the settings pane verbatim, and "could not read" on a failed Save
+    // sends the user looking in the wrong place.
     #[error("could not read config at {path}: {source}")]
-    ConfigIo {
+    ConfigRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("could not write config to {path}: {source}")]
+    ConfigWrite {
         path: PathBuf,
         #[source]
         source: std::io::Error,
@@ -86,7 +95,11 @@ impl Error {
             Error::Sqlite(_) => "db.sqlite",
             Error::Pool(_) => "db.pool",
             Error::Io(_) => "io",
-            Error::ConfigIo { .. } => "config.io",
+            // `config.io` stays the read code so nothing that already branches on it
+            // has to change; a failed write gets its own, because "your settings did
+            // not save" and "your settings did not load" need different UI.
+            Error::ConfigRead { .. } => "config.io",
+            Error::ConfigWrite { .. } => "config.write",
             Error::ConfigParse { .. } => "config.parse",
             Error::ConfigSerialize(_) => "config.serialize",
             Error::ConfigInvalid { .. } => "config.invalid",

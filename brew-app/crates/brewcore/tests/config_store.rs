@@ -54,6 +54,43 @@ fn set_returns_the_normalised_value() {
 }
 
 #[test]
+fn anything_set_accepts_can_be_set_again() {
+    // `set` validates its argument and *then* normalises, so a normaliser that can
+    // turn a valid value into an invalid one strands the user: the settings pane
+    // refuses to save the value it just loaded, blaming a field they cannot fix.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("config.toml");
+    let store = ConfigStore::open(&path).unwrap();
+
+    for url in [
+        "http://fermentrack.local",
+        "http://fermentrack.local/",
+        "http://fermentrack.local:8080//",
+        "https://host/sub/path/",
+        "  http://host  ",
+    ] {
+        let config = Config {
+            fermentrack: Fermentrack {
+                base_url: url.to_owned(),
+            },
+            ..Config::default()
+        };
+        let stored = store
+            .set(config)
+            .unwrap_or_else(|e| panic!("{url:?} rejected: {e}"));
+
+        let again = store.set(stored.clone()).unwrap_or_else(|e| {
+            panic!(
+                "{url:?} stored as {:?}, then rejected: {e}",
+                stored.fermentrack.base_url
+            )
+        });
+        assert_eq!(again, stored, "{url:?} did not settle");
+        assert_eq!(config::load(&path).unwrap(), stored);
+    }
+}
+
+#[test]
 fn a_rejected_set_changes_neither_the_file_nor_memory() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("config.toml");

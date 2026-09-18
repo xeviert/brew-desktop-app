@@ -18,12 +18,21 @@
   // `onMount`, not `$effect`: these are one-shot loads with no reactive inputs. The
   // previous `$effect` worked only because it read no state, which is an invariant
   // nobody would notice breaking.
+  //
+  // `allSettled`, not `all`: these two share a screen and nothing else. Settings come
+  // from a TOML file and `db_status` is the only one of the pair that can fail, so
+  // `all` meant a transient SQLite error hid the settings pane — which the database
+  // has no part in. Phase 2g adds more calls here, so the coupling would widen.
   onMount(async () => {
-    try {
-      [config, status] = await Promise.all([getConfig(), dbStatus()]);
-    } catch (e) {
-      error = toApiError(e);
-    }
+    const [loaded, queried] = await Promise.allSettled([getConfig(), dbStatus()]);
+
+    if (loaded.status === "fulfilled") config = loaded.value;
+    else error = toApiError(loaded.reason);
+
+    if (queried.status === "fulfilled") status = queried.value;
+    // One slot, so the first failure wins: the footer is a status line, not an error
+    // console, and the config failure is the one that blanks the page.
+    else error ??= toApiError(queried.reason);
   });
 </script>
 
@@ -32,7 +41,11 @@
 
   {#if config}
     <Settings {config} onsaved={(c) => (config = c)} />
-  {:else if !error}
+  {:else if error}
+    <!-- Without this, a failed `get_config` renders an empty page under the heading
+         and one red line in the footer. -->
+    <p role="alert">Settings unavailable: {error.message}</p>
+  {:else}
     <p>Loading…</p>
   {/if}
 </main>

@@ -103,10 +103,10 @@ impl Config {
     pub fn normalize(&mut self) -> Vec<String> {
         let mut notes = Vec::new();
 
-        let trimmed = self.fermentrack.base_url.trim().trim_end_matches('/');
+        let trimmed = normalize_base_url(&self.fermentrack.base_url);
         if trimmed != self.fermentrack.base_url {
             notes.push(format!("fermentrack.base_url normalised to '{trimmed}'"));
-            self.fermentrack.base_url = trimmed.to_owned();
+            self.fermentrack.base_url = trimmed;
         }
 
         let clamped = self
@@ -146,10 +146,23 @@ impl Config {
         if !url.is_empty() {
             // Phase 2c: replace with `reqwest::Url::parse` once that crate is in the
             // tree. Pulling in a URL parser for four fields is not worth it today.
-            if !(url.starts_with("http://") || url.starts_with("https://")) {
+            let Some(host) = url
+                .strip_prefix("http://")
+                .or_else(|| url.strip_prefix("https://"))
+            else {
                 return Err(Error::ConfigInvalid {
                     field: "fermentrack.base_url",
                     reason: "must start with http:// or https://".to_owned(),
+                });
+            };
+            // A scheme with nothing after it is not a URL, and accepting one is how
+            // `normalize` and `validate` end up disagreeing about the same string.
+            // Trailing slashes are stripped here too, because `normalize` strips them
+            // and "http:///" must not validate before it and fail after.
+            if host.trim_end_matches('/').is_empty() {
+                return Err(Error::ConfigInvalid {
+                    field: "fermentrack.base_url",
+                    reason: "must include a host, e.g. http://fermentrack.local".to_owned(),
                 });
             }
             if url.split_whitespace().count() != 1 {
@@ -162,6 +175,20 @@ impl Config {
 
         Ok(())
     }
+}
+
+/// Trim surrounding whitespace and trailing slashes, but never the scheme's own.
+///
+/// A bare `trim_end_matches('/')` turns `http://` into `http:`, which
+/// [`Config::validate`] rejects — so a value [`ConfigStore::set`] accepted (it
+/// validates the input, then normalises) would be stored in a form that can never be
+/// saved again, with the settings pane blaming the field the user cannot fix. Slicing
+/// past `://` keeps the two in agreement for every input.
+fn normalize_base_url(url: &str) -> String {
+    let trimmed = url.trim();
+    let host_start = trimmed.find("://").map_or(0, |i| i + "://".len());
+    let (scheme, rest) = trimmed.split_at(host_start);
+    format!("{scheme}{}", rest.trim_end_matches('/'))
 }
 
 /// Keys present in `text` that [`Config`] does not understand.
@@ -213,7 +240,7 @@ pub fn load(path: &Path) -> Result<Config> {
             return Ok(Config::default());
         }
         Err(source) => {
-            return Err(Error::ConfigIo {
+            return Err(Error::ConfigRead {
                 path: path.to_path_buf(),
                 source,
             });
@@ -245,12 +272,12 @@ pub fn load(path: &Path) -> Result<Config> {
 /// `std::fs::rename` replaces an existing destination on Windows as well as unix, so
 /// there is no unlink-first dance. It can still fail with "access is denied" if a
 /// scanner or an editor holds the destination open; that surfaces as
-/// [`Error::ConfigIo`], which is correct.
+/// [`Error::ConfigWrite`], which is correct.
 pub fn save(path: &Path, config: &Config) -> Result<()> {
     let text = toml::to_string_pretty(config)?;
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::ConfigIo {
+        std::fs::create_dir_all(parent).map_err(|source| Error::ConfigWrite {
             path: parent.to_path_buf(),
             source,
         })?;
@@ -269,12 +296,17 @@ pub fn save(path: &Path, config: &Config) -> Result<()> {
     };
     if let Err(source) = write() {
         let _ = std::fs::remove_file(&tmp);
-        return Err(Error::ConfigIo { path: tmp, source });
+        // The destination, not `tmp`: the temp file is an implementation detail and
+        // this message is read by whoever clicked Save.
+        return Err(Error::ConfigWrite {
+            path: path.to_path_buf(),
+            source,
+        });
     }
 
     std::fs::rename(&tmp, path).map_err(|source| {
         let _ = std::fs::remove_file(&tmp);
-        Error::ConfigIo {
+        Error::ConfigWrite {
             path: path.to_path_buf(),
             source,
         }
@@ -444,8 +476,70 @@ mod tests {
     }
 
     #[test]
+    fn normalize_keeps_the_schemes_own_slashes() {
+        // `trim_end_matches('/')` on the whole string turns this into "http:", which
+        // `validate` rejects — so `set` would store a value that can never be saved
+        // again. Covered end to end by `config_store.rs`.
+        let mut config = with_url("http://");
+        assert!(config.normalize().is_empty());
+        assert_eq!(config.fermentrack.base_url, "http://");
+    }
+
+    #[test]
+    fn normalize_is_idempotent_and_agrees_with_validate() {
+        for input in [
+            "",
+            "   ",
+            "http://",
+            "https://",
+            "http:///",
+            "http://host",
+            "  http://host/  ",
+            "http://host:8080//",
+            "http://host/sub/path/",
+            "not a url",
+        ] {
+            let mut once = with_url(input);
+            once.normalize();
+            let mut twice = once.clone();
+            assert!(
+                twice.normalize().is_empty(),
+                "normalize is not idempotent for {input:?}"
+            );
+            assert_eq!(once, twice);
+
+            // The contract `set` depends on: whatever normalize produces from a value
+            // validate accepted must itself validate.
+            if with_url(input).validate().is_ok() {
+                assert!(
+                    once.validate().is_ok(),
+                    "normalize made {input:?} invalid: {:?}",
+                    once.fermentrack.base_url
+                );
+            }
+        }
+    }
+
+    #[test]
     fn validate_accepts_an_empty_url() {
         assert!(with_url("").validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_a_scheme_with_no_host() {
+        for url in [
+            "http://",
+            "https://",
+            "  http://  ",
+            "http:///",
+            "https:////",
+        ] {
+            assert_eq!(
+                with_url(url).validate().unwrap_err().code(),
+                "config.invalid",
+                "{url:?} should not validate"
+            );
+        }
     }
 
     #[test]

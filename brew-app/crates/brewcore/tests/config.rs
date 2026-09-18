@@ -150,6 +150,24 @@ fn save_leaves_no_temp_file_behind() {
 }
 
 #[test]
+fn a_failed_save_reads_as_a_write_and_never_names_the_temp_file() {
+    // This message reaches the settings pane verbatim, so "could not read config"
+    // after clicking Save sends the user looking in the wrong place — as does a path
+    // ending in `.tmp`, which is an implementation detail of the atomic rename.
+    let tmp = tempfile::tempdir().unwrap();
+    let blocker = tmp.path().join("blocked");
+    std::fs::write(&blocker, b"a file where a directory must be").unwrap();
+
+    let err = config::save(&blocker.join("config.toml"), &Config::default()).unwrap_err();
+    assert_eq!(err.code(), "config.write");
+
+    let message = err.to_string();
+    assert!(message.starts_with("could not write"), "{message}");
+    // Not a bare `.tmp` check: `tempfile::tempdir()` names its directories `.tmpXXXX`.
+    assert!(!message.contains("config.toml.tmp"), "{message}");
+}
+
+#[test]
 fn save_creates_the_parent_directory() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("nested").join("deeper").join("config.toml");
