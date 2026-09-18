@@ -1,0 +1,70 @@
+name: brew-app CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "brew-app/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "brew-app/**"
+      - ".github/workflows/ci.yml"
+
+# A second push to the same branch makes the first run's answer worthless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    # Windows only: it is the only platform the app ships on, and it is the one
+    # where the path resolution and the atomic-rename in `config::save` differ.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: brew-app
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # Pinned so CI and the dev machine agree on which install scripts may run.
+          node-version: 24
+          cache: npm
+          cache-dependency-path: brew-app/package-lock.json
+
+      # No `--ignore-scripts`: esbuild's postinstall places the platform binary and
+      # `vite build` dies without it. `npm ci` honours `package.json#allowScripts`.
+      - run: npm ci
+
+      # Cheapest signal first — no Rust toolchain needed to fail on a type error.
+      - run: npm run check
+
+      # Must precede every cargo step. `tauri::generate_context!` reads
+      # `tauri.conf.json` and fails at compile time if `frontendDist` (../dist)
+      # is missing, and `dist/` is gitignored.
+      - run: npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: brew-app
+          cache-on-failure: true
+
+      - run: cargo fmt --all --check
+
+      # `--all-targets` so `tests/*.rs` is linted too; bare clippy covers only
+      # lib/bin targets. `-D warnings` as a flag, not RUSTFLAGS in `env:` — the
+      # latter changes the fingerprint and makes rust-cache miss between steps.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - run: cargo test --workspace

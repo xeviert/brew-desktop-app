@@ -21,3 +21,6 @@ brewcore.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11.3", features = [] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true

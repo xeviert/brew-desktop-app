@@ -16,6 +16,10 @@ r2d2_sqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+toml.workspace = true
+# `tracing` only. Installing a subscriber is the binary's job, never a library's:
+# `tracing-subscriber` here would make `cargo test -p brewcore` noisy and would let
+# two subscribers race at startup.
 tracing.workspace = true
 
 [dev-dependencies]

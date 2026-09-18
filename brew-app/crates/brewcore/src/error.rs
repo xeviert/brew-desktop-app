@@ -18,6 +18,31 @@ pub enum Error {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    // A separate variant from `Io` because `std::io::Error` carries no path: on
+    // Windows a failed save reads "Access is denied. (os error 5)" with no hint as
+    // to what was denied.
+    #[error("could not read config at {path}: {source}")]
+    ConfigIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    // `#[source]` rather than `#[from]`: a bare `#[from]` would let `?` drop which
+    // file failed to parse, and Phase 2 reads more than one.
+    #[error("{path} is not valid TOML: {source}")]
+    ConfigParse {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error("could not serialise config: {0}")]
+    ConfigSerialize(#[from] toml::ser::Error),
+
+    #[error("{field}: {reason}")]
+    ConfigInvalid { field: &'static str, reason: String },
+
     #[error("could not enable WAL on {path}: journal_mode is '{mode}'")]
     JournalMode { path: PathBuf, mode: String },
 
@@ -61,6 +86,10 @@ impl Error {
             Error::Sqlite(_) => "db.sqlite",
             Error::Pool(_) => "db.pool",
             Error::Io(_) => "io",
+            Error::ConfigIo { .. } => "config.io",
+            Error::ConfigParse { .. } => "config.parse",
+            Error::ConfigSerialize(_) => "config.serialize",
+            Error::ConfigInvalid { .. } => "config.invalid",
             Error::JournalMode { .. } => "db.journal_mode",
             Error::SchemaAhead { .. } => "db.schema_ahead",
             Error::DimensionMismatch { .. } => "units.dimension_mismatch",

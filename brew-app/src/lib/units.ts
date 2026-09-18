@@ -15,7 +15,11 @@ export interface Money {
 	currency: Currency;
 }
 
+/** Matches `brewcore::units::TempDisplay` (`#[serde(rename_all = "UPPERCASE")]`). */
 export type TempDisplay = "C" | "F";
+
+/** Matches `brewcore::units::GravityDisplay` (`#[serde(rename_all = "lowercase")]`). */
+export type GravityDisplay = "sg" | "plato" | "brix";
 
 /** The user's locale, resolved once. */
 const locale = (): string => navigator.language || "en-GB";

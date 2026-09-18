@@ -69,16 +69,16 @@ MQTT lands later.
       `PRAGMA table_info`, so migration `0002` fails CI the day it types `cost REAL`
 
 **1d. Plumbing**
-- [ ] Config: `serde` + TOML in Tauri's config dir. Fields: `fermentrack.base_url`,
+- [x] Config: `serde` + TOML in Tauri's config dir. Fields: `fermentrack.base_url`,
       `sync.poll_interval_secs`, `ui.temp_display` (`C`/`F`), `ui.gravity_display`
-- [ ] Config has working defaults; a missing file is not an error
-- [ ] `error.rs`: `thiserror` enum in core, converted at the Tauri boundary to a
+- [x] Config has working defaults; a missing file is not an error
+- [x] `error.rs`: `thiserror` enum in core, converted at the Tauri boundary to a
       serializable `{code, message, detail}` — Tauri commands can't return opaque errors
-- [ ] `tracing` + `tracing-subscriber`, rolling file in Tauri's log dir + stderr in dev
-- [ ] Tauri command surface for this phase only: `get_config`, `set_config`,
+- [x] `tracing` + `tracing-subscriber`, rolling file in Tauri's log dir + stderr in dev
+- [x] Tauri command surface for this phase only: `get_config`, `set_config`,
       `db_status` (path, size, schema version, row counts)
-- [ ] Frontend: one route, a settings pane, a status footer. No chart yet
-- [ ] CI on `windows-latest`: `cargo fmt --check`, `cargo clippy -- -D warnings`,
+- [x] Frontend: one route, a settings pane, a status footer. No chart yet
+- [x] CI on `windows-latest`: `cargo fmt --check`, `cargo clippy -- -D warnings`,
       `cargo test --workspace`, `npm run check`
 
 **Done when:** the app launches, creates `brewery.db` at the right path, reports
