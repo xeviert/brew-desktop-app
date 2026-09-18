@@ -108,9 +108,17 @@ fn check(names: &[String], cols: &[Column]) -> Vec<String> {
             }
         }
 
-        // Money is minor units plus an ISO code. These names are the ones that get
-        // typed when someone reaches for a REAL.
-        if matches!(name.as_str(), "price" | "cost" | "amount") || name.ends_with("_cents") {
+        // Money is minor units plus an ISO code. Match on name *segments* rather
+        // than the whole name, so `unit_cost` and `shipping_cost_per_l` are caught
+        // and not just a bare `cost`. `_minor` is the way out, which is why
+        // `unit_cost_minor` passes and gets checked by the rules below instead.
+        let money_word = name.split('_').any(|w| {
+            matches!(
+                w,
+                "price" | "prices" | "cost" | "costs" | "amount" | "fee" | "fees"
+            )
+        });
+        if (money_word && !name.ends_with("_minor")) || name.ends_with("_cents") {
             bad.push(format!("{at} should be `*_minor INTEGER` + a `currency`"));
         }
 
@@ -177,12 +185,20 @@ fn the_rules_actually_catch_violations() {
            temp_f      REAL,
            qty_kg      REAL,
            cost        REAL,
+           unit_cost   REAL,
+           shipping_fee REAL,
            total_cents INTEGER,
            price_minor REAL,
            logged_at   TEXT,
            volume_l    TEXT
          );
-         CREATE TABLE lonely_currency (currency TEXT);",
+         CREATE TABLE lonely_currency (currency TEXT);
+         CREATE TABLE innocent (
+           unit_cost_minor INTEGER,
+           currency        TEXT,
+           costume_note    TEXT,
+           total_volume_l  REAL
+         );",
     )
     .unwrap();
 
@@ -194,10 +210,17 @@ fn the_rules_actually_catch_violations() {
     assert!(fired("offender.temp_f ends in `_f`"));
     assert!(fired("offender.qty_kg ends in `_kg`"));
     assert!(fired("offender.cost should be"));
+    assert!(fired("offender.unit_cost should be"));
+    assert!(fired("offender.shipping_fee should be"));
     assert!(fired("offender.total_cents should be"));
     assert!(fired("offender.price_minor is `REAL`"));
     assert!(fired("offender.price_minor has no `currency` column"));
     assert!(fired("offender.logged_at is `TEXT`"));
     assert!(fired("offender.volume_l is `TEXT`"));
     assert!(fired("lonely_currency.currency has no `*_minor`"));
+
+    // A blocklist that fires on the correct schema is worse than none — the next
+    // person suppresses it. `costume_note` is the substring-match trap.
+    let innocent: Vec<&String> = bad.iter().filter(|b| b.contains("innocent.")).collect();
+    assert!(innocent.is_empty(), "false positives: {innocent:?}");
 }

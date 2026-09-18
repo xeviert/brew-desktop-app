@@ -154,8 +154,10 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
       fermentable, sugar, yeast, nutrient, acid, salt, flavoring, fining, gas, water
 - [ ] `yeast_strain` (name, lab, form, temp_min_c, temp_max_c, attenuation_min/max,
       alcohol_tolerance) — the finish detector needs the expected-FG band
-- [ ] `ingredient_lot` (ingredient_id, supplier, lot_code, qty, unit, unit_cost_cents,
-      currency, purchased_at, expires_at) — cost and traceability both start here
+- [ ] `ingredient_lot` (ingredient_id, supplier, lot_code, qty_g/qty_l, entry_qty,
+      entry_unit, unit_cost_minor, currency, purchased_at, expires_at) — cost and
+      traceability both start here. `_minor`, not `_cents`: 1c's linter rejects
+      `_cents`, and the exponent belongs to the currency, not the column name
 - [ ] `water_profile` — seed from `water-data/valenciennes/tap_brewing-params.csv`
 
 **3b. Recipes, versioned properly**

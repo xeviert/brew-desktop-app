@@ -46,14 +46,23 @@ export function formatDuration(seconds: number): string {
  * `Intl.NumberFormat` already knows each currency's symbol placement and digit
  * count, so the minor-unit exponent table is not duplicated here — it is read
  * back off the formatter and used to scale the integer.
+ *
+ * The Rust side accepts any three ASCII letters as a currency code rather than
+ * shipping the ISO register, so a typo reaches us as a code `Intl` throws a
+ * `RangeError` on. Fall back to "<amount> <code>" — a stored amount must still
+ * render, not blank the screen it appears on.
  */
 export function formatMoney(money: Money): string {
-	const format = new Intl.NumberFormat(locale(), {
-		style: "currency",
-		currency: money.currency,
-	});
-	const exponent = format.resolvedOptions().maximumFractionDigits ?? 2;
-	return format.format(money.minor / 10 ** exponent);
+	try {
+		const format = new Intl.NumberFormat(locale(), {
+			style: "currency",
+			currency: money.currency,
+		});
+		const exponent = format.resolvedOptions().maximumFractionDigits ?? 2;
+		return format.format(money.minor / 10 ** exponent);
+	} catch {
+		return `${(money.minor / 100).toFixed(2)} ${money.currency}`;
+	}
 }
 
 export function formatTemp(celsius: number, display: TempDisplay = "C", digits = 1): string {

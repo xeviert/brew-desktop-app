@@ -50,8 +50,10 @@ impl std::fmt::Display for Dimension {
 
 /// Units a brewery actually types. Deliberately small: every addition is a new
 /// conversion factor someone has to get right.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// One spelling everywhere: [`Unit::symbol`] is what goes into SQLite *and* into
+/// JSON/TOML. A derived `rename_all` would give `gal_us` in a config file and
+/// `gal` in a row for the same variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unit {
     Mg,
     G,
@@ -132,8 +134,11 @@ impl std::fmt::Display for Unit {
 impl std::str::FromStr for Unit {
     type Err = Error;
 
+    /// Lenient on input — `lbs`, `gal_us` and `each` are all things people type —
+    /// while [`Unit::symbol`] stays the single spelling on the way out.
     fn from_str(s: &str) -> Result<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
+        let trimmed = s.trim();
+        match trimmed.to_ascii_lowercase().as_str() {
             "mg" => Ok(Unit::Mg),
             "g" => Ok(Unit::G),
             "kg" => Ok(Unit::Kg),
@@ -144,8 +149,23 @@ impl std::str::FromStr for Unit {
             "hl" => Ok(Unit::Hl),
             "gal" | "gal_us" => Ok(Unit::GalUs),
             "ea" | "each" => Ok(Unit::Each),
-            other => Err(Error::UnknownUnit(other.to_owned())),
+            // The untouched input, not the lowercased one: an error should quote
+            // back what was actually typed.
+            _ => Err(Error::UnknownUnit(trimmed.to_owned())),
         }
+    }
+}
+
+impl serde::Serialize for Unit {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> std::result::Result<S::Ok, S::Error> {
+        ser.serialize_str(self.symbol())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Unit {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> std::result::Result<Self, D::Error> {
+        let text = String::deserialize(de)?;
+        text.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -334,6 +354,35 @@ mod tests {
             assert_eq!(unit.symbol().parse::<Unit>().unwrap(), unit);
         }
         assert!("furlong".parse::<Unit>().is_err());
+    }
+
+    /// One spelling, or a config file and a table row disagree about `gal`.
+    #[test]
+    fn serde_and_sqlite_agree_on_the_spelling() {
+        use rusqlite::{ToSql, types::ToSqlOutput, types::Value, types::ValueRef};
+
+        for unit in [Unit::Ml, Unit::Hl, Unit::GalUs, Unit::Each, Unit::L] {
+            let json = serde_json::to_string(&unit).unwrap();
+            assert_eq!(json, format!("\"{}\"", unit.symbol()));
+            assert_eq!(serde_json::from_str::<Unit>(&json).unwrap(), unit);
+
+            let sql = match unit.to_sql().unwrap() {
+                ToSqlOutput::Borrowed(ValueRef::Text(b)) => String::from_utf8(b.to_vec()).unwrap(),
+                ToSqlOutput::Owned(Value::Text(s)) => s,
+                other => panic!("{unit} bound as {other:?}"),
+            };
+            assert_eq!(sql, unit.symbol());
+        }
+    }
+
+    /// Lenient in, canonical out — and the error quotes what was typed.
+    #[test]
+    fn aliases_parse_but_errors_are_verbatim() {
+        assert_eq!("lbs".parse::<Unit>().unwrap(), Unit::Lb);
+        assert_eq!("gal_us".parse::<Unit>().unwrap(), Unit::GalUs);
+        assert_eq!(" EACH ".parse::<Unit>().unwrap(), Unit::Each);
+        let err = "PoUnDs".parse::<Unit>().unwrap_err();
+        assert_eq!(err.to_string(), "unknown unit 'PoUnDs'");
     }
 
     #[test]

@@ -134,9 +134,17 @@ impl Money {
 
     /// Parses what a human types: `12,50` and `12.50` are both 1250 in EUR.
     ///
-    /// A single separator is always the decimal point, never a thousands grouping.
-    /// That makes `1,234` in a two-decimal currency an error rather than a silent
-    /// factor-of-1000 mistake; write `1234` if that is what you meant.
+    /// Two separator classes, and the split is by ambiguity rather than by taste:
+    ///
+    /// - **`,` and `.` are always the decimal point**, never a thousands grouping.
+    ///   Either one means a decimal point *somewhere* in the world, so `1,234` in
+    ///   a two-decimal currency is an error rather than a silent factor-of-1000
+    ///   mistake. Write `1234` if that is what you meant.
+    /// - **Whitespace and `_` are always grouping** and are stripped, so `1 234,56`
+    ///   is 123456 minor units. No locale writes a decimal space, so there is
+    ///   nothing to misread — and a French keyboard is what this brewery types on.
+    ///   `char::is_whitespace` covers U+00A0 and U+202F, which is what fr-FR
+    ///   formatting and a paste out of a spreadsheet actually produce.
     pub fn parse(input: &str, currency: Currency) -> Result<Self> {
         let cleaned: String = input
             .chars()
@@ -156,6 +164,11 @@ impl Money {
             Some(at) => (&rest[..at], &rest[at + 1..]),
             None => (rest, ""),
         };
+        // `,50` is a legitimate shorthand, but a separator with digits on neither
+        // side is not an amount at all.
+        if whole.is_empty() && frac.is_empty() {
+            return Err(invalid());
+        }
         let whole = if whole.is_empty() { "0" } else { whole };
         if !whole.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) {
             return Err(invalid());
@@ -210,7 +223,12 @@ impl Money {
         }
         let scaled = (self.minor as f64) * factor;
         let rounded = scaled.round();
-        if rounded.abs() > i64::MAX as f64 {
+        // `i64::MAX as f64` rounds *up* to 2^63, so comparing against it lets
+        // exactly 2^63 through, and `as i64` then saturates to `i64::MAX` — an
+        // overflow that reports a plausible number instead of an error. Bound on
+        // 2^63 itself: `i64::MIN` is exactly -2^63 and legal, `i64::MAX` is not.
+        const LIMIT: f64 = 9_223_372_036_854_775_808.0; // 2^63
+        if !(-LIMIT..LIMIT).contains(&rounded) {
             return Err(Error::MoneyOverflow);
         }
         Ok(Self::new(rounded as i64, self.currency))
@@ -262,6 +280,22 @@ mod tests {
         assert_eq!(Money::parse(" 1 234,56 ", eur).unwrap().minor, 123_456);
     }
 
+    /// Whitespace groups, `,`/`.` do not. The NBSP cases are what fr-FR
+    /// `Intl.NumberFormat` and a spreadsheet paste hand over.
+    #[test]
+    fn whitespace_groups_but_dots_and_commas_never_do() {
+        let eur = Currency::EUR;
+        assert_eq!(Money::parse("1\u{a0}234,56", eur).unwrap().minor, 123_456);
+        assert_eq!(Money::parse("1\u{202f}234,56", eur).unwrap().minor, 123_456);
+        assert_eq!(
+            Money::parse("1_234_567,89", eur).unwrap().minor,
+            123_456_789
+        );
+        // Same number, written with the separators that could mean either thing.
+        assert!(Money::parse("1.234,56", eur).is_err());
+        assert!(Money::parse("1,234.56", eur).is_err());
+    }
+
     #[test]
     fn exponents_follow_the_currency() {
         let jpy = Currency::new("jpy").unwrap();
@@ -286,6 +320,10 @@ mod tests {
         assert!(Money::parse("", eur).is_err());
         assert!(Money::parse("abc", eur).is_err());
         assert!(Money::parse("1.2.3", eur).is_err());
+        // A separator with digits on neither side is not zero.
+        assert!(Money::parse(".", eur).is_err());
+        assert!(Money::parse(",", eur).is_err());
+        assert!(Money::parse("-,", eur).is_err());
         assert_eq!(
             Money::parse("12.505", eur).unwrap_err().code(),
             "money.invalid"
@@ -321,6 +359,20 @@ mod tests {
         assert_eq!(per_kg.checked_mul_f64(2.5).unwrap().minor, 800);
         assert_eq!(per_kg.checked_mul_f64(0.3333).unwrap().minor, 107);
         assert!(per_kg.checked_mul_f64(f64::NAN).is_err());
+    }
+
+    /// 2^62 × 2 lands on exactly 2^63, one past `i64::MAX`. A `>` bound would let
+    /// it through and let the cast saturate.
+    #[test]
+    fn scaling_past_the_top_is_an_error_not_a_saturated_cast() {
+        let half = Money::new(1i64 << 62, Currency::EUR);
+        assert_eq!(
+            half.checked_mul_f64(2.0).unwrap_err().code(),
+            "money.overflow"
+        );
+        // The range is asymmetric because `i64` is: -2^63 is `i64::MIN` exactly.
+        assert_eq!(half.checked_mul_f64(-2.0).unwrap().minor, i64::MIN);
+        assert!(half.checked_mul_f64(-2.5).is_err());
     }
 
     #[test]
