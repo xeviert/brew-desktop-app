@@ -58,12 +58,15 @@ MQTT lands later.
 - [x] Migration `0001`: the Tier 1 tables (`source`, `stream`, `reading`, `sync_state`)
 
 **1c. Conventions locked now, not later**
-- [ ] Timestamps: UTC epoch **seconds**, `INTEGER`, everywhere. Format only at the UI edge
-- [ ] Temps stored °C. Gravity stored as SG (`1.0374`), never Plato/Brix — convert on entry
-- [ ] Volumes stored litres, masses grams
-- [ ] Money stored integer cents + an ISO currency code, never float
-- [ ] A `units` module owning every conversion, with round-trip unit tests
-- [ ] No table or column in our schema named "beer" (see Scope above)
+- [x] Timestamps: UTC epoch **seconds**, `INTEGER`, everywhere. Format only at the UI edge
+- [x] Temps stored °C. Gravity stored as SG (`1.0374`), never Plato/Brix — convert on entry
+- [x] Volumes stored litres, masses grams
+- [x] Money stored as integer **minor units** + an ISO 4217 code, never float; mixing
+      currencies is an error, and there is no FX conversion
+- [x] A `units` module owning every conversion, with round-trip unit tests
+- [x] No table or column in our schema named "beer" (see Scope above)
+- [x] `tests/schema_conventions.rs`: a blocklist linter over `sqlite_master` /
+      `PRAGMA table_info`, so migration `0002` fails CI the day it types `cost REAL`
 
 **1d. Plumbing**
 - [ ] Config: `serde` + TOML in Tauri's config dir. Fields: `fermentrack.base_url`,
@@ -291,7 +294,7 @@ brew-app/
 │       │   ├── db/        # connection, migrations, queries
 │       │   ├── fermentrack/  # client.rs, csv_log.rs, sync.rs, types.rs
 │       │   ├── calc/      # ABV, attenuation, stability
-│       │   ├── units.rs
+│       │   ├── units/           # temperature, gravity, quantity, money, time
 │       │   ├── config.rs
 │       │   └── error.rs
 │       └── migrations/    # 0001_tier1.sql, 0002_batches.sql, …
@@ -365,10 +368,23 @@ convert at the edges.**
 | Volume | litres, `REAL` | |
 | Mass | grams, `REAL` | |
 | Time | UTC epoch seconds, `INTEGER` | local time exists only in the UI |
-| Money | integer cents + ISO code | never float |
+| Money | integer minor units + ISO 4217 code | never float; mixing currencies is an error, and there is no FX |
 
 One `units` module owns every conversion, with round-trip tests. Display
 preference is config, not storage.
+
+**Canonical column plus entry unit.** Where a table records something bought or
+weighed — `ingredient_lot`, `recipe_item`, `batch_ingredient` — a bare `qty` +
+`unit` pair makes `SUM(qty)` meaningless. Those tables store `qty_g` *or* `qty_l`
+(by the ingredient's dimension) **plus** `entry_qty REAL` and `entry_unit TEXT`.
+Every query, sum and cost reads the canonical column; the UI prints the unit you
+typed. Settled in 1c so 3a does not re-litigate it.
+
+**Definitional here, empirical in `calc`.** `units/` holds conversions exact by
+definition (°C↔°F, g↔lb, L↔US gal, minor units↔decimal), which is why its tests
+assert near-machine-epsilon tolerances. Polynomial fits of measured data — SG↔Plato,
+refractometer correction, ABV — live in `calc/` with a citation and an error band. A
+conversion that needs a literature reference is not a unit conversion.
 
 ### The Tauri boundary
 

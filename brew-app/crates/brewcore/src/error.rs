@@ -3,6 +3,8 @@
 
 use std::path::PathBuf;
 
+use crate::units::{Currency, Dimension};
+
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
@@ -24,6 +26,31 @@ pub enum Error {
          {head}; a newer version of the app wrote this file"
     )]
     SchemaAhead { found: i32, head: i32 },
+
+    #[error("cannot convert {unit} from {from} to {to}")]
+    DimensionMismatch {
+        unit: &'static str,
+        from: Dimension,
+        to: Dimension,
+    },
+
+    #[error("{field} value is not finite: {value}")]
+    NotFinite { field: &'static str, value: f64 },
+
+    #[error("unknown unit '{0}'")]
+    UnknownUnit(String),
+
+    #[error("cannot combine {left} and {right}: this app does not convert currencies")]
+    CurrencyMismatch { left: Currency, right: Currency },
+
+    #[error("'{0}' is not a three-letter currency code")]
+    InvalidCurrency(String),
+
+    #[error("could not read '{0}' as an amount")]
+    InvalidMoney(String),
+
+    #[error("amount is too large to represent in minor units")]
+    MoneyOverflow,
 }
 
 impl Error {
@@ -36,6 +63,13 @@ impl Error {
             Error::Io(_) => "io",
             Error::JournalMode { .. } => "db.journal_mode",
             Error::SchemaAhead { .. } => "db.schema_ahead",
+            Error::DimensionMismatch { .. } => "units.dimension_mismatch",
+            Error::NotFinite { .. } => "units.not_finite",
+            Error::UnknownUnit(_) => "units.unknown_unit",
+            Error::CurrencyMismatch { .. } => "money.currency_mismatch",
+            Error::InvalidCurrency(_) => "money.invalid_currency",
+            Error::InvalidMoney(_) => "money.invalid",
+            Error::MoneyOverflow => "money.overflow",
         }
     }
 }
