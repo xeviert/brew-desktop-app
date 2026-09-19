@@ -1,0 +1,4 @@
+# The Fermentrack fixtures are byte-exact reproductions of Python `csv.writer`
+# output, CRLF included. core.autocrlf would rewrite them on commit and the
+# goldens would be checked out as a file Fermentrack could never have produced.
+crates/fixtures/tests/fixtures/*.csv -text

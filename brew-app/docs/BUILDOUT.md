@@ -85,24 +85,35 @@ MQTT lands later.
 its schema version in the UI, and `cargo test --workspace` is green in CI.
 
 ### Phase 2 — Ingest
-**2a. Test rig first — you have no Fermentrack**
-- [ ] `xtask gen-fixture`: emit a byte-accurate `_full.csv` (header + rows,
-      `%Y/%m/%d %H:%M:%SZ`, plausible ferment curve, gaps, blank cells, an
-      annotation containing a comma, a mid-file `temp_format` switch)
-- [ ] Emit both variants: `gravity_enabled` on/off, `model_version` 1 and 2
-- [ ] `wiremock` harness that honours `Range` and can be told to *ignore* it
+**2a. Test rig first — you have no Fermentrack** (`crates/fixtures`, package `brewfixture`)
+- [x] `xtask gen-fixture`: emit a byte-accurate `_full.csv` (header + rows,
+      `%Y/%m/%d %H:%M:%SZ`, plausible ferment curve, gaps, absent sensors, an
+      annotation containing a comma and one containing a quote, a mid-file
+      `temp_format` switch)
+- [x] Emit both variants: `gravity_enabled` on/off, `model_version` 1 and 2
+- [x] Committed goldens under `crates/fixtures/tests/fixtures/`, byte-compared in
+      `tests/golden.rs`. Regenerate deliberately:
+      `cargo xtask gen-fixture --scenario all --rows 5 --seed 1 --out crates/fixtures/tests/fixtures`
+- [x] `wiremock` harness that honours `Range` and can be told to *ignore* it, plus
+      `set_fault` for 404 / HTML / 500, and `append` / `truncate_to` so the body can
+      grow between requests
 - [ ] Growing-file test: serve N bytes, sync, serve N+M, sync again, assert no dupes
+      — needs the sync write path, so it lands with 2e. The harness is ready for it
 - [ ] Replace fixtures with a real capture once Fermentrack is up — same tests
 
 **2b. Parser (`fermentrack/csv_log.rs`)**
-- [ ] Parse the header row into a column map; unknown columns ignored, not fatal
-- [ ] Reject a file whose header lacks `log_time` — wrong file or HTML error page
-- [ ] `_full.csv` only. Refuse `_graph.csv` explicitly with a clear error
-- [ ] Empty cell → `None`, never `0`
-- [ ] Per-row temp conversion driven by that row's own `temp_format` cell
-- [ ] `state` parsed to the 0–9 enum; out-of-range → `None` + a warning, not a panic
-- [ ] `model_version` 1 (no `state`) handled by column presence, not a version check
-- [ ] Unit tests per quirk, each with a 3-line inline CSV
+- [x] Parse the header row into a column map; unknown columns ignored, not fatal
+- [x] Reject a file whose header lacks `log_time` — wrong file or HTML error page
+- [x] `_full.csv` only. Refuse `_graph.csv` explicitly with a clear error
+- [x] A bare `0` (no decimal point) in a temp or gravity column → `None`. Fermentrack
+      writes `x or 0`, so a missing reading is an integer `0` while a real one always
+      carries a decimal point. `state`, `temp_format` and `associated_beer_id` are
+      genuine integers and are exempt. Empty cells (`beer_ann`, `fridge_ann`) → `None`
+- [x] Per-row temp conversion driven by that row's own `temp_format` cell
+- [x] `state` parsed to the 0–9 enum; out-of-range → `None` + a warning, not a panic
+- [x] Column presence, never a version check: `model_version` only decides whether
+      `_graph.csv` carries `state`, and `_full.csv` has it at index 8 in every version
+- [x] Unit tests per quirk, each with a 3-line inline CSV
 
 **2c. Fetch (`fermentrack/client.rs`)**
 - [ ] `GET` with `Range: bytes=<offset>-`
@@ -482,10 +493,11 @@ byte-accurate files today.
 - header + rows at a 30 s cadence, `%Y/%m/%d %H:%M:%SZ`, UTC
 - a plausible curve: lag, fast attenuation, terminal plateau
 - a multi-hour gap (Fermentrack was down)
-- blank cells where a sensor was absent
+- a bare `0` where a sensor was absent (Fermentrack's `x or 0`, not a blank cell)
 - an annotation containing a comma and one containing a quote
 - a `temp_format` that switches `C`→`F` mid-file
-- both `gravity_enabled` on and off, both `model_version` 1 and 2
+- both `gravity_enabled` on and off, both `model_version` 1 and 2 — the latter
+  changes `_graph.csv` only, and generating v1 is how we prove that
 
 Serve it with `wiremock` in two modes: honouring `Range`, and ignoring it
 (returning `200` with the whole body). Both happen in the wild and the client
@@ -509,8 +521,9 @@ One CSV row fans out to up to eight `reading` rows:
 | `state` | `state` | enum 0–9, stored as its integer |
 | `beer_ann`, `fridge_ann` | — | annotation, not a reading |
 
-Map by header name. The column set varies with `gravity_enabled` and
-`model_version`, so positional indexing will eventually read gravity out of the
+Map by header name. The column set varies with `gravity_enabled`, and the gravity
+columns sit after `associated_beer_id` in `_full.csv` but before `state` in
+`_graph.csv`, so positional indexing will eventually read gravity out of the
 `state` column and put 4.0 in your SG series.
 
 ### The sync loop

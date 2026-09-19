@@ -1,12 +1,15 @@
-//! Dev helpers. Phase 2 adds `gen-fixture`, which emits byte-accurate Fermentrack
-//! `_full.csv` files so ingest can be built and tested without a Fermentrack.
+//! Dev helpers. `gen-fixture` emits byte-accurate Fermentrack `_full.csv` files so
+//! ingest can be built and tested without a Fermentrack.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use brewfixture::{Kind, LogSpec, Scenario};
 
 fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("db-status") => db_status(args.next().map(PathBuf::from)),
+        Some("gen-fixture") => gen_fixture(args.collect()),
         Some(other) => {
             eprintln!("unknown task: {other}");
             usage();
@@ -18,7 +21,15 @@ fn main() {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask <task>\n\n  db-status [path]   open a database and print its status"
+        "usage: cargo xtask <task>\n\n  \
+         db-status [path]   open a database and print its status\n  \
+         gen-fixture [...]  write Fermentrack log fixtures\n\n\
+         gen-fixture options:\n  \
+         --out DIR          default target/fixtures\n  \
+         --scenario NAME    nominal | gravity | ugly | v1 | all (default all)\n  \
+         --rows N           rows per file (default 120)\n  \
+         --seed N           PRNG seed; the same seed gives the same bytes\n  \
+         --interval SECS    logging cadence (default 30, Fermentrack's own default)"
     );
 }
 
@@ -42,4 +53,85 @@ fn db_status(path: Option<PathBuf>) {
             std::process::exit(1);
         }
     }
+}
+
+/// Write one `_full.csv` and one `_graph.csv` per scenario, under the filenames
+/// Fermentrack would have used, so a fixture can be dropped straight into a `/data/`
+/// directory.
+fn gen_fixture(args: Vec<String>) {
+    let mut out = PathBuf::from("target/fixtures");
+    let mut scenarios = Scenario::ALL.to_vec();
+    let mut rows = None;
+    let mut seed = None;
+    let mut interval = None;
+
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        let mut value = || {
+            args.next()
+                .unwrap_or_else(|| fail(&format!("{arg} needs a value")))
+        };
+        match arg.as_str() {
+            "--out" => out = PathBuf::from(value()),
+            "--scenario" => {
+                let name = value();
+                scenarios = if name == "all" {
+                    Scenario::ALL.to_vec()
+                } else {
+                    vec![
+                        Scenario::parse(&name)
+                            .unwrap_or_else(|| fail(&format!("unknown scenario: {name}"))),
+                    ]
+                };
+            }
+            "--rows" => rows = Some(parse(&value(), "--rows")),
+            "--seed" => seed = Some(parse(&value(), "--seed")),
+            "--interval" => interval = Some(parse(&value(), "--interval")),
+            other => fail(&format!("unknown option: {other}")),
+        }
+    }
+
+    if let Err(err) = std::fs::create_dir_all(&out) {
+        fail(&format!("could not create {}: {err}", out.display()));
+    }
+
+    for scenario in scenarios {
+        let mut spec = scenario.spec();
+        if let Some(rows) = rows {
+            spec.rows = rows;
+        }
+        if let Some(seed) = seed {
+            spec.seed = seed;
+        }
+        if let Some(interval) = interval {
+            spec.interval_secs = interval;
+        }
+
+        for kind in [Kind::Full, Kind::Graph] {
+            write(&out, &spec, kind);
+        }
+    }
+}
+
+fn write(dir: &Path, spec: &LogSpec, kind: Kind) {
+    let path = dir.join(spec.file_name(kind));
+    let body = spec.csv(kind);
+    // `write` in binary mode, never a text-mode writer: Windows would turn every
+    // `\r\n` this crate emitted into `\r\r\n`, and the bytes are the whole point.
+    if let Err(err) = std::fs::write(&path, body.as_bytes()) {
+        fail(&format!("could not write {}: {err}", path.display()));
+    }
+    println!("{:>8} bytes  {}", body.len(), path.display());
+}
+
+fn parse<T: std::str::FromStr>(value: &str, what: &str) -> T {
+    value
+        .parse()
+        .unwrap_or_else(|_| fail(&format!("{what}: '{value}' is not a number")))
+}
+
+fn fail(message: &str) -> ! {
+    eprintln!("{message}");
+    usage();
+    std::process::exit(2);
 }

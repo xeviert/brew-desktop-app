@@ -61,6 +61,24 @@ pub enum Error {
     )]
     SchemaAhead { found: i32, head: i32 },
 
+    // Phase 2b. File-level problems only: a single bad row is warned about and
+    // skipped (see `fermentrack::ParseReport`), because one malformed line must not
+    // cost a week of backfill. A bad *file* is fatal, because half-ingesting one
+    // writes wrong numbers that look right.
+    #[error("this does not look like a Fermentrack log: {detail}")]
+    NotAFermentrackLog { detail: String },
+
+    #[error(
+        "{path_hint} is a _graph.csv; use _full.csv instead. The graph file writes          0 for a missing reading, which would be stored as a real 0.0 °C"
+    )]
+    GraphLogRefused { path_hint: String },
+
+    #[error("could not read the log as CSV: {0}")]
+    Csv(#[from] csv::Error),
+
+    #[error("unknown metric '{0}' in the database")]
+    UnknownMetric(String),
+
     #[error("cannot convert {unit} from {from} to {to}")]
     DimensionMismatch {
         unit: &'static str,
@@ -105,6 +123,10 @@ impl Error {
             Error::ConfigInvalid { .. } => "config.invalid",
             Error::JournalMode { .. } => "db.journal_mode",
             Error::SchemaAhead { .. } => "db.schema_ahead",
+            Error::NotAFermentrackLog { .. } => "fermentrack.not_a_log",
+            Error::GraphLogRefused { .. } => "fermentrack.graph_log",
+            Error::Csv(_) => "fermentrack.csv",
+            Error::UnknownMetric(_) => "db.unknown_metric",
             Error::DimensionMismatch { .. } => "units.dimension_mismatch",
             Error::NotFinite { .. } => "units.not_finite",
             Error::UnknownUnit(_) => "units.unknown_unit",

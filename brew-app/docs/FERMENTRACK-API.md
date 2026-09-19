@@ -46,22 +46,52 @@ and re-resolve the filename every sync. Names are validated against
 
 ### Columns
 
-`_full.csv` (`data_format='full_csv'`) — no defaulting, nulls stay null:
+`_full.csv` (`data_format='full_csv'`):
 
 ```text
 log_time, beer_temp, beer_set, beer_ann, fridge_temp, fridge_set, fridge_ann,
 room_temp, state, temp_format, associated_beer_id [, gravity, grav_temp]
 ```
 
-`_graph.csv` (`base_csv`, `model_version >= 2`) — nulls become `0`:
+`_graph.csv` (`base_csv`; `state` only when `model_version > 1`):
 
 ```text
 log_time, beer_temp, beer_set, fridge_temp, fridge_set, room_temp
            [, gravity, grav_temp] , state
 ```
 
-Take `_full.csv`. `_graph.csv` substitutes `0` for missing readings
-(`set_defaults=True`), which would silently become a real 0.0°C in our database.
+Note the gravity columns sit in different places: appended after
+`associated_beer_id` in `_full.csv`, but *before* `state` in `_graph.csv`.
+
+**Both files default missing readings to `0`.** `BeerLogPoint.save()` calls
+`self.data_point('full_csv')`, and `data_point`'s signature is
+`(self, data_format='base_csv', set_defaults=True)` — so `beerTemp = self.beer_temp or 0`
+applies to the full log too. Only `beer_ann` and `fridge_ann` are ever written blank.
+
+Take `_full.csv` anyway: it is the only file carrying the annotations, `state`,
+`temp_format` and `associated_beer_id`. Just don't expect it to preserve nulls.
+
+A missing reading is still distinguishable from a real one, because Python writes
+`str(value)`: `x or 0` emits the *integer* `0`, while any genuine reading emits a
+float with a decimal point (`0.0`, `18.0`, `1.043`). So on ingest, a bare `0` in a
+temp or gravity column is `None`; `0.0` is a real zero. `state`, `temp_format` and
+`associated_beer_id` are genuine integers and are not subject to this rule.
+
+### Dialect
+
+Python's `csv.writer` default (the `excel` dialect), so:
+
+- Rows terminate `
+`, including the last one. Files are CRLF end to end.
+- Comma delimiter, `"` quotechar, `QUOTE_MINIMAL` — a field is quoted only when it
+  contains `,` `"` `` or `
+`, and an embedded `"` is doubled. Annotations are free
+  text, so `split(',')` will eventually eat a row. Use a real CSV reader.
+- The header is written once at file creation (`'w'`); rows are appended (`'a'`).
+- Values are raw Python floats and ints, never Decimals — the API view assigns
+  `data.get('beer_temp')` straight onto the unmanaged model, which never round-trips
+  a database. So the bytes are `str()` of a JSON float: `18.06`, `18.0`, `0`, `4`,
+  `1.043`. No fixed decimal places, no padding.
 
 - `log_time` format: `%Y/%m/%d %H:%M:%SZ`, always UTC.
 - `temp_format` is `'C'` or `'F'` per row — the Beer caches its own format, which
@@ -71,8 +101,9 @@ Take `_full.csv`. `_graph.csv` substitutes `0` for missing readings
   COOLING_MIN_TIME, HEATING_MIN_TIME.
 - The gravity columns only exist if `Beer.gravity_enabled` — column count varies
   per file. Read the header row, don't assume positions.
-- `Beer.model_version` (currently 2) is the file-format version. v1 has no
-  `state` column. Check it.
+- `Beer.model_version` (currently 2) only affects `_graph.csv`: the check is
+  `if which == 'base_csv' and self.model_version > 1`, so v1 graph files have no
+  `state` column. `_full.csv` has `state` at index 8 in every version.
 
 ### Why this is good news
 

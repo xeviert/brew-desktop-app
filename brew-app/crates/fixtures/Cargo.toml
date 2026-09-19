@@ -1,0 +1,27 @@
+[package]
+name = "brewfixture"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# Generation has no dependencies at all, on purpose: this crate is the oracle the
+# Phase 2b parser is tested against, and an oracle that shares its date maths or its
+# CSV quoting with the thing under test cannot catch a bug in either.
+[dependencies]
+wiremock = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+
+[features]
+# The mock Fermentrack. Off by default so `cargo xtask gen-fixture` does not build an
+# HTTP stack to write a file.
+serve = ["dep:wiremock", "dep:tokio"]
+
+# The self-dependency is how this crate's own tests get the `serve` feature: a
+# feature cannot be enabled by a target of the package that defines it, and making
+# `serve` a default would build an HTTP stack into `cargo xtask gen-fixture`.
+[dev-dependencies]
+brewfixture = { path = ".", features = ["serve"] }
+reqwest.workspace = true
+tokio.workspace = true

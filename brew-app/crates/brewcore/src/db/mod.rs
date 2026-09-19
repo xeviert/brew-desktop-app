@@ -1,6 +1,7 @@
 //! The database handle. Every read and write goes through here.
 
 mod connection;
+mod metric;
 pub mod migrations;
 mod paths;
 
@@ -15,6 +16,7 @@ use rusqlite::Connection;
 
 use crate::Result;
 
+pub use metric::Metric;
 pub use paths::{DB_PATH_ENV, resolve_db_path};
 
 /// One SQLite file, one writer, a pool of readers.

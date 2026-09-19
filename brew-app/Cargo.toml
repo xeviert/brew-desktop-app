@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/brewcore", "xtask"]
+members = ["src-tauri", "crates/brewcore", "crates/fixtures", "xtask"]
 
 [workspace.package]
 edition = "2024"
@@ -9,6 +9,7 @@ license = "MIT"
 
 [workspace.dependencies]
 brewcore = { path = "crates/brewcore" }
+brewfixture = { path = "crates/fixtures" }
 
 rusqlite = { version = "0.40", features = ["bundled"] }
 r2d2 = "0.8"
@@ -22,7 +23,20 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi", "registry", "time"] }
 tracing-appender = "0.2"
 
+# Phase 2b's parser. `csv` for header-driven reading with Python's `excel` dialect
+# honoured (annotations contain commas and quotes); `chrono` for the one fixed
+# `%Y/%m/%d %H:%M:%SZ` format. `chrono` without `clock` or `serde`: the parser only
+# needs `NaiveDateTime::parse_from_str`, and `Timestamp` already owns "now".
+csv = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
 tempfile = "3"
+# Phase 2a's test rig. `wiremock` and `tokio` are how the mock Fermentrack serves a
+# growing file; `reqwest` is only a test client here, and becomes a real `brewcore`
+# dependency in 2c. `rustls` rather than schannel so Windows and CI behave alike.
+wiremock = "0.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "charset"] }
 
 [profile.dev]
 # rusqlite's bundled SQLite is C; building it unoptimised makes every test slow.

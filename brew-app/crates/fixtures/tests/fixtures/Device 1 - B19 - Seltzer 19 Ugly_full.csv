@@ -1,0 +1,6 @@
+log_time,beer_temp,beer_set,beer_ann,fridge_temp,fridge_set,fridge_ann,room_temp,state,temp_format,associated_beer_id,gravity,grav_temp
+2025/09/18 00:00:00Z,17.9,18.0,,16.75,17.0,,0,0,C,19,1.045,18.2
+2025/09/18 00:00:30Z,17.91,18.0,"Temp profile started, target 18.0C",17.02,17.0,,0,0,C,19,1.045,18.2
+2025/09/18 00:01:00Z,17.89,18.0,,17.34,17.0,"Fridge renamed to ""Chest 2""",0,0,C,19,1.045,18.2
+2025/09/18 04:01:30Z,64.49,64.4,,62.22,62.6,,0,0,F,19,1.045,65.0
+2025/09/18 04:02:00Z,64.19,64.4,Beer temp set to 18.0 in web interface,62.12,62.6,,0,0,F,19,1.045,64.7

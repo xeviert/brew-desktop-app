@@ -21,6 +21,15 @@ toml.workspace = true
 # `tracing-subscriber` here would make `cargo test -p brewcore` noisy and would let
 # two subscribers race at startup.
 tracing.workspace = true
+# Phase 2b. `csv` because Fermentrack writes with Python's `excel` dialect and
+# `beer_ann` is free text: `split(',')` eats a row the first time an annotation
+# contains a comma. `chrono` for `log_time`, whose format is fixed and always UTC.
+csv.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# The parser's oracle. `brewfixture` has no `brewcore` dependency, by design: a
+# generator that shared the parser's date maths or CSV quoting could not catch a bug
+# in either. Dev-only, so nothing ships with the app.
+brewfixture.workspace = true
