@@ -91,6 +91,9 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
       annotation containing a comma and one containing a quote, a mid-file
       `temp_format` switch)
 - [x] Emit both variants: `gravity_enabled` on/off, `model_version` 1 and 2
+- [x] `start_hours_in` so a short fixture can sit mid-ferment: a five-row log at
+      t=0 is all lag phase — flat OG, IDLE on every row — which proves nothing.
+      The `active` scenario is the one where gravity falls and the controller works
 - [x] Committed goldens under `crates/fixtures/tests/fixtures/`, byte-compared in
       `tests/golden.rs`. Regenerate deliberately:
       `cargo xtask gen-fixture --scenario all --rows 5 --seed 1 --out crates/fixtures/tests/fixtures`
@@ -104,7 +107,11 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 **2b. Parser (`fermentrack/csv_log.rs`)**
 - [x] Parse the header row into a column map; unknown columns ignored, not fatal
 - [x] Reject a file whose header lacks `log_time` — wrong file or HTML error page
-- [x] `_full.csv` only. Refuse `_graph.csv` explicitly with a clear error
+- [x] `_full.csv` only. Classify by column, three ways: `beer_temp`+`beer_set`
+      +`temp_format` is the file we want; the same without `temp_format` is a
+      `_graph.csv`; no controller columns but a `gravity` one is a gravity-sensor
+      log (`fermentrack.gravity_log`). Anything else is "not a Fermentrack log"
+      with the header preview — never a guess at which file it was
 - [x] A bare `0` (no decimal point) in a temp or gravity column → `None`. Fermentrack
       writes `x or 0`, so a missing reading is an integer `0` while a real one always
       carries a decimal point. `state`, `temp_format` and `associated_beer_id` are
@@ -113,19 +120,30 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 - [x] `state` parsed to the 0–9 enum; out-of-range → `None` + a warning, not a panic
 - [x] Column presence, never a version check: `model_version` only decides whether
       `_graph.csv` carries `state`, and `_full.csv` has it at index 8 in every version
+- [x] `ParseReport` carries `bytes_consumed` and `stopped_early`. A `csv::Error`
+      mid-chunk stops the read, and 2d must advance by what was *parsed*, not by
+      what was fetched
 - [x] Unit tests per quirk, each with a 3-line inline CSV
 
 **2c. Fetch (`fermentrack/client.rs`)**
 - [ ] `GET` with `Range: bytes=<offset>-`
 - [ ] `206` → parse body. `200` → server ignored Range; skip `offset` bytes locally
-- [ ] `416`, or `Content-Range` total < `offset` → truncated/recreated; refetch from 0
+- [ ] `416` → read `Content-Range: bytes */N`. **`N == offset` is the steady state**
+      — nothing new since the last sync, so it is a no-op, not a reason to refetch.
+      `N < offset` (or no `Content-Range` at all) → truncated/recreated; reset to 0
+- [ ] `206` whose `Content-Range` total is < `offset` → truncated; reset to 0
 - [ ] `404` → surface "log missing or renamed", keep the source, don't wipe readings
 - [ ] Non-2xx/HTML body → error with the first 200 bytes in the message
 - [ ] Timeouts + bounded retry with backoff; a down Fermentrack must not hang the UI
 
 **2d. Offsets and partial lines**
 - [ ] Keep a remainder buffer; a fetch ending mid-line carries the tail forward
-- [ ] Advance `byte_offset` only past fully-parsed, committed lines
+- [ ] Advance `byte_offset` only past fully-parsed, committed lines — by
+      `ParseReport::bytes_consumed`, never by the length of the fetched chunk
+- [ ] `stopped_early` → commit what parsed, stop at `bytes_consumed`, write
+      `last_error`. The next poll refetches the faulty bytes and fails the same way,
+      so the source wedges **visibly** instead of skipping rows nobody notices are
+      missing. "Rebuild from scratch" (2g) is the escape hatch
 - [ ] Store the header text in `sync_state`; a changed header forces a full refetch
 - [ ] Verify the first fetch of a resume starts on a line boundary; if not, refetch whole
 
@@ -139,7 +157,9 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 
 **2f. Discovery — no API lists the logs**
 - [ ] v1: user pastes the log URL (or device id + beer id) once when creating a source
-- [ ] Validate on save by fetching the first 2 KB and parsing the header
+- [ ] Validate on save by fetching the first 2 KB and parsing the header. Surface
+      `fermentrack.graph_log` and `fermentrack.gravity_log` as distinct messages —
+      a pasted gravity-log URL is a different mistake from a pasted `_graph.csv`
 - [ ] Optional helper: scrape `/beer/list/` and `/gravity/logs/` to offer a picklist
 - [ ] `GET /api/devices/` only to confirm the host is a Fermentrack at all
 
@@ -535,8 +555,12 @@ Per source, on launch and then on a timer:
 2. `GET` it with `Range: bytes=<byte_offset>-`.
    - `206 Partial Content` → parse the body as the continuation.
    - `200 OK` → the server ignored `Range`; skip `byte_offset` bytes locally.
-   - `416`, or a `Content-Range` total smaller than `byte_offset` → truncated or
-     recreated; reset to 0 and refetch whole.
+   - `416` → look at `Content-Range: bytes */N`. `N == byte_offset` means the file
+     has not grown since the last sync: a no-op, and what every idle poll returns
+     once the backfill is done. Only `N < byte_offset`, or a missing
+     `Content-Range`, means truncated or recreated — reset to 0 and refetch whole.
+   - A `206` whose `Content-Range` total is smaller than `byte_offset` → the same
+     truncation, seen from the other side; reset to 0.
    - `404` → renamed or deleted. Record it in `last_error`, keep the source and
      its existing readings, surface it in the UI. Do not silently stop.
    - HTML body or non-2xx → error carrying the first 200 bytes, so a misdirected
@@ -551,6 +575,13 @@ Per source, on launch and then on a timer:
    That single boundary is what makes a crash mid-sync safe: the offset can never
    claim bytes whose rows didn't land.
 9. Carry any trailing partial line forward — Fermentrack was mid-write.
+
+If the parser stopped early (`ParseReport::stopped_early`), step 8 commits the rows
+that parsed and advances `byte_offset` by `bytes_consumed` — the last record that
+read cleanly — and nothing further. The next poll refetches the faulty bytes and
+fails identically, so the source stops with an error in the footer. That is
+deliberate: a sync that skipped the bad record would leave a hole in `reading` that
+nothing downstream could ever detect.
 
 App closed for a week means step 2 fetches a week of bytes in one request. That is
 exactly why Fermentrack stays the logger of record.

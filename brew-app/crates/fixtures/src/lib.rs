@@ -95,6 +95,11 @@ pub struct LogSpec {
     pub model_version: u8,
     /// Pitch time, UTC epoch seconds.
     pub start: i64,
+    /// How far into the ferment the first row sits. The curve is anchored at pitch,
+    /// so without this every short fixture lands in the 12 h lag phase: flat gravity
+    /// and an IDLE controller on every row, which is the one shape that proves
+    /// nothing.
+    pub start_hours_in: f64,
     /// `BrewPiDevice.data_point_log_interval`; 30 s is Fermentrack's default.
     pub interval_secs: i64,
     pub rows: usize,
@@ -111,6 +116,7 @@ impl Default for LogSpec {
             gravity_enabled: false,
             model_version: 2,
             start: 1_758_153_600, // 2025/09/18 00:00:00Z
+            start_hours_in: 0.0,
             interval_secs: 30,
             rows: 120,
             seed: 1,
@@ -132,14 +138,19 @@ pub enum Scenario {
     /// `model_version = 1`. Its `_full.csv` is identical in shape to version 2's —
     /// which is the point of generating it.
     LegacyV1,
+    /// Mid-ferment, where the numbers actually move: gravity falling, the exotherm
+    /// pushing the beer off setpoint, and a controller doing something other than
+    /// IDLE. Every other scenario starts at pitch and sits in the lag phase.
+    Active,
 }
 
 impl Scenario {
-    pub const ALL: [Scenario; 4] = [
+    pub const ALL: [Scenario; 5] = [
         Scenario::Nominal,
         Scenario::Gravity,
         Scenario::Ugly,
         Scenario::LegacyV1,
+        Scenario::Active,
     ];
 
     pub fn name(self) -> &'static str {
@@ -148,6 +159,7 @@ impl Scenario {
             Scenario::Gravity => "gravity",
             Scenario::Ugly => "ugly",
             Scenario::LegacyV1 => "v1",
+            Scenario::Active => "active",
         }
     }
 
@@ -173,7 +185,10 @@ impl Scenario {
                 gravity_enabled: true,
                 quirks: Quirks {
                     gap: Some((2, 4 * 3600)),
-                    absent_sensors: vec![Column::RoomTemp],
+                    // `gravity_enabled` with nothing assigned to it: the column is
+                    // there and every cell is a bare `0`. The column where reading
+                    // that as a real value is least visible.
+                    absent_sensors: vec![Column::RoomTemp, Column::Gravity],
                     annotations: true,
                     temp_format_switch: Some(3),
                 },
@@ -184,6 +199,18 @@ impl Scenario {
                 log_id: 4,
                 name: "Old Log 4".to_owned(),
                 model_version: 1,
+                ..LogSpec::default()
+            },
+            Scenario::Active => LogSpec {
+                log_id: 20,
+                name: "Seltzer 20 Active".to_owned(),
+                gravity_enabled: true,
+                // Past the lag and onto the steep part of the curve.
+                start_hours_in: 14.0,
+                // An hour between rows, so five of them span enough of the curve for
+                // the gravity to actually fall. 30 s would round to the same SG five
+                // times over.
+                interval_secs: 3600,
                 ..LogSpec::default()
             },
         }
@@ -292,7 +319,7 @@ impl LogSpec {
                 ts += secs;
             }
 
-            let hours = (ts - self.start) as f64 / 3600.0;
+            let hours = self.start_hours_in + (ts - self.start) as f64 / 3600.0;
             let activity = curve::activity_at(hours);
 
             let beer_set = 18.0;
@@ -668,6 +695,34 @@ mod tests {
         }
         .generate();
         assert!(rows.iter().all(|r| r.state <= 9));
+    }
+
+    /// The curve is anchored at pitch, so a five-row fixture starting at t=0 is all
+    /// lag: flat OG and an IDLE controller. `start_hours_in` is what lets a short
+    /// fixture sit somewhere the numbers move.
+    #[test]
+    fn start_hours_in_moves_the_fixture_along_the_curve() {
+        let at_pitch = LogSpec {
+            rows: 5,
+            gravity_enabled: true,
+            ..LogSpec::default()
+        };
+        let mid = LogSpec {
+            start_hours_in: 14.0,
+            interval_secs: 3600,
+            ..at_pitch.clone()
+        };
+
+        let lag = at_pitch.generate();
+        assert!(lag.iter().all(|r| r.gravity == Some(1.045)));
+        assert!(lag.iter().all(|r| r.state == 0));
+
+        let active = mid.generate();
+        assert!(active.iter().all(|r| r.gravity < Some(1.045)));
+        assert!(active.last().unwrap().gravity < active.first().unwrap().gravity);
+        assert!(active.iter().any(|r| r.state != 0));
+        // The timestamps are untouched: this moves the curve, not the clock.
+        assert_eq!(active[0].ts, at_pitch.start);
     }
 
     #[test]

@@ -73,6 +73,12 @@ pub enum Error {
     )]
     GraphLogRefused { path_hint: String },
 
+    // A gravity sensor's own log, not a beer log. `source.kind` has carried
+    // 'fermentrack_gravity_log' since 0001, but nothing reads one yet, and saying so
+    // is the difference between a user fixing the URL and a user filing a bug.
+    #[error("{path_hint} is a gravity-sensor log; this app only ingests a beer _full.csv so far")]
+    GravityLogUnsupported { path_hint: String },
+
     #[error("could not read the log as CSV: {0}")]
     Csv(#[from] csv::Error),
 
@@ -125,6 +131,7 @@ impl Error {
             Error::SchemaAhead { .. } => "db.schema_ahead",
             Error::NotAFermentrackLog { .. } => "fermentrack.not_a_log",
             Error::GraphLogRefused { .. } => "fermentrack.graph_log",
+            Error::GravityLogUnsupported { .. } => "fermentrack.gravity_log",
             Error::Csv(_) => "fermentrack.csv",
             Error::UnknownMetric(_) => "db.unknown_metric",
             Error::DimensionMismatch { .. } => "units.dimension_mismatch",

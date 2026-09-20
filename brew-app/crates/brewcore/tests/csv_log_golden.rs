@@ -146,6 +146,13 @@ fn a_clean_log_costs_nothing_in_the_report() {
         assert_eq!(chunk.report.rows_skipped, 0, "{name}");
         assert_eq!(chunk.report.values_dropped, 0, "{name}");
         assert!(chunk.report.unknown_columns.is_empty(), "{name}");
+        // Nothing stopped it, and the offset it hands 2d covers the whole file.
+        assert!(!chunk.report.stopped_early, "{name}");
+        assert_eq!(
+            chunk.report.bytes_consumed,
+            bytes(&spec, Kind::Full).len(),
+            "{name}"
+        );
     }
 }
 
@@ -174,8 +181,11 @@ fn gravity_is_read_only_when_the_columns_are_there() {
     for (scenario, present) in [
         (Scenario::Nominal, false),
         (Scenario::Gravity, true),
-        (Scenario::Ugly, true),
+        // `gravity_enabled`, but nothing assigned to the sensor: the columns are
+        // there and every cell is a bare `0`.
+        (Scenario::Ugly, false),
         (Scenario::LegacyV1, false),
+        (Scenario::Active, true),
     ] {
         let spec = spec(scenario);
         let chunk = parse_full_log(scenario.name(), &bytes(&spec, Kind::Full)).unwrap();
@@ -195,6 +205,55 @@ fn gravity_is_read_only_when_the_columns_are_there() {
             }
         }
     }
+}
+
+/// The same trap in the column where it is least visible. `ugly` has the gravity
+/// columns but no sensor behind them, so every `gravity` cell is a bare `0` — which
+/// must not become a stretch of 0.0 SG in the middle of a fermentation curve.
+#[test]
+fn an_absent_gravity_sensor_is_none_on_every_row_and_never_zero() {
+    let spec = spec(Scenario::Ugly);
+    let chunk = parse_full_log("ugly", &bytes(&spec, Kind::Full)).unwrap();
+
+    assert!(!chunk.rows.is_empty());
+    for (i, row) in chunk.rows.iter().enumerate() {
+        assert_eq!(row.gravity, None, "row {i}");
+        assert!(
+            !row.readings().any(|(metric, _)| metric == Metric::Sg),
+            "row {i} put an absent gravity sensor in the fan-out"
+        );
+        // Its own thermometer is still there — one absent column is not the other.
+        assert!(row.grav_temp.is_some(), "row {i}");
+    }
+}
+
+/// Every other scenario starts at pitch and sits in the lag phase, so its rows are
+/// IDLE with a flat OG. `active` is the one that moves: the controller is cooling
+/// against the exotherm and the gravity is falling row over row.
+#[test]
+fn the_active_scenario_carries_a_working_controller_and_a_falling_gravity() {
+    let spec = spec(Scenario::Active);
+    let chunk = parse_full_log("active", &bytes(&spec, Kind::Full)).unwrap();
+
+    let states: Vec<ControllerState> = chunk.rows.iter().filter_map(|r| r.state).collect();
+    assert_eq!(states.len(), chunk.rows.len());
+    assert!(
+        states.iter().any(|s| *s != ControllerState::Idle),
+        "no row left IDLE: {states:?}"
+    );
+
+    let gravities: Vec<f64> = chunk
+        .rows
+        .iter()
+        .filter_map(|r| r.gravity.map(Sg::get))
+        .collect();
+    assert_eq!(gravities.len(), chunk.rows.len());
+    assert!(
+        gravities[gravities.len() - 1] < gravities[0],
+        "{gravities:?}"
+    );
+    // Off the 1.045 plateau every other fixture is stuck on.
+    assert!(gravities.iter().all(|g| *g < 1.045), "{gravities:?}");
 }
 
 /// The annotations the generator plants: one with the delimiter, one with the
@@ -313,8 +372,9 @@ fn the_fan_out_width_follows_the_columns_present() {
         (Scenario::LegacyV1, 6),
         // plus gravity and its own thermometer
         (Scenario::Gravity, 8),
-        // gravity columns present, but no room probe
-        (Scenario::Ugly, 7),
+        (Scenario::Active, 8),
+        // gravity columns present, but neither a room probe nor a gravity sensor
+        (Scenario::Ugly, 6),
     ] {
         let spec = spec(scenario);
         let chunk = parse_full_log(scenario.name(), &bytes(&spec, Kind::Full)).unwrap();

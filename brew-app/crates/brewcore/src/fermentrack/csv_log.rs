@@ -105,10 +105,26 @@ impl Columns {
             });
         };
 
-        // `temp_format` is the discriminator between the two log files: `_graph.csv`
-        // has never carried it in any `model_version`, and `_full.csv` always does.
-        // Checking for the column rather than for the filename suffix means a file
-        // served under a renamed path is still classified correctly.
+        // Classification is by column, not by filename suffix, so a file served under
+        // a renamed path is still judged correctly. `Beer.column_headers` emits
+        // `beer_temp` and `beer_set` in both log files and in every `model_version`,
+        // so their absence means this is not a beer log at all — most likely a
+        // `GravityLog`'s own file, which has `log_time` and `gravity` but none of the
+        // controller columns and is a different parser's job.
+        if find("beer_temp").is_none() || find("beer_set").is_none() {
+            return Err(if find("gravity").is_some() {
+                Error::GravityLogUnsupported {
+                    path_hint: name.to_owned(),
+                }
+            } else {
+                Error::NotAFermentrackLog {
+                    detail: preview(header),
+                }
+            });
+        }
+
+        // Among beer logs, `temp_format` is the discriminator: `_graph.csv` has never
+        // carried it in any `model_version`, and `_full.csv` always does.
         let Some(temp_format) = find("temp_format") else {
             return Err(Error::GraphLogRefused {
                 path_hint: name.to_owned(),
@@ -275,6 +291,16 @@ pub struct ParseReport {
     /// genuinely absent sensor — that is data, not damage.
     pub values_dropped: usize,
     pub unknown_columns: Vec<String>,
+    /// Bytes of the input taken up by records that were *read* — parsed or
+    /// deliberately skipped. Relative to the buffer that was passed in, so
+    /// [`parse_full_log`]'s includes the header line and [`parse_with_header`]'s does
+    /// not. Phase 2d advances `byte_offset` by exactly this and never by the length of
+    /// what it fetched.
+    pub bytes_consumed: usize,
+    /// A `csv::Error` ended the read before the end of the input. The bytes from
+    /// `bytes_consumed` onwards were never looked at, so 2d must not claim them:
+    /// advancing past a fault it did not parse is a permanent hole in `reading`.
+    pub stopped_early: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -293,7 +319,7 @@ pub fn parse_full_log(name: &str, bytes: &[u8]) -> Result<ParsedChunk> {
     let mut reader = reader(bytes, true);
     let header = reader.headers()?.clone();
     let columns = Columns::from_header(name, &header)?;
-    Ok(read_rows(&mut reader, &columns))
+    Ok(read_rows(bytes, &mut reader, &columns))
 }
 
 /// Parse a continuation chunk against a header held elsewhere.
@@ -304,7 +330,7 @@ pub fn parse_full_log(name: &str, bytes: &[u8]) -> Result<ParsedChunk> {
 pub fn parse_with_header(name: &str, header: &str, body: &[u8]) -> Result<ParsedChunk> {
     let header = header_record(header)?;
     let columns = Columns::from_header(name, &header)?;
-    Ok(read_rows(&mut reader(body, false), &columns))
+    Ok(read_rows(body, &mut reader(body, false), &columns))
 }
 
 fn reader(bytes: &[u8], has_headers: bool) -> csv::Reader<&[u8]> {
@@ -324,7 +350,19 @@ fn header_record(header: &str) -> Result<csv::StringRecord> {
     Ok(record)
 }
 
-fn read_rows(reader: &mut csv::Reader<&[u8]>, columns: &Columns) -> ParsedChunk {
+/// Where a record really ends.
+///
+/// `csv_core` reports a record complete as soon as it sees the `\r` of a `\r\n`, leaving
+/// the `\n` for the next read, so the reader's position stops one byte short of the
+/// boundary. An offset saved there would have 2d resume mid-terminator.
+fn consumed_through(input: &[u8], mut at: usize) -> usize {
+    while matches!(input.get(at), Some(b'\r' | b'\n')) {
+        at += 1;
+    }
+    at
+}
+
+fn read_rows(input: &[u8], reader: &mut csv::Reader<&[u8]>, columns: &Columns) -> ParsedChunk {
     let mut rows = Vec::new();
     let mut report = ParseReport {
         unknown_columns: columns.unknown.clone(),
@@ -336,6 +374,10 @@ fn read_rows(reader: &mut csv::Reader<&[u8]>, columns: &Columns) -> ParsedChunk 
         match reader.read_record(&mut record) {
             Ok(false) => break,
             Ok(true) => {
+                // The reader's position advances by the bytes the record occupied, so
+                // after a successful read it sits just past that record's terminator.
+                // That — not the length of the chunk — is what 2d may claim.
+                report.bytes_consumed = consumed_through(input, reader.position().byte() as usize);
                 if let Some(row) = row_from_record(columns, &record, &mut report) {
                     report.rows_parsed += 1;
                     rows.push(row);
@@ -343,11 +385,13 @@ fn read_rows(reader: &mut csv::Reader<&[u8]>, columns: &Columns) -> ParsedChunk 
             }
             Err(err) => {
                 // A quoting or encoding fault mid-chunk. Stop rather than guess: the
-                // remaining bytes are no longer trustworthy, and Phase 2d only
-                // advances `byte_offset` past rows that were committed, so the tail
-                // gets refetched rather than lost.
+                // remaining bytes are no longer trustworthy. `bytes_consumed` stays at
+                // the last record that read cleanly, so 2d commits what parsed, stops
+                // there, and surfaces the error — a source that wedges visibly beats
+                // one that skips rows nobody will ever notice missing.
                 tracing::warn!(%err, "stopped reading the log chunk early");
                 report.rows_skipped += 1;
+                report.stopped_early = true;
                 break;
             }
         }
@@ -631,6 +675,33 @@ mod tests {
         assert_eq!(chunk.report.rows_skipped, 0);
     }
 
+    /// The same rule in the column where breaking it is least visible: a 0.0 SG is
+    /// outside `Sg::PLAUSIBLE` and would be dropped, but a bare `0` read as a real
+    /// reading would sit in the series as a plausible-looking hole in the curve.
+    #[test]
+    fn a_bare_zero_gravity_is_a_missing_reading() {
+        let absent = only_row(
+            HEADER_GRAVITY,
+            "2025/09/18 00:00:00Z,18.06,18.0,,17.0,17.0,,21.0,0,C,17,0,18.3",
+        );
+        assert_eq!(absent.gravity, None);
+
+        // An absent gravity sensor is data, not damage.
+        let chunk = parse(
+            HEADER_GRAVITY,
+            &["2025/09/18 00:00:00Z,18.06,18.0,,17.0,17.0,,21.0,0,C,17,0,18.3"],
+        );
+        assert_eq!(chunk.report.values_dropped, 0);
+
+        // `0.0` is a real reading — implausible as an SG, so dropped and counted.
+        let real = parse(
+            HEADER_GRAVITY,
+            &["2025/09/18 00:00:00Z,18.06,18.0,,17.0,17.0,,21.0,0,C,17,0.0,18.3"],
+        );
+        assert_eq!(real.rows[0].gravity, None);
+        assert_eq!(real.report.values_dropped, 1);
+    }
+
     /// `state` is a genuine integer and is exempt: `0` is IDLE, not "missing".
     #[test]
     fn a_zero_state_is_idle_not_absent() {
@@ -817,6 +888,29 @@ mod tests {
         }
     }
 
+    /// A `GravityLog`'s own `_full.csv`: it has `log_time` and `gravity` but none of
+    /// the controller columns. Calling it a `_graph.csv` would send the user looking
+    /// for a file that does not exist — 2f lets them paste this URL.
+    #[test]
+    fn a_gravity_sensor_log_is_named_as_one() {
+        let header = "log_time,gravity,temp,temp_format,associated_beer_id";
+        let err = parse_full_log("Gravity Device 1 - L3 - Tilt_full.csv", &log(header, &[]))
+            .expect_err("a gravity log is not a beer log");
+        assert_eq!(err.code(), "fermentrack.gravity_log");
+        assert!(err.to_string().contains("Gravity Device 1"), "{err}");
+    }
+
+    /// `log_time` alone is not enough to call something a Fermentrack log. Without the
+    /// controller columns and without `gravity` there is nothing to guess from, so say
+    /// that rather than blaming the wrong file.
+    #[test]
+    fn a_csv_with_only_log_time_is_not_classified_as_either_log() {
+        let err = parse_full_log("mystery.csv", &log("log_time,humidity,pressure", &[]))
+            .expect_err("not a Fermentrack log");
+        assert_eq!(err.code(), "fermentrack.not_a_log");
+        assert!(err.to_string().contains("humidity"), "{err}");
+    }
+
     // -- rows ---------------------------------------------------------------
 
     #[test]
@@ -977,6 +1071,50 @@ mod tests {
         .expect("should parse");
         assert_eq!(chunk.rows.len(), 1);
         assert!(chunk.report.unknown_columns.is_empty());
+    }
+
+    // -- stopping early -----------------------------------------------------
+
+    /// What 2d's offset advance is computed from. A clean chunk consumes all of it.
+    #[test]
+    fn a_clean_chunk_consumes_every_byte_it_was_given() {
+        let body = "2025/09/18 00:00:00Z,18.0,18.0,,17.0,17.0,,21.0,0,C,17\r\n\
+                    2025/09/18 00:00:30Z,18.1,18.0,,17.0,17.0,,21.0,0,C,17\r\n";
+        let chunk = parse_with_header("test_full.csv", HEADER, body.as_bytes()).unwrap();
+        assert!(!chunk.report.stopped_early);
+        assert_eq!(chunk.report.bytes_consumed, body.len());
+
+        // With the header included, the offset covers the header line too.
+        let whole = log(
+            HEADER,
+            &["2025/09/18 00:00:00Z,18.0,18.0,,17.0,17.0,,21.0,0,C,17"],
+        );
+        let chunk = parse_full_log("test_full.csv", &whole).unwrap();
+        assert_eq!(chunk.report.bytes_consumed, whole.len());
+    }
+
+    /// A fault mid-chunk must leave `bytes_consumed` at the last record that read
+    /// cleanly. If it counted the whole chunk, 2d would advance past bytes it never
+    /// parsed and those rows would be gone for good.
+    #[test]
+    fn a_fault_mid_chunk_stops_early_without_claiming_the_rest() {
+        let good = b"2025/09/18 00:00:00Z,18.0,18.0,,17.0,17.0,,21.0,0,C,17\r\n";
+        let mut body = good.to_vec();
+        // Not UTF-8. An annotation is free text, so a chunk that was cut in the wrong
+        // place really can put a truncated multi-byte sequence in one.
+        body.extend_from_slice(
+            b"2025/09/18 00:00:30Z,18.1,18.0,\xff\xfe,17.0,17.0,,21.0,0,C,17\r\n",
+        );
+        body.extend_from_slice(b"2025/09/18 00:01:00Z,18.2,18.0,,17.0,17.0,,21.0,0,C,17\r\n");
+
+        let chunk = parse_with_header("test_full.csv", HEADER, &body).unwrap();
+
+        assert_eq!(chunk.rows.len(), 1);
+        assert!(chunk.report.stopped_early);
+        assert_eq!(chunk.report.rows_skipped, 1);
+        assert_eq!(chunk.report.bytes_consumed, good.len());
+        // The third row is untouched, not skipped: 2d refetches from the fault.
+        assert!(chunk.report.bytes_consumed < body.len());
     }
 
     // -- line boundaries ----------------------------------------------------
