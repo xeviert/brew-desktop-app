@@ -31,11 +31,12 @@ csv = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 tempfile = "3"
-# Phase 2a's test rig. `wiremock` and `tokio` are how the mock Fermentrack serves a
-# growing file; `reqwest` is only a test client here, and becomes a real `brewcore`
-# dependency in 2c. `rustls` rather than schannel so Windows and CI behave alike.
+# Phase 2a's test rig and Phase 2c's client. `wiremock` is how the mock Fermentrack
+# serves a growing file; `tokio`'s `time` is 2c's retry backoff; `reqwest` is the
+# fetch itself, and its `Url` re-export is what `config::validate` parses a base_url
+# with. `rustls` rather than schannel so Windows and CI behave alike.
 wiremock = "0.6"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "charset"] }
 
 [profile.dev]

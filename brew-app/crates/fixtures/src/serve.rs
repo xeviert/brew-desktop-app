@@ -44,6 +44,7 @@ struct ServeState {
     mode: RangeMode,
     fault: Fault,
     requests: usize,
+    last_range: Option<String>,
 }
 
 /// A running mock. Dropping it shuts the server down.
@@ -62,6 +63,7 @@ impl FixtureServer {
             mode: RangeMode::default(),
             fault: Fault::default(),
             requests: 0,
+            last_range: None,
         }));
 
         let server = MockServer::start().await;
@@ -139,6 +141,18 @@ impl FixtureServer {
     pub fn request_count(&self) -> usize {
         self.with_state(|s| s.requests)
     }
+
+    /// The `Range` header of the most recent request, verbatim, or `None` if it sent
+    /// none.
+    ///
+    /// Exposed because `parse_range` accepts only the forms our client produces:
+    /// anything else falls through to a whole-file `200`, which a client that applies
+    /// the offset locally then turns into *correct-looking* output. Without this, a
+    /// regression that stopped sending the header at all would pass every other test
+    /// in the suite.
+    pub fn last_range(&self) -> Option<String> {
+        self.with_state(|s| s.last_range.clone())
+    }
 }
 
 struct Responder {
@@ -150,6 +164,11 @@ impl Respond for Responder {
     fn respond(&self, request: &Request) -> ResponseTemplate {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.requests += 1;
+        state.last_range = request
+            .headers
+            .get("range")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
 
         if decode_path(request.url.path()) != self.path {
             return not_found();

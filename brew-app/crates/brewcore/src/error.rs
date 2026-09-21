@@ -82,6 +82,66 @@ pub enum Error {
     #[error("could not read the log as CSV: {0}")]
     Csv(#[from] csv::Error),
 
+    // Phase 2c. Transport and protocol only; once the bytes are in hand, everything
+    // about their content is the parser's problem — except the one check the parser
+    // cannot make, which is whether they are CSV at all (`NotCsv`).
+    //
+    // Every variant here means the same thing to the sync loop: write `last_error`,
+    // keep the source, keep its readings. "The log was renamed" must never cost a
+    // week of backfill.
+    #[error("the log is missing or was renamed: {url}")]
+    LogMissing { url: String },
+
+    #[error("{url} returned {status}: {preview}")]
+    HttpStatus {
+        url: String,
+        status: u16,
+        preview: String,
+    },
+
+    // A misdirected URL answers `200` with an HTML dashboard. Caught here rather than
+    // in the parser because a resume calls `parse_with_header`, which would read that
+    // page as zero rows and a clean report — and the offset would then advance past it.
+    #[error("{url} served {content_type}, not a CSV: {preview}")]
+    NotCsv {
+        url: String,
+        content_type: String,
+        preview: String,
+    },
+
+    // `#[source]` rather than `#[from]` for the same reason as `ConfigParse`: a bare
+    // `#[from]` would let `?` drop which URL failed, and Phase 2f fetches more than one.
+    #[error("could not reach {url}: {source}")]
+    Http {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    // Split from `Http` because "Fermentrack is not responding" and "could not reach
+    // Fermentrack" send the user to different places, `is_timeout()` is the only way
+    // to tell them apart, and 2g's backoff should treat a slow box unlike a dead one.
+    #[error("{url} did not respond in time")]
+    Timeout {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
+    // A range answer we cannot act on: a `206` starting somewhere other than where we
+    // asked, or a `416` claiming the file is longer than our offset. Both are refused
+    // rather than guessed at, so the source wedges visibly — the same principle as
+    // `ParseReport::stopped_early`.
+    #[error("{url} answered {status} with an unusable Content-Range: {detail}")]
+    RangeMismatch {
+        url: String,
+        status: u16,
+        detail: String,
+    },
+
+    #[error("{url} is not a usable log URL: {reason}")]
+    InvalidUrl { url: String, reason: String },
+
     #[error("unknown metric '{0}' in the database")]
     UnknownMetric(String),
 
@@ -133,6 +193,13 @@ impl Error {
             Error::GraphLogRefused { .. } => "fermentrack.graph_log",
             Error::GravityLogUnsupported { .. } => "fermentrack.gravity_log",
             Error::Csv(_) => "fermentrack.csv",
+            Error::LogMissing { .. } => "fermentrack.log_missing",
+            Error::HttpStatus { .. } => "fermentrack.http_status",
+            Error::NotCsv { .. } => "fermentrack.not_csv",
+            Error::Http { .. } => "fermentrack.http",
+            Error::Timeout { .. } => "fermentrack.timeout",
+            Error::RangeMismatch { .. } => "fermentrack.range",
+            Error::InvalidUrl { .. } => "fermentrack.url",
             Error::UnknownMetric(_) => "db.unknown_metric",
             Error::DimensionMismatch { .. } => "units.dimension_mismatch",
             Error::NotFinite { .. } => "units.not_finite",

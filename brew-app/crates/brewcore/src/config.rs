@@ -144,8 +144,6 @@ impl Config {
         // Empty means "not configured yet" and is always legal.
         let url = self.fermentrack.base_url.trim();
         if !url.is_empty() {
-            // Phase 2c: replace with `reqwest::Url::parse` once that crate is in the
-            // tree. Pulling in a URL parser for four fields is not worth it today.
             let Some(host) = url
                 .strip_prefix("http://")
                 .or_else(|| url.strip_prefix("https://"))
@@ -169,6 +167,18 @@ impl Config {
                 return Err(Error::ConfigInvalid {
                     field: "fermentrack.base_url",
                     reason: "must not contain whitespace".to_owned(),
+                });
+            }
+            // Phase 2c. The last gate, not a replacement for the three above: they
+            // catch things `Url::parse` happily accepts (`ftp://host`), and this
+            // catches things they miss (a port that does not fit in a u16). It is here
+            // at all because `fermentrack::client` parses the same string later, and a
+            // base_url that saves but cannot be fetched from would have the settings
+            // pane blaming no field.
+            if let Err(err) = reqwest::Url::parse(url) {
+                return Err(Error::ConfigInvalid {
+                    field: "fermentrack.base_url",
+                    reason: err.to_string(),
                 });
             }
         }
@@ -498,6 +508,11 @@ mod tests {
             "http://host:8080//",
             "http://host/sub/path/",
             "not a url",
+            // Phase 2c added `Url::parse` as a final gate. An IPv6 literal must still
+            // pass it; a port that does not fit in a u16 must now fail, which the
+            // hand-rolled checks let through.
+            "http://[::1]:8080",
+            "http://host:99999",
         ] {
             let mut once = with_url(input);
             once.normalize();
@@ -554,6 +569,18 @@ mod tests {
             .validate()
             .unwrap_err();
         assert_eq!(err.code(), "config.invalid");
+    }
+
+    /// Phase 2c's final gate. The hand-rolled checks see a scheme, a host and no
+    /// whitespace and pass a port no socket can ever use; `fermentrack::client` then
+    /// fails to parse the same string, with the settings pane blaming no field.
+    #[test]
+    fn validate_rejects_a_url_only_a_url_parser_can_fault() {
+        let err = with_url("http://host:99999").validate().unwrap_err();
+        assert_eq!(err.code(), "config.invalid");
+        // And it must not have become stricter about legitimate hosts.
+        assert!(with_url("http://[::1]:8080").validate().is_ok());
+        assert!(with_url("http://fermentrack.local").validate().is_ok());
     }
 
     #[test]

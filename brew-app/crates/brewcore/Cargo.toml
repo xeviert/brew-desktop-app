@@ -26,10 +26,21 @@ tracing.workspace = true
 # contains a comma. `chrono` for `log_time`, whose format is fixed and always UTC.
 csv.workspace = true
 chrono.workspace = true
+# Phase 2c. `reqwest` is the Fermentrack fetch; its `Url` re-export is also what
+# `config::validate` parses a base_url with, so there is no separate `url` dep.
+# `tokio` is `time::sleep` for the retry backoff and `#[tokio::test]` for this
+# crate's first async tests — this crate installs no runtime of its own, exactly as
+# it installs no tracing subscriber.
+reqwest.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 # The parser's oracle. `brewfixture` has no `brewcore` dependency, by design: a
 # generator that shared the parser's date maths or CSV quoting could not catch a bug
 # in either. Dev-only, so nothing ships with the app.
-brewfixture.workspace = true
+#
+# `features = ["serve"]` is not implied by `workspace = true` — the workspace entry
+# is a bare path with no features, and the mock server is behind `serve` so that
+# `cargo xtask gen-fixture` does not build an HTTP stack to write a file.
+brewfixture = { workspace = true, features = ["serve"] }

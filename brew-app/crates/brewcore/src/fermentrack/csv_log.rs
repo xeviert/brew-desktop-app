@@ -43,10 +43,6 @@ use crate::{
 /// a literal to `chrono`, not an offset specifier — the log is always UTC.
 const LOG_TIME_FORMAT: &str = "%Y/%m/%d %H:%M:%SZ";
 
-/// How much of a bad header goes in the error message. Enough to recognise an HTML
-/// error page, not enough to paste a whole dashboard into the log.
-const DETAIL_CHARS: usize = 200;
-
 /// Every column this module understands. Anything else in a header is recorded and
 /// ignored.
 const KNOWN_COLUMNS: [&str; 13] = [
@@ -162,13 +158,7 @@ impl Columns {
 
 /// The header as one line, truncated on a character boundary.
 fn preview(header: &csv::StringRecord) -> String {
-    let joined = header.iter().collect::<Vec<_>>().join(",");
-    let truncated: String = joined.chars().take(DETAIL_CHARS).collect();
-    if truncated.len() < joined.len() {
-        format!("{truncated}…")
-    } else {
-        truncated
-    }
+    super::preview(&header.iter().collect::<Vec<_>>().join(","))
 }
 
 // ---------------------------------------------------------------------------
@@ -606,6 +596,7 @@ pub fn split_complete_lines(bytes: &[u8]) -> (&[u8], &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fermentrack::DETAIL_CHARS;
 
     /// `_full.csv` without the gravity columns, exactly as `Beer.column_headers`
     /// builds it.

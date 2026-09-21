@@ -202,3 +202,24 @@ async fn the_served_url_survives_the_spaces_in_a_fermentrack_filename() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.text().await.unwrap().len(), body.len());
 }
+
+/// The rig records what it was asked for, so a client can assert it sent the one form
+/// of `Range` the rig honours. Every other shape falls through to a whole-file `200`,
+/// which a client that applies the offset locally turns into correct-looking output —
+/// so a regression that stopped sending the header would otherwise be invisible.
+#[tokio::test]
+async fn the_range_header_the_client_sent_is_recorded() {
+    let (server, _) = start().await;
+    assert_eq!(server.last_range(), None);
+
+    reqwest::get(server.url()).await.unwrap();
+    assert_eq!(server.last_range(), None, "a plain GET sends no Range");
+
+    reqwest::Client::new()
+        .get(server.url())
+        .header(RANGE, "bytes=200-")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(server.last_range().as_deref(), Some("bytes=200-"));
+}

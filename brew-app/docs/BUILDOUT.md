@@ -101,7 +101,8 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
       `set_fault` for 404 / HTML / 500, and `append` / `truncate_to` so the body can
       grow between requests
 - [ ] Growing-file test: serve N bytes, sync, serve N+M, sync again, assert no dupes
-      — needs the sync write path, so it lands with 2e. The harness is ready for it
+      — needs the sync write path, so it lands with 2e. The harness is ready for it,
+      and 2c has the transport half: `a_resume_fetches_only_the_bytes_appended_since_the_last_sync`
 - [ ] Replace fixtures with a real capture once Fermentrack is up — same tests
 
 **2b. Parser (`fermentrack/csv_log.rs`)**
@@ -126,15 +127,34 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 - [x] Unit tests per quirk, each with a 3-line inline CSV
 
 **2c. Fetch (`fermentrack/client.rs`)**
-- [ ] `GET` with `Range: bytes=<offset>-`
-- [ ] `206` → parse body. `200` → server ignored Range; skip `offset` bytes locally
-- [ ] `416` → read `Content-Range: bytes */N`. **`N == offset` is the steady state**
+- [x] `GET` with `Range: bytes=<offset>-`
+- [x] `206` → parse body. `200` → server ignored Range; skip `offset` bytes locally
+- [x] `416` → read `Content-Range: bytes */N`. **`N == offset` is the steady state**
       — nothing new since the last sync, so it is a no-op, not a reason to refetch.
       `N < offset` (or no `Content-Range` at all) → truncated/recreated; reset to 0
-- [ ] `206` whose `Content-Range` total is < `offset` → truncated; reset to 0
-- [ ] `404` → surface "log missing or renamed", keep the source, don't wipe readings
-- [ ] Non-2xx/HTML body → error with the first 200 bytes in the message
-- [ ] Timeouts + bounded retry with backoff; a down Fermentrack must not hang the UI
+- [x] `206` whose `Content-Range` total is < `offset` → truncated; reset to 0
+- [x] A `200` shorter than `offset` is the *likelier* truncation — it is what a
+      Range-ignoring proxy in front of a rotated log produces. Equal length is
+      `Unchanged`, not an empty chunk
+- [x] A `206` starting somewhere other than `offset` is refused, not trusted.
+      Storing its rows as though they began at `offset` is the one corruption 2d
+      can never detect afterwards
+- [x] `416` with `N > offset` is an error, not truncation: resetting to 0 gets the
+      same `416` forever. Wedge visibly, same principle as `stopped_early`
+- [x] `404` → surface "log missing or renamed", keep the source, don't wipe readings
+- [x] Non-2xx/HTML body → error with the first 200 bytes in the message. HTML
+      arrives with a **200**, so the content check runs *before* the offset
+      arithmetic — a short dashboard at a large offset would otherwise classify as
+      truncation, reset the offset, and be ingested on the next poll
+- [x] Timeouts + bounded retry with backoff; a down Fermentrack must not hang the UI.
+      Connect 5 s and read 30 s, but no whole-request timeout — "app closed for a
+      week" is one legitimately huge request. The retry here is in-fetch and in
+      milliseconds (3 attempts, 250 ms ×4); 2g's per-source backoff is a separate,
+      minutes-scale mechanism between polls
+- [x] `remote_path` is stored **decoded**, the way Fermentrack names the file, and
+      percent-encoded once at the URL boundary in `log_url`. An already-absolute
+      `remote_path` is passed through verbatim so a pasted browser URL doesn't
+      become `%2520`
 
 **2d. Offsets and partial lines**
 - [ ] Keep a remainder buffer; a fetch ending mid-line carries the tail forward
@@ -552,19 +572,37 @@ Per source, on launch and then on a timer:
 
 1. Re-resolve `remote_path` — the beer name is in the filename, so a rename in
    Fermentrack moves the file.
-2. `GET` it with `Range: bytes=<byte_offset>-`.
-   - `206 Partial Content` → parse the body as the continuation.
-   - `200 OK` → the server ignored `Range`; skip `byte_offset` bytes locally.
+2. `GET` it with `Range: bytes=<byte_offset>-`. `remote_path` is held decoded and
+   percent-encoded here, at the one boundary that builds the URL.
+   - `206 Partial Content` → parse the body as the continuation, but only if its
+     `Content-Range` starts at `byte_offset`. A `206` that starts anywhere else is
+     refused rather than trusted: its rows would be stored as though they began at
+     an offset they didn't, and that is the one corruption step 8 can never detect.
+   - `200 OK` → the server ignored `Range`; skip `byte_offset` bytes locally. A body
+     exactly `byte_offset` long is a no-op; a *shorter* one is truncation — and the
+     likelier of the two truncation cases, since it is what a Range-ignoring proxy
+     in front of a rotated log produces.
    - `416` → look at `Content-Range: bytes */N`. `N == byte_offset` means the file
      has not grown since the last sync: a no-op, and what every idle poll returns
      once the backfill is done. Only `N < byte_offset`, or a missing
      `Content-Range`, means truncated or recreated — reset to 0 and refetch whole.
+     `N > byte_offset` is neither, and is an error: resetting to 0 would ask for a
+     range the server has already called unsatisfiable and get the same `416`
+     forever, so it wedges visibly instead.
    - A `206` whose `Content-Range` total is smaller than `byte_offset` → the same
      truncation, seen from the other side; reset to 0.
    - `404` → renamed or deleted. Record it in `last_error`, keep the source and
      its existing readings, surface it in the UI. Do not silently stop.
    - HTML body or non-2xx → error carrying the first 200 bytes, so a misdirected
-     URL is obvious in the log.
+     URL is obvious in the log. Fermentrack's dashboard answers **200**, so the
+     content check has to run *before* any of the offset arithmetic above: a
+     400-byte page fetched at a 50 000 offset is shorter than that offset, would be
+     classified as truncation, would reset `byte_offset` to 0, and the next poll
+     would ingest the page. Ordering, not the check itself, is what prevents that.
+   - A failed request is retried up to three times inside the fetch, 250 ms then
+     1 s, for timeouts, connection failures and 5xx only — a wrong URL is wrong
+     three times too. That is a different mechanism from the per-source backoff
+     under *Scheduling*, which runs in minutes and sits between polls.
 3. Prepend the remainder buffer from last time. Parse complete lines only.
 4. Compare the header against `sync_state.header`; any change → full refetch.
 5. Convert each row's temps using that row's own `temp_format` cell.
