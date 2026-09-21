@@ -8,14 +8,28 @@
 //! now, around the only implementation that exists, would cement the byte offset into
 //! 2g's scheduler — which is the coupling the door is supposed to prevent. It lands in
 //! 2g, when there are two callers (the scheduler and the manual Resync command).
+//!
+//! Nor is there a remainder buffer. [`sync::ingest`] advances `byte_offset` only past
+//! complete, terminated records, so the next `Range: bytes=<offset>-` re-requests the
+//! partial tail for free — no state to carry across a restart, and no schema column to
+//! hold it. The rule that pays for it is **split before you parse**; see
+//! [`split_complete_lines`].
 
 pub mod client;
 pub mod csv_log;
 mod state;
+pub mod sync;
 
 pub use client::{Client, ClientSettings, FetchOutcome, RetryPolicy, log_url};
-pub use csv_log::{LogRow, ParseReport, ParsedChunk, parse_full_log, parse_with_header};
+pub use csv_log::{
+    LogRow, ParseReport, ParsedChunk, parse_full_log, parse_with_header, split_complete_lines,
+    split_first_record,
+};
 pub use state::ControllerState;
+pub use sync::{
+    Advance, MAX_PARTIAL_RECORD_BYTES, Restart, RestartReason, SyncFault, SyncState, SyncStep,
+    ingest,
+};
 
 /// How much of a suspicious body goes in an error message. Enough to recognise an
 /// HTML error page, not enough to paste a whole dashboard into the log.

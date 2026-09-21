@@ -210,11 +210,25 @@ fn py_number(cell: &str) -> Result<Cell, ()> {
     Ok(Cell::Real(value))
 }
 
+/// `2025/09/18 00:00:00Z`, and nothing else. Exactly this many characters.
+const LOG_TIME_WIDTH: usize = 20;
+
 /// `%Y/%m/%d %H:%M:%SZ` to epoch seconds. `chrono` rejects trailing garbage, so a
 /// `log_time` cell with anything after the `Z` is a parse failure rather than a
 /// silently truncated timestamp.
+///
+/// The width check is what makes 2d's record-boundary proof work. `%Y` happily accepts
+/// an unpadded year, so a resume landing three bytes into a row reads
+/// `5/09/18 00:00:00Z` as the year 5 — a row that parses, with a timestamp forty
+/// thousand years wrong, out of bytes that were never a record. `strftime` always emits
+/// four zero-padded digits, so anything other than 20 characters did not come from
+/// Fermentrack.
 fn parse_log_time(cell: &str) -> Option<Timestamp> {
-    chrono::NaiveDateTime::parse_from_str(cell.trim(), LOG_TIME_FORMAT)
+    let cell = cell.trim();
+    if cell.len() != LOG_TIME_WIDTH {
+        return None;
+    }
+    chrono::NaiveDateTime::parse_from_str(cell, LOG_TIME_FORMAT)
         .ok()
         .map(|dt| Timestamp::from_secs(dt.and_utc().timestamp()))
 }
@@ -317,6 +331,10 @@ pub fn parse_full_log(name: &str, bytes: &[u8]) -> Result<ParsedChunk> {
 /// This is the shape Phase 2d resumes with: `sync_state.header` holds the header line,
 /// and the body is whatever the `Range` request returned. `body` must begin on a
 /// record boundary — see [`split_complete_lines`].
+///
+/// 2d reaches it on a first fetch too, by lifting the header off with
+/// [`split_first_record`], so that one parser covers both and `bytes_consumed` needs no
+/// per-caller adjustment.
 pub fn parse_with_header(name: &str, header: &str, body: &[u8]) -> Result<ParsedChunk> {
     let header = header_record(header)?;
     let columns = Columns::from_header(name, &header)?;
@@ -563,34 +581,62 @@ fn annotation(record: &csv::StringRecord, index: Option<usize>) -> Option<String
 // Line boundaries
 // ---------------------------------------------------------------------------
 
+/// Every record boundary in `bytes`, as an offset just past a terminator.
+///
+/// A `\r\n` inside a quoted annotation is **not** a boundary: Python's writer quotes
+/// any field containing `,` `"` `\r` or `\n`, so a multi-line annotation is reachable,
+/// and a naive `rfind` for `\r\n` would cut a record in half.
+fn boundaries(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
+    let mut in_quotes = false;
+    bytes.iter().enumerate().filter_map(move |(i, byte)| {
+        match byte {
+            // An escaped `""` toggles twice and lands back inside the field, which is
+            // the correct answer.
+            b'"' => {
+                in_quotes = !in_quotes;
+                None
+            }
+            // Keyed on `\n`: `\r\n` ends with it, and a lone `\n` from a hand-edited
+            // file still terminates a record as far as the csv reader is concerned.
+            b'\n' if !in_quotes => Some(i + 1),
+            _ => None,
+        }
+    })
+}
+
 /// Split a buffer into `(complete records, trailing partial record)`.
 ///
-/// Phase 2d's remainder buffer needs this, but it belongs next to the quoting rules it
-/// depends on. A `\r\n` inside a quoted annotation is **not** a record boundary:
-/// Python's writer quotes any field containing `,` `"` `\r` or `\n`, so a multi-line
-/// annotation is reachable, and a naive `rfind` for `\r\n` would cut a record in half
-/// and then advance `byte_offset` past the wreckage.
+/// **Split before you parse.** The `csv` crate treats EOF as a record terminator, so a
+/// trailing half-written row parses as a complete one and `bytes_consumed` claims bytes
+/// Fermentrack never finished writing. Both failures are silent and neither is
+/// detectable afterwards: a row cut at `,0,C,1` has the right cell count and a valid
+/// `log_time`, so it commits as a real reading while the genuine row's tail arrives
+/// next poll as a one-cell record and is skipped; and Rust's `f64` parser accepts
+/// `18.`, so a value cut mid-number stores 18.0 where the file says 18.06.
+///
+/// Phase 2d keeps no remainder buffer — `byte_offset` only ever advances past a
+/// complete record, so the tail is re-requested for free by the next
+/// `Range: bytes=<offset>-`. This is what makes that safe.
 ///
 /// `bytes` must start on a record boundary — otherwise the quote state is inverted
 /// from the first byte and every boundary after it is wrong. That is 2d's invariant to
 /// keep, and the reason a resume that cannot prove it refetches from zero.
 pub fn split_complete_lines(bytes: &[u8]) -> (&[u8], &[u8]) {
-    let mut in_quotes = false;
-    let mut boundary = 0;
+    bytes.split_at(boundaries(bytes).last().unwrap_or(0))
+}
 
-    for (i, byte) in bytes.iter().enumerate() {
-        match byte {
-            // An escaped `""` toggles twice and lands back inside the field, which is
-            // the correct answer.
-            b'"' => in_quotes = !in_quotes,
-            // Keyed on `\n`: `\r\n` ends with it, and a lone `\n` from a hand-edited
-            // file still terminates a record as far as the csv reader is concerned.
-            b'\n' if !in_quotes => boundary = i + 1,
-            _ => {}
-        }
-    }
-
-    bytes.split_at(boundary)
+/// Split the first complete record off a buffer: `(the record including its
+/// terminator, the rest)`, or `None` when no record is complete.
+///
+/// Quote-aware for the same reason [`split_complete_lines`] is, and subject to the same
+/// start-on-a-boundary invariant.
+///
+/// Phase 2d uses this twice. Once to lift the header line off a fetch that began at
+/// byte 0, so that [`parse_with_header`] handles the first chunk and every continuation
+/// alike and `bytes_consumed` means the same thing in both. Once to prove a resume
+/// chunk really does begin on a record boundary, by re-parsing its first record alone.
+pub fn split_first_record(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+    boundaries(bytes).next().map(|at| bytes.split_at(at))
 }
 
 #[cfg(test)]
@@ -1139,6 +1185,29 @@ mod tests {
         assert_eq!(remainder, b"c,d,");
     }
 
+    #[test]
+    fn split_first_record_stops_at_the_first_unquoted_terminator() {
+        let (first, rest) =
+            split_first_record(b"a,b\r\nc,d\r\ne,").expect("one record is complete");
+        assert_eq!(first, b"a,b\r\n");
+        assert_eq!(rest, b"c,d\r\ne,");
+
+        // A quoted terminator is not a boundary here either.
+        let (first, rest) = split_first_record(b"a,\"two\r\nlines\",b\r\nc,d\r\n").unwrap();
+        assert_eq!(first, b"a,\"two\r\nlines\",b\r\n");
+        assert_eq!(rest, b"c,d\r\n");
+
+        // One terminated record leaves nothing behind.
+        assert_eq!(
+            split_first_record(b"a,b\r\n"),
+            Some((&b"a,b\r\n"[..], &b""[..]))
+        );
+
+        // Nothing is complete yet.
+        assert_eq!(split_first_record(b"a,b"), None);
+        assert_eq!(split_first_record(b""), None);
+    }
+
     /// A doubled quote returns the scanner to "inside the field", not outside it.
     #[test]
     fn an_escaped_quote_does_not_confuse_the_boundary_scan() {
@@ -1148,8 +1217,9 @@ mod tests {
         assert_eq!(remainder, b"next");
     }
 
-    /// What `split_complete_lines` hands back must itself parse cleanly, and the
-    /// remainder must be exactly what is left to prepend next time.
+    /// What `split_complete_lines` hands back must itself parse cleanly, and the two
+    /// halves must account for every byte — the tail is re-fetched, not carried, so a
+    /// byte lost here is a byte lost from the file.
     #[test]
     fn a_split_chunk_round_trips_through_the_parser() {
         let whole = "2025/09/18 00:00:00Z,18.0,18.0,,17.0,17.0,,21.0,0,C,17\r\n\

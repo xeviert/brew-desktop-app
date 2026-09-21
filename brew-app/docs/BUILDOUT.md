@@ -157,15 +157,47 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
       become `%2520`
 
 **2d. Offsets and partial lines**
-- [ ] Keep a remainder buffer; a fetch ending mid-line carries the tail forward
-- [ ] Advance `byte_offset` only past fully-parsed, committed lines — by
-      `ParseReport::bytes_consumed`, never by the length of the fetched chunk
-- [ ] `stopped_early` → commit what parsed, stop at `bytes_consumed`, write
+- [x] **Split before you parse**, at every offset including 0. The `csv` crate treats
+      EOF as a record terminator, so a half-written row parses as a *complete* one:
+      a cut at `...,21.0,0,C,1` has the right 11 cells and a valid `log_time` and
+      commits as a real reading, and Rust's `f64` parser accepts `"18."` and stores
+      18.0 where the file says 18.06. `split_complete_lines` first removes the
+      possibility. No remainder buffer: `byte_offset` only ever advances past
+      complete terminated records, so the next `Range: bytes=<offset>-` re-requests
+      the partial tail for free — no cross-restart state and no schema column
+- [x] Advance `byte_offset` only past fully-parsed, committed lines — by
+      `ParseReport::bytes_consumed`, never by the length of the fetched chunk.
+      All arithmetic derives from `FetchOutcome::Fresh { offset }`, never from
+      `sync_state.byte_offset`: after a restart the caller fetches from 0 while the
+      stored offset is still stale
+- [x] `stopped_early` → commit what parsed, stop at `bytes_consumed`, write
       `last_error`. The next poll refetches the faulty bytes and fails the same way,
       so the source wedges **visibly** instead of skipping rows nobody notices are
       missing. "Rebuild from scratch" (2g) is the escape hatch
-- [ ] Store the header text in `sync_state`; a changed header forces a full refetch
-- [ ] Verify the first fetch of a resume starts on a line boundary; if not, refetch whole
+- [x] Store the header text in `sync_state`, without its terminator — a CRLF→LF
+      change is not a column change. A full refetch *reveals* a header change; it is
+      not caused by one, because a resume never re-fetches the header. The only case
+      that matters is a deleted-and-recreated log, and both halves of it already end
+      at offset 0, where the header is compared
+- [x] Verify a resume starts on a record boundary — the first record of the chunk
+      must re-parse to exactly one row. This check **is** the recreated-file
+      detector for the case truncation cannot see: a new file at or past our offset
+      leaves the offset pointing inside a record of a *different* file. Zero extra
+      requests, so 2d needs no prefix probe. A restart clears `byte_offset`,
+      `header` **and** `last_ts` — a recreated file is a different brew whose rows
+      can predate everything we have
+- [x] `MAX_PARTIAL_RECORD_BYTES` (64 KB): one stray `"` puts the splitter inside a
+      quoted field for the rest of the file, and every poll then finds no complete
+      record, writes nothing and reports nothing. Silent stalls are the one outcome
+      forbidden here, so a partial record past the cap becomes a `last_error`. Real
+      records are 60–120 bytes; at a 30 s cadence a stuck offset crosses the cap in
+      about four hours
+- [x] `rows_parsed == 0 && rows_skipped > 0` → `last_error`. Toggling
+      `gravity_enabled` on a live Beer appends rows wider than the header the file
+      was created with: 100 % row loss, otherwise invisible
+- [x] A restart is a `SyncStep` variant, not an `Err` — same rule as `FetchOutcome`:
+      a persisted-state change is a variant, anything leaving state alone except
+      `last_error` is an error
 
 **2e. Write path**
 - [ ] Row fan-out: one CSV row → up to 8 `reading` rows, one per metric column
@@ -177,6 +209,9 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 
 **2f. Discovery — no API lists the logs**
 - [ ] v1: user pastes the log URL (or device id + beer id) once when creating a source
+- [ ] `Client::fetch_prefix(url, len)` returns **bytes, never a `FetchOutcome`** — a
+      capped body would otherwise reach `ingest` as `Fresh { offset: 0 }`,
+      indistinguishable from a genuine complete first fetch
 - [ ] Validate on save by fetching the first 2 KB and parsing the header. Surface
       `fermentrack.graph_log` and `fermentrack.gravity_log` as distinct messages —
       a pasted gravity-log URL is a different mistake from a pasted `_graph.csv`
@@ -186,6 +221,9 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 **2g. Scheduler and UI**
 - [ ] Tokio task per source: sync on launch, then every `poll_interval_secs` (default 60)
 - [ ] Jitter the interval; exponential backoff to a ceiling on repeated failure
+- [ ] Back off a source whose `last_error` is set, not only one whose request
+      failed. A restart loop against a lying proxy costs a full re-download per
+      poll and never raises a network error
 - [ ] Emit a `sync://status` Tauri event: idle / syncing / error, last success, rows added
 - [ ] Status footer showing per-source state and age of the newest reading
 - [ ] "Resync" (incremental) and "Rebuild from scratch" (offset → 0) commands
@@ -483,7 +521,7 @@ CREATE TABLE sync_state (
   source_id   INTEGER PRIMARY KEY REFERENCES source(id),
   remote_path TEXT NOT NULL,          -- '/data/Device 1 - B17 - Seltzer 17_full.csv'
   byte_offset INTEGER NOT NULL,       -- resume point for Range requests
-  header      TEXT,                   -- header line as fetched; a change forces refetch
+  header      TEXT,                   -- header line, no terminator; compared at offset 0
   last_ts     INTEGER,                -- newest row seen, for display
   last_error  TEXT,                   -- surfaced in the status footer
   synced_at   INTEGER NOT NULL
@@ -603,8 +641,13 @@ Per source, on launch and then on a timer:
      1 s, for timeouts, connection failures and 5xx only — a wrong URL is wrong
      three times too. That is a different mechanism from the per-source backoff
      under *Scheduling*, which runs in minutes and sits between polls.
-3. Prepend the remainder buffer from last time. Parse complete lines only.
-4. Compare the header against `sync_state.header`; any change → full refetch.
+3. Split complete records off the chunk and parse only those. The partial tail is
+   discarded, not buffered — the offset stops at the last terminator, so the next
+   `Range` asks for those bytes again.
+4. At offset 0, lift the header line off the front and compare it against
+   `sync_state.header`; on a resume, check the first record parses as exactly one
+   row and restart from 0 if it doesn't. That check is what catches a recreated
+   file, and reaching 0 is what then reveals the header change.
 5. Convert each row's temps using that row's own `temp_format` cell.
 6. Fan out to `reading` rows, auto-creating `stream` rows on first sight.
 7. `INSERT ... ON CONFLICT(stream_id, ts) DO NOTHING`, batched through one
@@ -612,7 +655,8 @@ Per source, on launch and then on a timer:
 8. Commit **readings, `byte_offset`, `header` and `last_ts` in one transaction**.
    That single boundary is what makes a crash mid-sync safe: the offset can never
    claim bytes whose rows didn't land.
-9. Carry any trailing partial line forward — Fermentrack was mid-write.
+9. Leave any trailing partial line where it is — Fermentrack was mid-write, and the
+   offset committed in step 8 already points at its first byte.
 
 If the parser stopped early (`ParseReport::stopped_early`), step 8 commits the rows
 that parsed and advances `byte_offset` by `bytes_consumed` — the last record that
