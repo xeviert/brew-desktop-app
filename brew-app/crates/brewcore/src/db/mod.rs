@@ -4,6 +4,7 @@ mod connection;
 mod metric;
 pub mod migrations;
 mod paths;
+pub mod tier1;
 
 use std::{
     collections::BTreeMap,
@@ -18,6 +19,7 @@ use crate::Result;
 
 pub use metric::Metric;
 pub use paths::{DB_PATH_ENV, resolve_db_path};
+pub use tier1::{SourceKind, SourceRow};
 
 /// One SQLite file, one writer, a pool of readers.
 ///

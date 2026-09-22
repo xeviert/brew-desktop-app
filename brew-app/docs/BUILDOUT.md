@@ -100,9 +100,10 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 - [x] `wiremock` harness that honours `Range` and can be told to *ignore* it, plus
       `set_fault` for 404 / HTML / 500, and `append` / `truncate_to` so the body can
       grow between requests
-- [ ] Growing-file test: serve N bytes, sync, serve N+M, sync again, assert no dupes
-      — needs the sync write path, so it lands with 2e. The harness is ready for it,
-      and 2c has the transport half: `a_resume_fetches_only_the_bytes_appended_since_the_last_sync`
+- [x] Growing-file test: serve N bytes, sync, serve N+M, sync again, assert no dupes
+      — landed with 2e as `tests/sync_write.rs`, run under both `RangeMode`s and
+      asserted to reach the same database either way. 2c has the transport half:
+      `a_resume_fetches_only_the_bytes_appended_since_the_last_sync`
 - [ ] Replace fixtures with a real capture once Fermentrack is up — same tests
 
 **2b. Parser (`fermentrack/csv_log.rs`)**
@@ -200,12 +201,30 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
       `last_error` is an error
 
 **2e. Write path**
-- [ ] Row fan-out: one CSV row → up to 8 `reading` rows, one per metric column
-- [ ] Auto-create `stream` rows on first sight of a column, inside the same txn
-- [ ] `INSERT ... ON CONFLICT(stream_id, ts) DO NOTHING`; count and log ignores
-- [ ] One transaction per fetched chunk, covering readings + offset + header. Crash
-      mid-sync must leave the offset consistent with the rows
-- [ ] Batch inserts via a prepared statement; do not commit per row
+- [x] Row fan-out: one CSV row → up to 8 `reading` rows, one per metric column.
+      `LogRow::readings()` yields `(column, metric, value)` so the CSV name and our
+      `Metric` stay paired in one table literal
+- [x] `stream.external_id` is the **CSV column name** (`beer_temp`), not `B17.beer_temp`:
+      the `source` row already identifies the file, so a beer id there would duplicate
+      `source.config` and break on a Fermentrack rename
+- [x] Auto-create `stream` rows on first sight of a column, inside the same txn — and
+      only for a metric that actually carried a value, so an absent room probe never
+      grows an empty series
+- [x] `INSERT ... ON CONFLICT(stream_id, ts) DO NOTHING`; ignores counted in
+      `CommitReport`, which is what 2g's `sync://status` reports
+- [x] One transaction per fetched chunk, covering readings + offset + header. The
+      in-memory `SyncState` is replaced **only after** `tx.commit()` returns: an offset
+      that moved while the txn rolled back is the same permanent hole, seen from the
+      other side
+- [x] An `UPDATE sync_state` matching no row is `Ok(0)`, not an error — checked
+      explicitly, or readings would commit under an offset stored nowhere
+- [x] Batch inserts via a prepared statement; do not commit per row
+- [x] Split by ownership: `db/tier1.rs` (source / stream / reading, **no `fermentrack`
+      import** — Phase 3e and v2's MQTT write through it unchanged) under
+      `fermentrack/store.rs` (offsets, headers, the `SyncState` row)
+- [x] 2g's two primitives land here, unwired: `delete_readings_for_source` (Rebuild —
+      a restart deletes before refetching, or `DO NOTHING` preserves exactly the bad
+      rows Rebuild exists to fix) and `newest_reading` (the footer's data age)
 
 **2f. Discovery — no API lists the logs**
 - [ ] v1: user pastes the log URL (or device id + beer id) once when creating a source

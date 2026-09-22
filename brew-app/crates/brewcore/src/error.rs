@@ -145,6 +145,12 @@ pub enum Error {
     #[error("unknown metric '{0}' in the database")]
     UnknownMetric(String),
 
+    #[error("unknown source kind '{0}' in the database")]
+    UnknownSourceKind(String),
+
+    #[error("source {source_id} has no sync_state row")]
+    MissingSyncState { source_id: i64 },
+
     #[error("cannot convert {unit} from {from} to {to}")]
     DimensionMismatch {
         unit: &'static str,
@@ -201,6 +207,8 @@ impl Error {
             Error::RangeMismatch { .. } => "fermentrack.range",
             Error::InvalidUrl { .. } => "fermentrack.url",
             Error::UnknownMetric(_) => "db.unknown_metric",
+            Error::UnknownSourceKind(_) => "db.unknown_source_kind",
+            Error::MissingSyncState { .. } => "sync.missing_state",
             Error::DimensionMismatch { .. } => "units.dimension_mismatch",
             Error::NotFinite { .. } => "units.not_finite",
             Error::UnknownUnit(_) => "units.unknown_unit",

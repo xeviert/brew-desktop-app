@@ -168,7 +168,7 @@ fn the_absent_room_probe_is_none_on_every_row_and_never_zero() {
         assert_eq!(row.room_temp, None, "row {i}");
         assert!(
             !row.readings()
-                .any(|(metric, _)| metric == Metric::RoomTempC),
+                .any(|(_, metric, _)| metric == Metric::RoomTempC),
             "row {i} put an absent sensor in the fan-out"
         );
     }
@@ -219,7 +219,7 @@ fn an_absent_gravity_sensor_is_none_on_every_row_and_never_zero() {
     for (i, row) in chunk.rows.iter().enumerate() {
         assert_eq!(row.gravity, None, "row {i}");
         assert!(
-            !row.readings().any(|(metric, _)| metric == Metric::Sg),
+            !row.readings().any(|(_, metric, _)| metric == Metric::Sg),
             "row {i} put an absent gravity sensor in the fan-out"
         );
         // Its own thermometer is still there — one absent column is not the other.
@@ -342,8 +342,8 @@ fn a_version_one_full_log_parses_the_same_as_a_version_two_one() {
     for (a, b) in one.rows.iter().zip(&two.rows) {
         assert!(a.state.is_some() && b.state.is_some());
         assert_eq!(
-            a.readings().map(|(m, _)| m).collect::<Vec<_>>(),
-            b.readings().map(|(m, _)| m).collect::<Vec<_>>()
+            a.readings().map(|(_, m, _)| m).collect::<Vec<_>>(),
+            b.readings().map(|(_, m, _)| m).collect::<Vec<_>>()
         );
     }
 }

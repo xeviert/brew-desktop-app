@@ -267,20 +267,44 @@ impl LogRow {
     /// Fan out to the metrics this row carries — up to eight, skipping every absent
     /// one. Phase 2e's write path is a loop over this, which is what keeps the
     /// column-to-[`Metric`] mapping in exactly one place.
-    pub fn readings(&self) -> impl Iterator<Item = (Metric, f64)> {
+    ///
+    /// The column name rides along because it is what 2e stores in
+    /// `stream.external_id`, and pairing it with the `Metric` here is what stops that
+    /// mapping existing twice.
+    pub fn readings(&self) -> impl Iterator<Item = (&'static str, Metric, f64)> {
         [
-            (Metric::TempC, self.beer_temp.map(Celsius::get)),
-            (Metric::SetpointC, self.beer_set.map(Celsius::get)),
-            (Metric::FridgeTempC, self.fridge_temp.map(Celsius::get)),
-            (Metric::FridgeSetpointC, self.fridge_set.map(Celsius::get)),
-            (Metric::RoomTempC, self.room_temp.map(Celsius::get)),
-            (Metric::Sg, self.gravity.map(Sg::get)),
-            (Metric::GravityTempC, self.grav_temp.map(Celsius::get)),
+            ("beer_temp", Metric::TempC, self.beer_temp.map(Celsius::get)),
+            (
+                "beer_set",
+                Metric::SetpointC,
+                self.beer_set.map(Celsius::get),
+            ),
+            (
+                "fridge_temp",
+                Metric::FridgeTempC,
+                self.fridge_temp.map(Celsius::get),
+            ),
+            (
+                "fridge_set",
+                Metric::FridgeSetpointC,
+                self.fridge_set.map(Celsius::get),
+            ),
+            (
+                "room_temp",
+                Metric::RoomTempC,
+                self.room_temp.map(Celsius::get),
+            ),
+            ("gravity", Metric::Sg, self.gravity.map(Sg::get)),
+            (
+                "grav_temp",
+                Metric::GravityTempC,
+                self.grav_temp.map(Celsius::get),
+            ),
             // Stored as its integer. The enum is for labelling, not for storage.
-            (Metric::State, self.state.map(|s| s.code() as f64)),
+            ("state", Metric::State, self.state.map(|s| s.code() as f64)),
         ]
         .into_iter()
-        .filter_map(|(metric, value)| value.map(|value| (metric, value)))
+        .filter_map(|(column, metric, value)| value.map(|value| (column, metric, value)))
     }
 }
 
@@ -1054,8 +1078,8 @@ mod tests {
         let by_metric = |wanted: Metric| {
             readings
                 .iter()
-                .find(|(m, _)| *m == wanted)
-                .map(|(_, v)| *v)
+                .find(|(_, m, _)| *m == wanted)
+                .map(|(_, _, v)| *v)
                 .unwrap()
         };
         assert!(close(by_metric(Metric::TempC), 18.06));
@@ -1076,7 +1100,7 @@ mod tests {
             HEADER,
             "2025/09/18 00:00:00Z,18.06,18.0,,17.0,17.0,,0,0,C,17",
         );
-        let metrics: Vec<Metric> = row.readings().map(|(m, _)| m).collect();
+        let metrics: Vec<Metric> = row.readings().map(|(_, m, _)| m).collect();
         assert!(!metrics.contains(&Metric::RoomTempC));
         assert!(!metrics.contains(&Metric::Sg));
         assert!(!metrics.contains(&Metric::GravityTempC));

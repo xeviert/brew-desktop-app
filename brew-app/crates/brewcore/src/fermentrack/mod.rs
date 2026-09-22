@@ -18,6 +18,7 @@
 pub mod client;
 pub mod csv_log;
 mod state;
+pub mod store;
 pub mod sync;
 
 pub use client::{Client, ClientSettings, FetchOutcome, RetryPolicy, log_url};
@@ -26,6 +27,7 @@ pub use csv_log::{
     split_first_record,
 };
 pub use state::ControllerState;
+pub use store::{CommitReport, commit, load_sync_state, upsert_sync_state};
 pub use sync::{
     Advance, MAX_PARTIAL_RECORD_BYTES, Restart, RestartReason, SyncFault, SyncState, SyncStep,
     ingest,
