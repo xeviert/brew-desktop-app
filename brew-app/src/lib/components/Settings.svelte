@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { setConfig, toApiError, type ApiError, type Config } from "$lib/api";
+  import { checkFermentrack, setConfig, toApiError, type ApiError, type Config } from "$lib/api";
 
   let { config, onsaved }: { config: Config; onsaved: (c: Config) => void } = $props();
 
@@ -21,6 +21,9 @@
   let saving = $state(false);
   let error = $state<ApiError | null>(null);
   let saved = $state(false);
+  let testing = $state(false);
+  /** `null` until Test has run. A string either way — the count, or why not. */
+  let reachable = $state<string | null>(null);
 
   const dirty = $derived(JSON.stringify(draft) !== JSON.stringify(config));
 
@@ -57,6 +60,24 @@
       saving = false;
     }
   }
+
+  /**
+   * `GET /api/devices/` against whatever is in the field, saved or not. It is the only
+   * endpoint that enumerates anything, and all it lists is device ids — which is why
+   * the log URL itself still has to be pasted in the Sources pane.
+   */
+  async function test() {
+    testing = true;
+    reachable = null;
+    try {
+      const devices = await checkFermentrack(draft.fermentrack.base_url);
+      reachable = devices.length === 1 ? "1 device" : `${devices.length} devices`;
+    } catch (e) {
+      reachable = toApiError(e).message;
+    } finally {
+      testing = false;
+    }
+  }
 </script>
 
 <section>
@@ -66,6 +87,12 @@
     <span>Fermentrack URL</span>
     <!-- `text`, not `url`: an empty value is legal and means "not set up yet". -->
     <input type="text" bind:value={draft.fermentrack.base_url} placeholder="http://fermentrack.local" />
+    <small>
+      <button class="link" onclick={test} disabled={testing || !draft.fermentrack.base_url.trim()}>
+        {testing ? "Testing…" : "Test connection"}
+      </button>
+      {#if reachable}<span>· {reachable}</span>{/if}
+    </small>
   </label>
 
   <label>
@@ -170,6 +197,19 @@
 
   .ok {
     color: #7fb069;
+  }
+
+  button.link {
+    padding: 0;
+    background: none;
+    color: #7ba7d4;
+    text-decoration: underline;
+  }
+
+  button.link:disabled {
+    background: none;
+    color: #6f757d;
+    text-decoration: none;
   }
 
   p[role="alert"] {

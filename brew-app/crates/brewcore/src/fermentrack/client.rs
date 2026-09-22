@@ -398,11 +398,50 @@ impl Client {
 
     /// Fetch everything the log has gained since `offset`.
     pub async fn fetch(&self, url: &str, offset: u64) -> Result<FetchOutcome> {
+        self.retrying(url, || self.attempt(url, offset)).await
+    }
+
+    /// The first `len` bytes of a log, as **bytes** rather than a [`FetchOutcome`].
+    ///
+    /// Phase 2f's validation probe. Returning an outcome here would be a trap: a capped
+    /// body is `Fresh { offset: 0 }`, indistinguishable from a genuine complete first
+    /// fetch, and a caller that passed it to `ingest` would store a truncated log and
+    /// advance the offset past bytes it never saw.
+    ///
+    /// An empty result is not an error — a just-created log really is zero bytes, and
+    /// naming that is the validator's job, not the transport's.
+    pub async fn fetch_prefix(&self, url: &str, len: u64) -> Result<Vec<u8>> {
+        let (bytes, content_type) = self
+            .retrying(url, || self.body_attempt(url, Some(len)))
+            .await?;
+        // Same reason as `attempt`: the parser cannot tell an HTML dashboard from a log
+        // it has no header for, and this is the only layer that sees `Content-Type`.
+        check_is_csv(url, &content_type, &bytes)?;
+        Ok(bytes)
+    }
+
+    /// A capped GET with no CSV check, for the one endpoint that is not a log:
+    /// `/api/devices/`, which answers JSON.
+    ///
+    /// `max` caps what is kept, not what is asked for when `None`.
+    pub async fn fetch_body(&self, url: &str, max: Option<u64>) -> Result<Vec<u8>> {
+        self.retrying(url, || self.body_attempt(url, max))
+            .await
+            .map(|(bytes, _)| bytes)
+    }
+
+    /// Run `f` under the retry policy. Shared by `fetch` and the capped reads so that a
+    /// proxy restarting costs one extra attempt in every path, not just the sync one.
+    async fn retrying<T, F, Fut>(&self, url: &str, f: F) -> Result<T>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
         let mut attempt = 1;
         let mut backoff = self.retry.initial_backoff;
         loop {
-            let err = match self.attempt(url, offset).await {
-                Ok(outcome) => return Ok(outcome),
+            let err = match f().await {
+                Ok(value) => return Ok(value),
                 Err(err) => err,
             };
             if attempt >= self.retry.attempts || !is_retryable(&err) {
@@ -417,12 +456,68 @@ impl Client {
         }
     }
 
+    /// One capped GET. Returns the body and its declared content type.
+    ///
+    /// `Range: bytes=0-{max-1}` — a closed range, the only place this client sends one.
+    /// A server that ignores it answers 200 with the whole file, so the cap is also
+    /// applied locally; without that, "fetch 2 KB to validate" would download a 40 MB
+    /// log behind a proxy that strips `Range`.
+    async fn body_attempt(&self, url: &str, max: Option<u64>) -> Result<(Vec<u8>, String)> {
+        let mut request = self.http.get(url);
+        if let Some(max) = max.filter(|max| *max > 0) {
+            request = request.header(RANGE, format!("bytes=0-{}", max - 1));
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|source| transport_error(url, source))?;
+
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+
+        if status == StatusCode::NOT_FOUND {
+            return Err(Error::LogMissing {
+                url: url.to_owned(),
+            });
+        }
+        // A 416 against `bytes=0-` can only mean a zero-length file, which is a real
+        // state for a beer that was just created. Empty bytes, not an error.
+        if status == StatusCode::RANGE_NOT_SATISFIABLE {
+            return Ok((Vec::new(), content_type));
+        }
+
+        let body = response
+            .bytes()
+            .await
+            .map_err(|source| transport_error(url, source))?;
+
+        if !status.is_success() {
+            return Err(Error::HttpStatus {
+                url: url.to_owned(),
+                status: status.as_u16(),
+                preview: preview_bytes(&body),
+            });
+        }
+
+        let mut body = body.to_vec();
+        if let Some(max) = max {
+            body.truncate(max as usize);
+        }
+        Ok((body, content_type))
+    }
+
     async fn attempt(&self, url: &str, offset: u64) -> Result<FetchOutcome> {
         let response = self
             .http
             .get(url)
-            // Only ever `bytes=<offset>-`. A suffix range (`bytes=-N`) asks a different
-            // question, and nothing about an append-only log ever needs one.
+            // Only ever `bytes=<offset>-` on this path. A suffix range (`bytes=-N`) asks
+            // a different question, and nothing about an append-only log ever needs one.
+            // (`body_attempt` sends a closed range, but it never resumes.)
             .header(RANGE, format!("bytes={offset}-"))
             .send()
             .await

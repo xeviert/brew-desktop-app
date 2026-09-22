@@ -69,7 +69,7 @@ pub enum Error {
     NotAFermentrackLog { detail: String },
 
     #[error(
-        "{path_hint} is a _graph.csv; use _full.csv instead. The graph file writes          0 for a missing reading, which would be stored as a real 0.0 °C"
+        "{path_hint} is a _graph.csv; use the _full.csv instead: the graph file writes 0 for a missing reading, which would be stored as a real 0.0 °C"
     )]
     GraphLogRefused { path_hint: String },
 
@@ -142,6 +142,12 @@ pub enum Error {
     #[error("{url} is not a usable log URL: {reason}")]
     InvalidUrl { url: String, reason: String },
 
+    // Phase 2f. The host answered, but not as a Fermentrack. Distinct from `NotCsv`
+    // because that means "this URL is not a log" while this means "this box is not the
+    // right box", and the two send the user to different fields in the settings pane.
+    #[error("{url} does not look like a Fermentrack: {detail}")]
+    NotFermentrack { url: String, detail: String },
+
     #[error("unknown metric '{0}' in the database")]
     UnknownMetric(String),
 
@@ -206,6 +212,7 @@ impl Error {
             Error::Timeout { .. } => "fermentrack.timeout",
             Error::RangeMismatch { .. } => "fermentrack.range",
             Error::InvalidUrl { .. } => "fermentrack.url",
+            Error::NotFermentrack { .. } => "fermentrack.not_fermentrack",
             Error::UnknownMetric(_) => "db.unknown_metric",
             Error::UnknownSourceKind(_) => "db.unknown_source_kind",
             Error::MissingSyncState { .. } => "sync.missing_state",

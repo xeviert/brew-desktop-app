@@ -227,15 +227,28 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
       rows Rebuild exists to fix) and `newest_reading` (the footer's data age)
 
 **2f. Discovery — no API lists the logs**
-- [ ] v1: user pastes the log URL (or device id + beer id) once when creating a source
-- [ ] `Client::fetch_prefix(url, len)` returns **bytes, never a `FetchOutcome`** — a
+- [x] v1: user pastes the log URL, or a path relative to the configured base, once
+      when creating a source. ~~or device id + beer id~~ — **not buildable**: the
+      filename is `Device {d} - B{id} - {beer_name}_full.csv`, so the *name* is in the
+      path too and no API returns it. The ids are read back *out* of a pasted path for
+      display and are never used to construct one
+- [x] `Client::fetch_prefix(url, len)` returns **bytes, never a `FetchOutcome`** — a
       capped body would otherwise reach `ingest` as `Fresh { offset: 0 }`,
       indistinguishable from a genuine complete first fetch
-- [ ] Validate on save by fetching the first 2 KB and parsing the header. Surface
+- [x] Validate on save by fetching the first 2 KB and parsing the header. Surface
       `fermentrack.graph_log` and `fermentrack.gravity_log` as distinct messages —
       a pasted gravity-log URL is a different mistake from a pasted `_graph.csv`
-- [ ] Optional helper: scrape `/beer/list/` and `/gravity/logs/` to offer a picklist
-- [ ] `GET /api/devices/` only to confirm the host is a Fermentrack at all
+- [x] `csv_log::inspect_header` classifies from the header alone. Not
+      `parse_full_log` on the prefix: the `csv` crate treats EOF as a terminator, so
+      the half-row a 2 KB cut ends on parses as a complete reading
+- [x] `probe_log` asserts `log_url(base_url, remote_path) == url` before returning.
+      `source.config` holds `base_url` + ids; the path lives only in `sync_state`,
+      where the `ON CONFLICT` that resets `byte_offset` on a repoint can see it change
+- [ ] Optional helper: scrape `/beer/list/` and `/gravity/logs/` to offer a picklist.
+      **Deferred**: paste-a-URL covers one or two fermenters, and scraping needs an
+      HTML parser dependency plus a golden of Fermentrack's list page that cannot be
+      captured without a live box. Revisit after the Phase 0 validation run
+- [x] `GET /api/devices/` only to confirm the host is a Fermentrack at all
 
 **2g. Scheduler and UI**
 - [ ] Tokio task per source: sync on launch, then every `poll_interval_secs` (default 60)
@@ -689,12 +702,13 @@ exactly why Fermentrack stays the logger of record.
 
 ### Discovery
 
-No API enumerates beers or gravity logs, and the log id is in the filename, so
-there is no way to guess a path. v1: the user pastes the log URL (or device id +
-beer id) once when creating a source, and we validate it by fetching the first
-2 KB and parsing the header. If that gets tedious, add a helper that scrapes
-`/beer/list/` and `/gravity/logs/` into a picklist. `GET /api/devices/` is worth
-one call purely to confirm the host is a Fermentrack.
+No API enumerates beers or gravity logs, and the log id *and the beer name* are
+both in the filename, so there is no way to guess or construct a path — which
+rules out the "device id + beer id" alternative this section used to offer. v1:
+the user pastes the log URL once when creating a source, and we validate it by
+fetching the first 2 KB and parsing the header. If that gets tedious, add a helper
+that scrapes `/beer/list/` and `/gravity/logs/` into a picklist. `GET /api/devices/`
+is worth one call purely to confirm the host is a Fermentrack.
 
 ### Scheduling
 

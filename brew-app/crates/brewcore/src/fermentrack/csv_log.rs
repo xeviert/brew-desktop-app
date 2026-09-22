@@ -365,6 +365,57 @@ pub fn parse_with_header(name: &str, header: &str, body: &[u8]) -> Result<Parsed
     Ok(read_rows(body, &mut reader(body, false), &columns))
 }
 
+/// What a header line says about the file it heads.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct HeaderInfo {
+    /// The header line with its terminator stripped, exactly as `sync_state.header`
+    /// stores it — so a validated probe can seed a sync without refetching.
+    pub header: String,
+    /// A `gravity` column is present, so this beer has a tilt or iSpindel attached.
+    pub gravity_enabled: bool,
+    pub unknown_columns: Vec<String>,
+}
+
+/// Classify a log from its header alone. Phase 2f's validation probe.
+///
+/// Deliberately not `parse_full_log` on a 2 KB prefix: the `csv` crate treats EOF as a
+/// record terminator, so the half-row a prefix ends on would parse as a complete
+/// reading, and validation would report a row count that is off by one and a `last_ts`
+/// from a line Fermentrack never finished writing. Nothing here parses a row at all.
+///
+/// The three refusals — [`Error::NotAFermentrackLog`], [`Error::GraphLogRefused`],
+/// [`Error::GravityLogUnsupported`] — come from [`Columns::from_header`] unchanged, so
+/// the settings pane branches on the same `code()` the sync loop does. `name` is used
+/// only in those messages, and should be the filename the user pasted.
+pub fn inspect_header(name: &str, bytes: &[u8]) -> Result<HeaderInfo> {
+    let not_a_log = |detail: &str| Error::NotAFermentrackLog {
+        detail: detail.to_owned(),
+    };
+
+    // No terminator means we never saw a whole header: an empty file, or one whose
+    // first line is longer than the prefix we asked for. Either way there is nothing to
+    // classify, and guessing from a partial column list would refuse good logs.
+    let (line, _) = split_first_record(bytes).ok_or_else(|| {
+        not_a_log(if bytes.is_empty() {
+            "the file is empty"
+        } else {
+            "the first line never ends"
+        })
+    })?;
+    let line = std::str::from_utf8(line)
+        .map_err(|_| not_a_log("it is not UTF-8"))?
+        .trim_end_matches(['\r', '\n']);
+
+    let record = header_record(line)?;
+    let columns = Columns::from_header(name, &record)?;
+
+    Ok(HeaderInfo {
+        header: line.to_owned(),
+        gravity_enabled: columns.gravity.is_some(),
+        unknown_columns: columns.unknown,
+    })
+}
+
 fn reader(bytes: &[u8], has_headers: bool) -> csv::Reader<&[u8]> {
     csv::ReaderBuilder::new()
         .has_headers(has_headers)
@@ -703,6 +754,77 @@ mod tests {
     /// `(64.4 - 32) * 5 / 9` is `18.000000000000004`, not `18.0`.
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() <= 1e-12 * a.abs().max(b.abs()).max(1.0)
+    }
+
+    // -- inspect_header (Phase 2f's validation probe) ------------------------
+
+    /// The probe reads 2 KB of a log that may be megabytes, so it must decide from the
+    /// header alone — and must hand back the exact header line `sync_state` stores, so
+    /// that a validated URL can be synced without refetching it.
+    #[test]
+    fn a_header_alone_identifies_a_full_log() {
+        let info = inspect_header("x_full.csv", &log(HEADER, &["nonsense"])).expect("a full log");
+        assert_eq!(info.header, HEADER);
+        assert!(!info.gravity_enabled);
+        assert!(info.unknown_columns.is_empty());
+
+        let info = inspect_header("x_full.csv", &log(HEADER_GRAVITY, &[])).expect("a full log");
+        assert!(
+            info.gravity_enabled,
+            "a gravity column means a tilt is fitted"
+        );
+    }
+
+    /// The whole reason the probe exists. These are three different mistakes — wrong
+    /// file for the right beer, right file for the wrong kind of device, and not
+    /// Fermentrack at all — and the settings pane branches on `code()` to say so.
+    #[test]
+    fn the_three_refusals_keep_their_own_codes() {
+        let graph = "log_time,beer_temp,beer_set,fridge_temp,fridge_set,room_temp,state";
+        let err = inspect_header("b_graph.csv", &log(graph, &[])).unwrap_err();
+        assert_eq!(err.code(), "fermentrack.graph_log");
+        assert!(err.to_string().contains("b_graph.csv"), "{err}");
+
+        let gravity = "log_time,gravity,grav_temp";
+        let err = inspect_header("Gravity Device 2 - L5 - Tilt_full.csv", &log(gravity, &[]))
+            .unwrap_err();
+        assert_eq!(err.code(), "fermentrack.gravity_log");
+
+        let err = inspect_header("index.html", &log("a,b,c", &[])).unwrap_err();
+        assert_eq!(err.code(), "fermentrack.not_a_log");
+    }
+
+    /// A 2 KB prefix ends mid-row. The `csv` crate treats EOF as a terminator, so
+    /// `parse_full_log` on that buffer would report a row Fermentrack never finished
+    /// writing; `inspect_header` must not look at rows at all.
+    #[test]
+    fn a_prefix_cut_mid_row_still_reads_its_header() {
+        let mut bytes = log(
+            HEADER,
+            &["2025/09/18 00:00:00Z,18.06,18.0,,17.0,17.0,,0,0,C,17"],
+        );
+        bytes.truncate(HEADER.len() + 2 + 20);
+        let info = inspect_header("x_full.csv", &bytes).expect("the header is complete");
+        assert_eq!(info.header, HEADER);
+    }
+
+    /// A header with no terminator was cut by our own prefix cap, so we never saw the
+    /// whole column list. Classifying it would refuse good logs on a slow link.
+    #[test]
+    fn a_header_that_never_ends_is_refused_rather_than_guessed_at() {
+        let err = inspect_header("x_full.csv", HEADER.as_bytes()).unwrap_err();
+        assert_eq!(err.code(), "fermentrack.not_a_log");
+
+        let err = inspect_header("x_full.csv", b"").unwrap_err();
+        assert!(err.to_string().contains("empty"), "{err}");
+    }
+
+    /// A newer Fermentrack column must be reported, never fatal — the probe is what
+    /// tells the user their box is ahead of this build.
+    #[test]
+    fn an_unknown_column_is_reported_not_refused() {
+        let info = inspect_header("x_full.csv", &log(&format!("{HEADER},ph"), &[])).unwrap();
+        assert_eq!(info.unknown_columns, vec!["ph".to_owned()]);
     }
 
     // -- the bare-zero rule -------------------------------------------------

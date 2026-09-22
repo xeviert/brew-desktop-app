@@ -17,14 +17,19 @@
 
 pub mod client;
 pub mod csv_log;
+pub mod discovery;
 mod state;
 pub mod store;
 pub mod sync;
 
 pub use client::{Client, ClientSettings, FetchOutcome, RetryPolicy, log_url};
 pub use csv_log::{
-    LogRow, ParseReport, ParsedChunk, parse_full_log, parse_with_header, split_complete_lines,
-    split_first_record,
+    HeaderInfo, LogRow, ParseReport, ParsedChunk, inspect_header, parse_full_log,
+    parse_with_header, split_complete_lines, split_first_record,
+};
+pub use discovery::{
+    LogProbe, SourceConfig, SourceSummary, VALIDATION_PREFIX_BYTES, add_source, check_fermentrack,
+    probe_log, source_summaries,
 };
 pub use state::ControllerState;
 pub use store::{CommitReport, commit, load_sync_state, upsert_sync_state};

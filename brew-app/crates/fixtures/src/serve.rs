@@ -12,6 +12,7 @@
 //! file. A client that assumes `206` silently duplicates every row it has already
 //! stored the first time it meets the second kind.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate, matchers::any};
@@ -45,6 +46,9 @@ struct ServeState {
     fault: Fault,
     requests: usize,
     last_range: Option<String>,
+    /// Anything served beside the log, keyed by decoded path: `(content type, body)`.
+    /// Phase 2f's `/api/devices/` probe, and nothing else so far.
+    extra: HashMap<String, (String, Vec<u8>)>,
 }
 
 /// A running mock. Dropping it shuts the server down.
@@ -64,6 +68,7 @@ impl FixtureServer {
             fault: Fault::default(),
             requests: 0,
             last_range: None,
+            extra: HashMap::new(),
         }));
 
         let server = MockServer::start().await;
@@ -142,6 +147,22 @@ impl FixtureServer {
         self.with_state(|s| s.requests)
     }
 
+    /// Serve something that is not the log — `/api/devices/`, an HTML page, whatever a
+    /// test needs a second path for.
+    ///
+    /// Range is not applied to these: they are small, whole answers, and treating the
+    /// device list as a resumable file would be modelling something Fermentrack does
+    /// not do.
+    pub fn serve_also(
+        &self,
+        path: impl Into<String>,
+        content_type: impl Into<String>,
+        body: impl Into<Vec<u8>>,
+    ) {
+        let (path, content_type, body) = (path.into(), content_type.into(), body.into());
+        self.with_state(move |s| s.extra.insert(path, (content_type, body)));
+    }
+
     /// The `Range` header of the most recent request, verbatim, or `None` if it sent
     /// none.
     ///
@@ -170,8 +191,16 @@ impl Respond for Responder {
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
 
-        if decode_path(request.url.path()) != self.path {
-            return not_found();
+        let path = decode_path(request.url.path());
+        if path != self.path {
+            // Checked before the 404 so that an unregistered path is still a 404 a test
+            // can see, rather than wiremock's "no mock matched" panic.
+            return match state.extra.get(&path) {
+                Some((content_type, body)) => ResponseTemplate::new(200)
+                    .insert_header("Content-Type", content_type.as_str())
+                    .set_body_bytes(body.clone()),
+                None => not_found(),
+            };
         }
 
         match state.fault {

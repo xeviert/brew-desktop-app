@@ -82,9 +82,22 @@ pub fn load_sync_state(db: &Db, source_id: i64) -> Result<Option<SyncState>> {
 /// byte 4 000 of the other. `remote_path` is stored **decoded** — `log_url` does the
 /// percent-encoding at the one boundary that builds a URL.
 pub fn upsert_sync_state(db: &Db, source_id: i64, remote_path: &str) -> Result<()> {
-    db.write(|conn| {
-        conn.execute(
-            "INSERT INTO sync_state \
+    db.write(|conn| upsert_sync_state_in(conn, source_id, remote_path))
+}
+
+/// The same, inside a transaction the caller owns.
+///
+/// [`discovery::add_source`](crate::fermentrack::discovery::add_source) needs the
+/// `source` row and its `sync_state` row to appear together: a `source` with no
+/// `sync_state` would be listed in the UI and then fail every poll with
+/// [`Error::MissingSyncState`](crate::Error::MissingSyncState).
+pub(crate) fn upsert_sync_state_in(
+    conn: &rusqlite::Connection,
+    source_id: i64,
+    remote_path: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO sync_state \
                (source_id, remote_path, byte_offset, header, last_ts, last_error, synced_at) \
              VALUES (?, ?, 0, NULL, NULL, NULL, ?) \
              ON CONFLICT(source_id) DO UPDATE SET \
@@ -93,10 +106,9 @@ pub fn upsert_sync_state(db: &Db, source_id: i64, remote_path: &str) -> Result<(
                                   THEN sync_state.byte_offset ELSE 0 END, \
                header      = CASE WHEN sync_state.remote_path = excluded.remote_path \
                                   THEN sync_state.header ELSE NULL END",
-            params![source_id, remote_path, Timestamp::now()],
-        )?;
-        Ok(())
-    })
+        params![source_id, remote_path, Timestamp::now()],
+    )?;
+    Ok(())
 }
 
 /// Write one step, then move the caller's state onto it.
