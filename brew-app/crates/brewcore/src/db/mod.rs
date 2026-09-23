@@ -4,6 +4,7 @@ mod connection;
 mod metric;
 pub mod migrations;
 mod paths;
+pub mod reference;
 pub mod tier1;
 
 use std::{

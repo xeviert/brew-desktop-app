@@ -282,17 +282,39 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 produces a correct, gap-free, duplicate-free `reading` table across app restarts.
 
 ### Phase 3 — Batch & recipe core
-**3a. Reference data**
-- [ ] `vessel` (name, kind, capacity_l, active) — needed here, not in Phase 7
-- [ ] `ingredient` (name, category, default_unit, attrs JSON). Categories:
-      fermentable, sugar, yeast, nutrient, acid, salt, flavoring, fining, gas, water
-- [ ] `yeast_strain` (name, lab, form, temp_min_c, temp_max_c, attenuation_min/max,
-      alcohol_tolerance) — the finish detector needs the expected-FG band
-- [ ] `ingredient_lot` (ingredient_id, supplier, lot_code, qty_g/qty_l, entry_qty,
-      entry_unit, unit_cost_minor, currency, purchased_at, expires_at) — cost and
-      traceability both start here. `_minor`, not `_cents`: 1c's linter rejects
-      `_cents`, and the exponent belongs to the currency, not the column name
-- [ ] `water_profile` — seed from `water-data/valenciennes/tap_brewing-params.csv`
+**3a. Reference data** — `0002_reference.sql`, `db/reference.rs`
+- [x] `vessel` (name, kind, capacity_l, notes, archived_at) — needed here, not in
+      Phase 7. "Active" is `archived_at IS NULL`; nothing in Tier 2 is hard-deleted
+- [x] `ingredient` (name, category, default_unit, yeast_strain_id, attrs JSON).
+      Categories: fermentable, sugar, yeast, nutrient, acid, salt, flavoring,
+      fining, gas, water. `default_unit`'s *dimension* is what decides which
+      canonical column a lot fills, so it is not merely a display preference
+- [x] `yeast_strain` (name, lab, form, temp_min_c, temp_max_c, attenuation_min/max,
+      alcohol_tolerance) — the finish detector needs the expected-FG band.
+      Attenuation and tolerance are **fractions, not percents**, with a `CHECK`:
+      a `78` typed where `0.78` was meant reads as a perfectly plausible band
+- [x] `ingredient_lot` (ingredient_id, supplier, lot_code, qty_g/qty_l/qty_each,
+      entry_qty, entry_unit, total_cost_minor, currency, purchased_at, expires_at)
+      — cost and traceability both start here. `_minor`, not `_cents`: 1c's linter
+      rejects `_cents`, and the exponent belongs to the currency, not the column name
+- [x] **`total_cost_minor`, not `unit_cost_minor`** — what the receipt says for the
+      whole lot. Minor units *per canonical unit* is an integer that rounds to zero:
+      €12.50 for 5 kg of sucrose is 0.25 cents/g, which truncates to 0 and makes
+      every cost in Phase 7 read €0.00. Per-unit cost is an `f64` division done at
+      display (`LotRow::cost_per_canonical_unit`)
+- [x] `qty_each` beside `qty_g`/`qty_l`, and a `CHECK` that exactly one is set —
+      a packet of yeast or a campden tablet has neither a mass nor a volume
+- [x] No `CHECK` on `vessel.kind`, `ingredient.category`, `yeast_strain.form`, for
+      the reason `0001` gives for `stream.metric`: SQLite cannot widen a `CHECK`
+      without rebuilding the table and all three sets will grow. The Rust enums in
+      `db::reference` enforce them at the only write path, as `Metric` does
+- [x] `water_profile` — ions as `*_ppm`, never `*_mg_l`: 1c's linter reads a `_l`
+      suffix as "stored in litres", so that spelling would pass the lint while
+      meaning something else
+- [ ] Seeding `water_profile` from `water-data/valenciennes/tap_brewing-params.csv`
+      is **deferred**: the file's Calcium, Magnesium and Sulfate columns are empty,
+      values are French-decimal (`"7,9"`) and some are censored (`"<0,05"`). An
+      importer would mostly import NULLs. Manual entry until the source fills in
 
 **3b. Recipes, versioned properly**
 - [ ] `recipe` (name, beverage_type, archived_at)
@@ -433,7 +455,7 @@ brew-app/
 │       │   ├── units/           # temperature, gravity, quantity, money, time
 │       │   ├── config.rs
 │       │   └── error.rs
-│       └── migrations/    # 0001_tier1.sql, 0002_batches.sql, …
+│       └── migrations/    # 0001_tier1.sql, 0002_reference.sql, …
 ├── src-tauri/             # commands, app state, window setup. Thin.
 ├── src/                   # Svelte
 └── xtask/                 # fixture generator, dev helpers
@@ -478,7 +500,7 @@ rather than letting every caller open one and fight over the lock.
 ```rust
 const MIGRATIONS: &[(i32, &str)] = &[
     (1, include_str!("../migrations/0001_tier1.sql")),
-    (2, include_str!("../migrations/0002_batches.sql")),
+    (2, include_str!("../migrations/0002_reference.sql")),
 ];
 ```
 

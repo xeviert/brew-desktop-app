@@ -8,7 +8,10 @@ use crate::{Error, Result};
 /// it already ran against will not re-run it. Fix a mistake with a new migration.
 /// No migration may depend on application code, because by the time it runs against
 /// an old database the code will have moved on.
-pub const MIGRATIONS: &[(i32, &str)] = &[(1, include_str!("../../migrations/0001_tier1.sql"))];
+pub const MIGRATIONS: &[(i32, &str)] = &[
+    (1, include_str!("../../migrations/0001_tier1.sql")),
+    (2, include_str!("../../migrations/0002_reference.sql")),
+];
 
 /// The schema version this build knows about.
 pub fn head() -> i32 {

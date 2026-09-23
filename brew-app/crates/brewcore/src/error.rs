@@ -154,6 +154,21 @@ pub enum Error {
     #[error("unknown source kind '{0}' in the database")]
     UnknownSourceKind(String),
 
+    // Phase 3a. These three columns carry no CHECK (see `0002_reference.sql`), so the
+    // enum is the only thing standing between a typo and a row nothing can read back.
+    // A row written by a newer build is exactly how one gets here.
+    #[error("unknown vessel kind '{0}' in the database")]
+    UnknownVesselKind(String),
+
+    #[error("unknown ingredient category '{0}' in the database")]
+    UnknownCategory(String),
+
+    #[error("unknown yeast form '{0}' in the database")]
+    UnknownYeastForm(String),
+
+    #[error("ingredient {ingredient_id} does not exist")]
+    NoSuchIngredient { ingredient_id: i64 },
+
     #[error("source {source_id} has no sync_state row")]
     MissingSyncState { source_id: i64 },
 
@@ -227,6 +242,10 @@ impl Error {
             Error::NotFermentrack { .. } => "fermentrack.not_fermentrack",
             Error::UnknownMetric(_) => "db.unknown_metric",
             Error::UnknownSourceKind(_) => "db.unknown_source_kind",
+            Error::UnknownVesselKind(_) => "db.unknown_vessel_kind",
+            Error::UnknownCategory(_) => "db.unknown_category",
+            Error::UnknownYeastForm(_) => "db.unknown_yeast_form",
+            Error::NoSuchIngredient { .. } => "db.no_such_ingredient",
             Error::MissingSyncState { .. } => "sync.missing_state",
             Error::SourceNotScheduled { .. } => "sync.not_scheduled",
             Error::BackgroundTask { .. } => "sync.task",

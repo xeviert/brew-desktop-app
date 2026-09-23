@@ -27,7 +27,17 @@ fn empty_database_migrates_to_head() {
     assert_eq!(db.schema_version().unwrap(), migrations::head());
 
     let tables = db.read(|conn| Ok(table_names(conn))).unwrap();
-    for expected in ["source", "stream", "reading", "sync_state"] {
+    for expected in [
+        "source",
+        "stream",
+        "reading",
+        "sync_state",
+        "vessel",
+        "yeast_strain",
+        "ingredient",
+        "ingredient_lot",
+        "water_profile",
+    ] {
         assert!(tables.contains(&expected.to_string()), "missing {expected}");
     }
 }
