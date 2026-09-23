@@ -10,6 +10,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod fermentrack;
+pub mod sync;
 pub mod units;
 
 pub use error::{Error, Result};

@@ -1,7 +1,8 @@
 use brewcore::{
     config::{Config, ConfigStore},
     db::{Db, DbStatus},
-    fermentrack::{Client, LogProbe, SourceSummary, discovery},
+    fermentrack::{self, Client, LogProbe, SourceSummary, discovery},
+    sync::{SourceStatus, SyncManager},
 };
 
 use crate::error::{ApiError, ApiResult};
@@ -67,6 +68,7 @@ pub async fn add_source(
     db: tauri::State<'_, Db>,
     client: tauri::State<'_, Client>,
     config: tauri::State<'_, ConfigStore>,
+    manager: tauri::State<'_, SyncManager>,
     input: String,
     name: Option<String>,
 ) -> ApiResult<SourceSummary> {
@@ -81,6 +83,12 @@ pub async fn add_source(
     // Two small statements in one transaction; `spawn_blocking` would cost more than
     // it saves, for the same reason `db_status` runs inline.
     let id = discovery::add_source(&db, &probe, &name)?;
+
+    // Phase 2g: poll it now rather than at the next launch. Without this, pasting a URL
+    // produces a row and no readings until the app is restarted, which reads as
+    // "adding a source does nothing".
+    manager.spawn(Box::new(fermentrack::build_source(&db, &client, id)?));
+
     discovery::source_summary(&db, id)?.ok_or_else(|| ApiError {
         code: "sync.missing_state".to_owned(),
         message: format!("source {id} vanished immediately after being created"),
@@ -109,4 +117,37 @@ pub async fn check_fermentrack(
         .filter(|url| !url.is_empty())
         .unwrap_or_else(|| config.get().fermentrack.base_url);
     Ok(discovery::check_fermentrack(&client, &base_url).await?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2g: sync
+// ---------------------------------------------------------------------------
+
+/// Poll this source now instead of at its next tick.
+///
+/// Returns as soon as the request is queued. The result arrives as a `sync://status`
+/// event like every other transition — holding a command open across a week of backlog
+/// would freeze the button that started it.
+#[tauri::command]
+pub async fn resync(manager: tauri::State<'_, SyncManager>, source_id: i64) -> ApiResult<()> {
+    Ok(manager.resync(source_id)?)
+}
+
+/// Delete every reading for this source and derive them all again from byte zero.
+///
+/// Destructive to Tier 1 only, which is derived data — that is why it can be a button
+/// at all. The confirmation lives in the UI; by the time this is called the user has
+/// already been told the row count.
+#[tauri::command]
+pub async fn rebuild(manager: tauri::State<'_, SyncManager>, source_id: i64) -> ApiResult<()> {
+    Ok(manager.rebuild(source_id)?)
+}
+
+/// Every source's current sync state, for first paint.
+///
+/// A window can open mid-poll, before any event has been emitted into it; without this
+/// the pane would render "never synced" for a source that is working fine.
+#[tauri::command]
+pub async fn sync_status(manager: tauri::State<'_, SyncManager>) -> ApiResult<Vec<SourceStatus>> {
+    Ok(manager.statuses())
 }

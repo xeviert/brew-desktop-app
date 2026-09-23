@@ -79,6 +79,9 @@ pub struct SourceSummary {
     pub last_ts: Option<Timestamp>,
     /// Newest row actually stored. The one number that answers "is this working".
     pub newest_reading: Option<Timestamp>,
+    /// Readings this source owns. Phase 2g's Rebuild confirmation names it, because
+    /// "delete 4,312 readings" is a decision and "delete the readings" is not.
+    pub reading_count: i64,
     pub last_error: Option<String>,
     pub synced_at: Option<Timestamp>,
 }
@@ -230,6 +233,7 @@ pub fn source_summaries(db: &Db) -> Result<Vec<SourceSummary>> {
                     byte_offset: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as u64,
                     last_ts: row.get(5)?,
                     newest_reading: None,
+                    reading_count: 0,
                     last_error: row.get(6)?,
                     synced_at: row.get(7)?,
                 })
@@ -239,6 +243,7 @@ pub fn source_summaries(db: &Db) -> Result<Vec<SourceSummary>> {
         rows.into_iter()
             .map(|mut summary| {
                 summary.newest_reading = tier1::newest_reading(conn, summary.id)?;
+                summary.reading_count = tier1::count_readings(conn, summary.id)?;
                 Ok(summary)
             })
             .collect()

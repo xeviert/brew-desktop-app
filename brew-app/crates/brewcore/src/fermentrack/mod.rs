@@ -2,12 +2,13 @@
 //! Fermentrack with our own controller is a new module beside these rather than a
 //! rewrite. Fermentrack's `Beer` naming is quarantined to this module.
 //!
-//! There is deliberately no trait yet. The one the Option 2 door needs is
-//! `ReadingSource`, and it belongs at the level of *readings*, not bytes: a v2
-//! controller subscribes to MQTT, it does not serve byte ranges of a CSV. Writing it
-//! now, around the only implementation that exists, would cement the byte offset into
-//! 2g's scheduler — which is the coupling the door is supposed to prevent. It lands in
-//! 2g, when there are two callers (the scheduler and the manual Resync command).
+//! The trait the Option 2 door needs is [`crate::sync::ReadingSource`], and it lives in
+//! `sync/` rather than here: it belongs at the level of *readings*, not bytes, because
+//! a v2 controller subscribes to MQTT and does not serve byte ranges of a CSV. It
+//! arrived in 2g, when the scheduler and the manual Resync command became two callers —
+//! writing it in 2c, around the only implementation that existed, would have cemented
+//! the byte offset into the scheduler, which is the coupling the door prevents.
+//! [`source::FermentrackSource`] is the one impl.
 //!
 //! Nor is there a remainder buffer. [`sync::ingest`] advances `byte_offset` only past
 //! complete, terminated records, so the next `Range: bytes=<offset>-` re-requests the
@@ -18,6 +19,7 @@
 pub mod client;
 pub mod csv_log;
 pub mod discovery;
+pub mod source;
 mod state;
 pub mod store;
 pub mod sync;
@@ -31,6 +33,7 @@ pub use discovery::{
     LogProbe, SourceConfig, SourceSummary, VALIDATION_PREFIX_BYTES, add_source, check_fermentrack,
     probe_log, source_summaries,
 };
+pub use source::{FermentrackSource, build_source};
 pub use state::ControllerState;
 pub use store::{CommitReport, commit, load_sync_state, upsert_sync_state};
 pub use sync::{

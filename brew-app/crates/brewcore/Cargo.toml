@@ -33,9 +33,15 @@ chrono.workspace = true
 # it installs no tracing subscriber.
 reqwest.workspace = true
 tokio.workspace = true
+# Phase 2g. `ReadingSource` must be object-safe so the scheduler can hold
+# `Box<dyn ReadingSource>`; native async-fn-in-trait is not.
+async-trait.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# `test-util` for `tokio::time::pause`: the scheduler's backoff reaches fifteen
+# minutes, and a test must not. Features are additive, so this only affects tests.
+tokio = { workspace = true, features = ["test-util"] }
 # The parser's oracle. `brewfixture` has no `brewcore` dependency, by design: a
 # generator that shared the parser's date maths or CSV quoting could not catch a bug
 # in either. Dev-only, so nothing ships with the app.

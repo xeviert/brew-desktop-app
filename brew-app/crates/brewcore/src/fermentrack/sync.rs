@@ -131,6 +131,11 @@ pub enum RestartReason {
     /// `byte_offset > 0` with no stored header: a torn write or a hand-edited database.
     /// There is nothing to parse the continuation against.
     NoStoredHeader,
+    /// Phase 2g's "Rebuild from scratch". The only reason here that is not a fault, and
+    /// the only one [`SyncStep::apply_to`] must *clear* `last_error` for: a button the
+    /// user pressed is not a condition to report, and 2g's scheduler backs off any
+    /// source whose `last_error` is set.
+    Requested,
 }
 
 /// Something worth `last_error` that is not worth refusing the rows that did parse.
@@ -163,6 +168,7 @@ impl std::fmt::Display for RestartReason {
                 )
             }
             Self::NoStoredHeader => write!(f, "no stored header to resume against"),
+            Self::Requested => write!(f, "rebuilding from the beginning"),
         }
     }
 }
@@ -343,7 +349,14 @@ impl SyncStep {
                 state.byte_offset = 0;
                 state.header = None;
                 state.last_ts = None;
-                state.last_error = Some(restart.reason.to_string());
+                // A requested rebuild clears the error instead of writing one. It is the
+                // escape hatch *from* a fault, so leaving the old text in place would
+                // keep 2g's scheduler backing the source off for a condition the user
+                // has just resolved.
+                state.last_error = match restart.reason {
+                    RestartReason::Requested => None,
+                    ref reason => Some(reason.to_string()),
+                };
             }
         }
     }
@@ -675,6 +688,28 @@ mod tests {
         // The offset still advances: refetching rows we have already decided we cannot
         // read would wedge without adding information.
         assert_eq!(advance.next_offset, body.len() as u64);
+    }
+
+    /// 2g's Rebuild goes through the same machinery as a truncation, and must come out
+    /// the other side looking healthy: same offset reset, same cleared header, but no
+    /// `last_error` — the scheduler backs off anything that has one.
+    #[test]
+    fn a_requested_rebuild_resets_the_offset_without_recording_an_error() {
+        let mut before = state();
+        before.byte_offset = 5_000;
+        before.header = Some(HEADER.to_string());
+        before.last_ts = Some(Timestamp::from_secs(1_000));
+        before.last_error = Some("the fault being rebuilt away".to_string());
+
+        SyncStep::Restart(Restart {
+            reason: RestartReason::Requested,
+        })
+        .apply_to(&mut before, Timestamp::from_secs(9_999));
+
+        assert_eq!(before.byte_offset, 0);
+        assert_eq!(before.header, None);
+        assert_eq!(before.last_ts, None);
+        assert_eq!(before.last_error, None);
     }
 
     #[test]

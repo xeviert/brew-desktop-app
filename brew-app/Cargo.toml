@@ -36,7 +36,11 @@ tempfile = "3"
 # fetch itself, and its `Url` re-export is what `config::validate` parses a base_url
 # with. `rustls` rather than schannel so Windows and CI behave alike.
 wiremock = "0.6"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+# Phase 2g. `ReadingSource` has to be object-safe: the scheduler holds
+# `Box<dyn ReadingSource>` so that v2's MQTT source is a new impl rather than a new
+# scheduler. Native async-fn-in-trait is not `dyn`-safe on our MSRV.
+async-trait = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "charset"] }
 
 [profile.dev]

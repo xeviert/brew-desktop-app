@@ -157,6 +157,18 @@ pub enum Error {
     #[error("source {source_id} has no sync_state row")]
     MissingSyncState { source_id: i64 },
 
+    /// Phase 2g. `rusqlite` is blocking, so every database step of a poll runs on
+    /// `spawn_blocking`. A panic in there must surface as a failed poll that backs the
+    /// source off, not as a task that silently stops existing.
+    #[error("a background database task failed: {detail}")]
+    BackgroundTask { detail: String },
+
+    /// Phase 2g. Resync and Rebuild address a running task, and a source that was
+    /// added while the scheduler was down has none. Distinct from a source that does
+    /// not exist: the fix is to restart the app, not to check the id.
+    #[error("source {source_id} is not being polled")]
+    SourceNotScheduled { source_id: i64 },
+
     #[error("cannot convert {unit} from {from} to {to}")]
     DimensionMismatch {
         unit: &'static str,
@@ -216,6 +228,8 @@ impl Error {
             Error::UnknownMetric(_) => "db.unknown_metric",
             Error::UnknownSourceKind(_) => "db.unknown_source_kind",
             Error::MissingSyncState { .. } => "sync.missing_state",
+            Error::SourceNotScheduled { .. } => "sync.not_scheduled",
+            Error::BackgroundTask { .. } => "sync.task",
             Error::DimensionMismatch { .. } => "units.dimension_mismatch",
             Error::NotFinite { .. } => "units.not_finite",
             Error::UnknownUnit(_) => "units.unknown_unit",

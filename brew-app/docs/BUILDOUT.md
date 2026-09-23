@@ -251,15 +251,28 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 - [x] `GET /api/devices/` only to confirm the host is a Fermentrack at all
 
 **2g. Scheduler and UI**
-- [ ] Tokio task per source: sync on launch, then every `poll_interval_secs` (default 60)
-- [ ] Jitter the interval; exponential backoff to a ceiling on repeated failure
-- [ ] Back off a source whose `last_error` is set, not only one whose request
+- [x] Tokio task per source: sync on launch, then every `poll_interval_secs` (default 60).
+      `sync::SyncManager`; the interval is re-read inside the loop, so a change in
+      settings takes effect on the next tick rather than the next launch
+- [x] Jitter the interval; exponential backoff to a ceiling on repeated failure.
+      `sync::backoff` — ±20 %, 15 min ceiling, seeded xorshift rather than a `rand`
+      dependency
+- [x] Back off a source whose `last_error` is set, not only one whose request
       failed. A restart loop against a lying proxy costs a full re-download per
-      poll and never raises a network error
-- [ ] Emit a `sync://status` Tauri event: idle / syncing / error, last success, rows added
-- [ ] Status footer showing per-source state and age of the newest reading
-- [ ] "Resync" (incremental) and "Rebuild from scratch" (offset → 0) commands
-- [ ] Sync never blocks a UI query — WAL readers must stay live during a write
+      poll and never raises a network error. `PollReport::fault` carries the
+      committed error out of the commit, and the loop treats it exactly like an `Err`
+- [x] Emit a `sync://status` Tauri event: idle / syncing / error, last success, rows added.
+      `StatusSink` keeps `brewcore` free of `tauri`; `src-tauri/src/sync_events.rs` is
+      the only file that knows the event name
+- [x] Status footer showing per-source state and age of the newest reading
+- [x] "Resync" (incremental) and "Rebuild from scratch" (offset → 0) commands. Rebuild
+      goes through `RestartReason::Requested`, so it reuses 2e's delete-and-refetch
+      path; it is the one restart reason that clears `last_error` instead of writing one
+- [x] Sync never blocks a UI query — WAL readers must stay live during a write. Every
+      database step of a poll runs on `spawn_blocking`, and a panic there becomes
+      `Error::BackgroundTask` rather than a task that silently stops existing
+- [x] `ReadingSource` is `dyn`-safe (`async-trait`) and lives in `sync/`, which imports
+      nothing from `fermentrack`. v2's MQTT source is a new impl, not a new scheduler
 
 **2h. Deferred**
 - [ ] `_annotations.almost_json` → parked; annotations are already in `_full.csv`

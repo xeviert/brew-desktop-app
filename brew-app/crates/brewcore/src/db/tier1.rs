@@ -207,6 +207,19 @@ pub fn newest_reading(conn: &Connection, source_id: i64) -> Result<Option<Timest
         .flatten())
 }
 
+/// How many readings a source owns.
+///
+/// Phase 2g's Rebuild confirmation names this number: "delete 4,312 readings" is a
+/// decision the user can make, and "delete this source's readings" is not.
+pub fn count_readings(conn: &Connection, source_id: i64) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM reading WHERE stream_id IN \
+         (SELECT id FROM stream WHERE source_id = ?)",
+        [source_id],
+        |row| row.get(0),
+    )?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,6 +3,7 @@
  * exactly one place and the Rust types are mirrored in exactly one file.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { GravityDisplay, TempDisplay } from "$lib/units";
 
 /** Mirrors `src-tauri/src/error.rs`. `code` is stable; `message` is for humans. */
@@ -55,6 +56,8 @@ export interface SourceSummary {
 	byte_offset: number;
 	last_ts: number | null;
 	newest_reading: number | null;
+	/** Readings this source owns. Named in Rebuild's confirmation. */
+	reading_count: number;
 	last_error: string | null;
 	synced_at: number | null;
 }
@@ -103,3 +106,59 @@ export const listSources = (): Promise<SourceSummary[]> => call("list_sources");
 /** Device ids from `GET /api/devices/`, purely to confirm the host is a Fermentrack. */
 export const checkFermentrack = (baseUrl?: string): Promise<number[]> =>
 	call("check_fermentrack", { baseUrl: baseUrl ?? null });
+
+// ---------------------------------------------------------------------------
+// Phase 2g: sync
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::sync::SyncPhase`. */
+export type SyncPhase = "idle" | "syncing" | "error";
+
+/** Mirrors `brewcore::sync::SourceStatus`. Timestamps are epoch seconds. */
+export interface SourceStatus {
+	source_id: number;
+	phase: SyncPhase;
+	last_success: number | null;
+	last_error: string | null;
+	rows_added: number;
+	newest_reading: number | null;
+	consecutive_failures: number;
+	next_poll_at: number | null;
+}
+
+/**
+ * Poll now instead of at the next tick. Resolves as soon as the request is queued —
+ * the result arrives on `sync://status`, not here.
+ */
+export const resync = (sourceId: number): Promise<void> => call("resync", { sourceId });
+
+/**
+ * Delete every reading for this source and derive them again from byte zero.
+ * Destructive to derived data only, but confirm with the user before calling it.
+ */
+export const rebuild = (sourceId: number): Promise<void> => call("rebuild", { sourceId });
+
+/** Every source's current state, for first paint before any event has arrived. */
+export const syncStatus = (): Promise<SourceStatus[]> => call("sync_status");
+
+/**
+ * Subscribe to sync transitions. Returns the unlisten function — call it on destroy,
+ * or a re-mounted component gets two of every event.
+ *
+ * `listen` resolves asynchronously, so an unsubscribe that races the subscribe has to
+ * be remembered rather than ignored; hence the flag.
+ */
+export function onSyncStatus(cb: (status: SourceStatus) => void): () => void {
+	let stop: (() => void) | null = null;
+	let cancelled = false;
+
+	void listen<SourceStatus>("sync://status", (event) => cb(event.payload)).then((unlisten) => {
+		if (cancelled) unlisten();
+		else stop = unlisten;
+	});
+
+	return () => {
+		cancelled = true;
+		stop?.();
+	};
+}

@@ -1,15 +1,27 @@
 <script lang="ts">
   import {
     addSource,
+    listSources,
     probeLog,
+    rebuild,
+    resync,
     toApiError,
     type ApiError,
     type LogProbe,
+    type SourceStatus,
     type SourceSummary,
   } from "$lib/api";
+  import { age, until } from "$lib/format";
 
-  let { sources, onchanged }: { sources: SourceSummary[]; onchanged: (s: SourceSummary[]) => void } =
-    $props();
+  let {
+    sources,
+    syncs,
+    onchanged,
+  }: {
+    sources: SourceSummary[];
+    syncs: Record<number, SourceStatus>;
+    onchanged: (s: SourceSummary[]) => void;
+  } = $props();
 
   // Validate then Add, two explicit steps. A single Add that silently probes first
   // would report a graph-log URL as "could not add", which names the wrong problem.
@@ -66,13 +78,60 @@
     }
   }
 
-  function age(ts: number | null): string {
-    if (ts === null) return "never";
-    const mins = Math.round((Date.now() / 1000 - ts) / 60);
-    if (mins < 1) return "just now";
-    if (mins < 60) return `${mins} min ago`;
-    const hours = Math.round(mins / 60);
-    return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`;
+  /**
+   * Live state beats the stored row. A `SourceSummary` is a snapshot from whenever the
+   * list was last fetched; a `SourceStatus` is the task as it is right now, and the two
+   * disagree the moment a poll finishes.
+   */
+  function newest(source: SourceSummary): number | null {
+    return syncs[source.id]?.newest_reading ?? source.newest_reading;
+  }
+
+  function fault(source: SourceSummary): string | null {
+    const live = syncs[source.id];
+    return live ? live.last_error : source.last_error;
+  }
+
+  const labels: Record<string, string> = {
+    idle: "idle",
+    syncing: "syncing…",
+    error: "failing",
+  };
+
+  async function doResync(id: number) {
+    error = null;
+    try {
+      await resync(id);
+    } catch (e) {
+      error = toApiError(e);
+    }
+  }
+
+  /**
+   * Rebuild deletes every reading for the source and derives them again. Only safe
+   * because Tier 1 is derived data — but "safe to redo" is not "free", so the count
+   * goes in the prompt rather than a bare "are you sure".
+   */
+  async function doRebuild(source: SourceSummary) {
+    const n = source.reading_count;
+    const ok = confirm(
+      `Rebuild “${source.name}”?
+
+` +
+        `This deletes ${n.toLocaleString()} reading${n === 1 ? "" : "s"} and re-reads the ` +
+        `whole log from the beginning. Your brew logs and notes are not affected.`,
+    );
+    if (!ok) return;
+
+    error = null;
+    try {
+      await rebuild(source.id);
+      // The counts the next confirmation shows come from here, and a rebuild is the
+      // one action that changes them out from under the list.
+      onchanged(await listSources());
+    } catch (e) {
+      error = toApiError(e);
+    }
   }
 </script>
 
@@ -84,12 +143,34 @@
   {:else}
     <ul>
       {#each sources as source (source.id)}
+        {@const live = syncs[source.id]}
         <li>
-          <span class="name">{source.name}</span>
+          <span class="name">
+            <span class="dot {live?.phase ?? 'unknown'}" title={labels[live?.phase ?? ""] ?? "not polled"}
+            ></span>
+            {source.name}
+          </span>
           <span class="path" title={source.remote_path ?? ""}>{source.remote_path ?? "—"}</span>
-          <span class="age">{age(source.newest_reading)}</span>
-          {#if source.last_error}
-            <span class="err" role="alert">{source.last_error}</span>
+          <span class="age" title="age of the newest reading">{age(newest(source))}</span>
+          <span class="next">
+            {#if live?.phase === "syncing"}
+              syncing…
+            {:else if live}
+              next {until(live.next_poll_at)}
+            {:else}
+              not polled
+            {/if}
+          </span>
+          <span class="row-actions">
+            <button class="minor" onclick={() => doResync(source.id)} disabled={!live}>
+              Resync
+            </button>
+            <button class="minor" onclick={() => doRebuild(source)} disabled={!live}>
+              Rebuild
+            </button>
+          </span>
+          {#if fault(source)}
+            <span class="err" role="alert">{fault(source)}</span>
           {/if}
         </li>
       {/each}
@@ -163,11 +244,55 @@
 
   li {
     display: grid;
-    grid-template-columns: 10rem 1fr auto;
+    grid-template-columns: 10rem 1fr auto auto auto;
     gap: 0.25rem 1rem;
     align-items: baseline;
     padding: 0.4rem 0;
     border-bottom: 1px solid #2a2e36;
+  }
+
+  .dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    margin-right: 0.4rem;
+    border-radius: 50%;
+    background: #4a4f57;
+  }
+
+  .dot.idle {
+    background: #5ba05b;
+  }
+
+  .dot.syncing {
+    background: #5f9ae0;
+  }
+
+  .dot.error {
+    background: #e06c5f;
+  }
+
+  .next {
+    color: #6f757d;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .row-actions {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  button.minor {
+    padding: 0.15rem 0.5rem;
+    background: transparent;
+    color: #9aa0a6;
+    border: 1px solid #333842;
+    font-size: 0.85em;
+  }
+
+  button.minor:hover:not(:disabled) {
+    color: #e6e8ea;
+    border-color: #4a4f57;
   }
 
   .path {
