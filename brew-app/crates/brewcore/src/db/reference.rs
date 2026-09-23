@@ -10,81 +10,11 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use super::enums::db_enum;
 use crate::{
     Error, Result,
     units::{Celsius, Currency, Dimension, Grams, Litres, Money, Quantity, Timestamp, Unit},
 };
-
-/// A closed vocabulary stored as its string.
-///
-/// The same six impls `SourceKind` writes out by hand in
-/// [`tier1`](crate::db::tier1) — a macro here because Phase 3a needs three of them
-/// and 3b/3c will want more. `as_str` is the single place that decides what goes in
-/// the database *and* what goes over the wire to the UI; a derived
-/// `serde(rename_all)` would eventually disagree with it.
-macro_rules! db_enum {
-    (
-        $(#[$meta:meta])*
-        $name:ident, $error:ident, $(($variant:ident, $text:literal)),+ $(,)?
-    ) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub enum $name {
-            $($variant),+
-        }
-
-        impl $name {
-            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
-
-            pub fn as_str(self) -> &'static str {
-                match self {
-                    $(Self::$variant => $text),+
-                }
-            }
-
-            pub fn parse(s: &str) -> Option<Self> {
-                Self::ALL.iter().copied().find(|v| v.as_str() == s)
-            }
-        }
-
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(self.as_str())
-            }
-        }
-
-        impl serde::Serialize for $name {
-            fn serialize<S: serde::Serializer>(&self, ser: S) -> std::result::Result<S::Ok, S::Error> {
-                ser.serialize_str(self.as_str())
-            }
-        }
-
-        impl<'de> serde::Deserialize<'de> for $name {
-            fn deserialize<D: serde::Deserializer<'de>>(de: D) -> std::result::Result<Self, D::Error> {
-                let text = String::deserialize(de)?;
-                Self::parse(&text)
-                    .ok_or_else(|| serde::de::Error::custom(Error::$error(text.clone())))
-            }
-        }
-
-        impl rusqlite::ToSql for $name {
-            fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-                Ok(self.as_str().into())
-            }
-        }
-
-        impl rusqlite::types::FromSql for $name {
-            fn column_result(
-                value: rusqlite::types::ValueRef<'_>,
-            ) -> rusqlite::types::FromSqlResult<Self> {
-                let text = value.as_str()?;
-                Self::parse(text).ok_or_else(|| {
-                    rusqlite::types::FromSqlError::Other(Box::new(Error::$error(text.to_owned())))
-                })
-            }
-        }
-    };
-}
 
 db_enum!(
     /// What a vessel is for. Not a `CHECK` in the schema — see `0002_reference.sql`.
@@ -332,39 +262,103 @@ pub fn archive_ingredient(conn: &Connection, id: i64, at: Timestamp) -> Result<b
     Ok(changed == 1)
 }
 
-// -------------------------------------------------------- ingredient_lot
+// ------------------------------------------------- canonical quantities
 
-/// The canonical quantity of a lot, in whichever dimension its ingredient uses.
+/// The canonical quantity of a row, in whichever dimension its ingredient uses.
 ///
 /// An enum rather than three `Option`s because exactly one is ever set — the same
 /// invariant the schema's `CHECK` states, expressed so the Rust side cannot violate
 /// it in the first place.
+///
+/// Shared with [`recipe`](crate::db::recipe): `ingredient_lot` and `recipe_item`
+/// carry the same `qty_g`/`qty_l`/`qty_each` triple under the same `CHECK`.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum LotQty {
+pub enum CanonicalQty {
     Mass(Grams),
     Volume(Litres),
     Count(f64),
 }
 
-impl LotQty {
+impl CanonicalQty {
     /// The number, in grams / litres / units. What a cost divides by.
     pub fn amount(self) -> f64 {
         match self {
-            LotQty::Mass(g) => g.get(),
-            LotQty::Volume(l) => l.get(),
-            LotQty::Count(n) => n,
+            CanonicalQty::Mass(g) => g.get(),
+            CanonicalQty::Volume(l) => l.get(),
+            CanonicalQty::Count(n) => n,
         }
     }
 
     pub fn dimension(self) -> Dimension {
         match self {
-            LotQty::Mass(_) => Dimension::Mass,
-            LotQty::Volume(_) => Dimension::Volume,
-            LotQty::Count(_) => Dimension::Count,
+            CanonicalQty::Mass(_) => Dimension::Mass,
+            CanonicalQty::Volume(_) => Dimension::Volume,
+            CanonicalQty::Count(_) => Dimension::Count,
         }
     }
 }
+
+/// The three canonical columns, derived from what was typed and the ingredient's
+/// own `default_unit`.
+///
+/// The dimension check is the point of it: a caller hands over one [`Quantity`] and
+/// never chooses a column, so a volume can never land in `qty_g` where every later
+/// `SUM` would read it as grams. Shared by `create_lot` and `recipe::add_item`.
+pub(crate) fn canonical_for_ingredient(
+    conn: &Connection,
+    ingredient_id: i64,
+    entry: Quantity,
+) -> Result<(Option<Grams>, Option<Litres>, Option<f64>)> {
+    let default_unit: Unit = conn
+        .query_row(
+            "SELECT default_unit FROM ingredient WHERE id = ?",
+            [ingredient_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(Error::NoSuchIngredient { ingredient_id })?;
+
+    let wanted = default_unit.dimension();
+    if entry.unit.dimension() != wanted {
+        return Err(Error::DimensionMismatch {
+            unit: entry.unit.symbol(),
+            from: entry.unit.dimension(),
+            to: wanted,
+        });
+    }
+
+    Ok(match wanted {
+        Dimension::Mass => (Some(entry.to_grams()?), None, None),
+        Dimension::Volume => (None, Some(entry.to_litres()?), None),
+        Dimension::Count => (None, None, Some(entry.to_count()?)),
+    })
+}
+
+/// The read-back half: three nullable columns to the one that is set.
+///
+/// `column` is the index of `qty_g` in the `SELECT`, so the error points at a real
+/// column. The schema's `CHECK` makes the fallthrough unreachable; reading it back
+/// as an error rather than picking one beats a silent zero if it ever is reached.
+pub(crate) fn canonical_from_columns(
+    column: usize,
+    g: Option<Grams>,
+    l: Option<Litres>,
+    each: Option<f64>,
+) -> rusqlite::Result<CanonicalQty> {
+    match (g, l, each) {
+        (Some(g), None, None) => Ok(CanonicalQty::Mass(g)),
+        (None, Some(l), None) => Ok(CanonicalQty::Volume(l)),
+        (None, None, Some(n)) => Ok(CanonicalQty::Count(n)),
+        _ => Err(rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Real,
+            Box::new(Error::UnknownUnit("row has no single canonical qty".into())),
+        )),
+    }
+}
+
+// -------------------------------------------------------- ingredient_lot
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct NewLot {
@@ -386,7 +380,7 @@ pub struct LotRow {
     pub ingredient_id: i64,
     pub supplier: Option<String>,
     pub lot_code: Option<String>,
-    pub qty: LotQty,
+    pub qty: CanonicalQty,
     pub entry: Quantity,
     pub cost: Option<Money>,
     pub purchased_at: Option<Timestamp>,
@@ -409,36 +403,8 @@ impl LotRow {
 }
 
 /// Insert a lot, converting the entered quantity to the ingredient's canonical unit.
-///
-/// The dimension check is the point of this function: the caller hands over one
-/// `Quantity` and never chooses a column, so a volume can never land in `qty_g`
-/// where every later `SUM` would read it as grams.
 pub fn create_lot(conn: &Connection, lot: &NewLot) -> Result<i64> {
-    let default_unit: Unit = conn
-        .query_row(
-            "SELECT default_unit FROM ingredient WHERE id = ?",
-            [lot.ingredient_id],
-            |row| row.get(0),
-        )
-        .optional()?
-        .ok_or(Error::NoSuchIngredient {
-            ingredient_id: lot.ingredient_id,
-        })?;
-
-    let wanted = default_unit.dimension();
-    if lot.entry.unit.dimension() != wanted {
-        return Err(Error::DimensionMismatch {
-            unit: lot.entry.unit.symbol(),
-            from: lot.entry.unit.dimension(),
-            to: wanted,
-        });
-    }
-
-    let (qty_g, qty_l, qty_each) = match wanted {
-        Dimension::Mass => (Some(lot.entry.to_grams()?), None, None),
-        Dimension::Volume => (None, Some(lot.entry.to_litres()?), None),
-        Dimension::Count => (None, None, Some(lot.entry.to_count()?)),
-    };
+    let (qty_g, qty_l, qty_each) = canonical_for_ingredient(conn, lot.ingredient_id, lot.entry)?;
 
     conn.execute(
         "INSERT INTO ingredient_lot \
@@ -471,24 +437,7 @@ pub fn list_lots_for(conn: &Connection, ingredient_id: i64) -> Result<Vec<LotRow
          FROM ingredient_lot WHERE ingredient_id = ? ORDER BY purchased_at, id",
     )?;
     let rows = stmt.query_map([ingredient_id], |row| {
-        let qty = match (
-            row.get::<_, Option<Grams>>(4)?,
-            row.get::<_, Option<Litres>>(5)?,
-            row.get::<_, Option<f64>>(6)?,
-        ) {
-            (Some(g), None, None) => LotQty::Mass(g),
-            (None, Some(l), None) => LotQty::Volume(l),
-            (None, None, Some(n)) => LotQty::Count(n),
-            // The schema's CHECK makes this unreachable; reading it back as an error
-            // rather than picking one beats a silent zero if it ever is reached.
-            _ => {
-                return Err(rusqlite::Error::FromSqlConversionFailure(
-                    4,
-                    rusqlite::types::Type::Real,
-                    Box::new(Error::UnknownUnit("lot has no single canonical qty".into())),
-                ));
-            }
-        };
+        let qty = canonical_from_columns(4, row.get(4)?, row.get(5)?, row.get(6)?)?;
         let cost = row
             .get::<_, Option<i64>>(9)?
             .zip(row.get::<_, Option<Currency>>(10)?)
@@ -631,7 +580,10 @@ mod tests {
 
         let lots = list_lots_for(&conn, id).unwrap();
         assert_eq!(lots.len(), 1);
-        assert_eq!(lots[0].qty, LotQty::Mass(Grams::new_unchecked(5000.0)));
+        assert_eq!(
+            lots[0].qty,
+            CanonicalQty::Mass(Grams::new_unchecked(5000.0))
+        );
         // The entry pair survives, so the lot reads back the way it was typed.
         assert_eq!(lots[0].entry, Quantity::new(5.0, Unit::Kg).unwrap());
     }
@@ -767,7 +719,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             list_lots_for(&conn, id).unwrap()[0].qty,
-            LotQty::Count(100.0)
+            CanonicalQty::Count(100.0)
         );
     }
 

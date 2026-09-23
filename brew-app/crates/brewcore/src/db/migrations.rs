@@ -11,6 +11,7 @@ use crate::{Error, Result};
 pub const MIGRATIONS: &[(i32, &str)] = &[
     (1, include_str!("../../migrations/0001_tier1.sql")),
     (2, include_str!("../../migrations/0002_reference.sql")),
+    (3, include_str!("../../migrations/0003_recipe.sql")),
 ];
 
 /// The schema version this build knows about.

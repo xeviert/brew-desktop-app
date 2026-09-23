@@ -169,6 +169,25 @@ pub enum Error {
     #[error("ingredient {ingredient_id} does not exist")]
     NoSuchIngredient { ingredient_id: i64 },
 
+    // Phase 3b. Same story as the three above: `0003_recipe.sql` leaves both columns
+    // open, so the enum is the only thing standing between a typo and an unreadable row.
+    #[error("unknown beverage type '{0}' in the database")]
+    UnknownBeverageType(String),
+
+    #[error("unknown recipe stage '{0}' in the database")]
+    UnknownStage(String),
+
+    #[error("recipe version {recipe_version_id} does not exist")]
+    NoSuchRecipeVersion { recipe_version_id: i64 },
+
+    #[error("recipe item {recipe_item_id} does not exist")]
+    NoSuchRecipeItem { recipe_item_id: i64 },
+
+    /// Phase 3b's whole point. Not a failure — the rule working. The UI branches on
+    /// this code to offer "fork to the next version" instead of an error dialog.
+    #[error("recipe version {recipe_version_id} is in use by a batch; fork it to edit")]
+    RecipeVersionLocked { recipe_version_id: i64 },
+
     #[error("source {source_id} has no sync_state row")]
     MissingSyncState { source_id: i64 },
 
@@ -246,6 +265,11 @@ impl Error {
             Error::UnknownCategory(_) => "db.unknown_category",
             Error::UnknownYeastForm(_) => "db.unknown_yeast_form",
             Error::NoSuchIngredient { .. } => "db.no_such_ingredient",
+            Error::UnknownBeverageType(_) => "db.unknown_beverage_type",
+            Error::UnknownStage(_) => "db.unknown_stage",
+            Error::NoSuchRecipeVersion { .. } => "db.no_such_recipe_version",
+            Error::NoSuchRecipeItem { .. } => "db.no_such_recipe_item",
+            Error::RecipeVersionLocked { .. } => "db.recipe_version_locked",
             Error::MissingSyncState { .. } => "sync.missing_state",
             Error::SourceNotScheduled { .. } => "sync.not_scheduled",
             Error::BackgroundTask { .. } => "sync.task",

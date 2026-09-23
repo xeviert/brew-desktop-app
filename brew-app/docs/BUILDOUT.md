@@ -317,15 +317,29 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
       importer would mostly import NULLs. Manual entry until the source fills in
 
 **3b. Recipes, versioned properly**
-- [ ] `recipe` (name, beverage_type, archived_at)
-- [ ] `recipe_version` (recipe_id, version_no, target_volume_l, target_og, target_fg,
+- [x] `recipe` (name, beverage_type, archived_at)
+- [x] `recipe_version` (recipe_id, version_no, target_volume_l, target_og, target_fg,
       target_abv, locked_at, notes) — UNIQUE (recipe_id, version_no)
-- [ ] `recipe_item` (recipe_version_id, ingredient_id, qty, unit, stage,
-      offset_hours, notes) — stage: prep, pitch, fermentation, conditioning, packaging
-- [ ] **A version referenced by any batch is immutable.** Editing it forks the next
-      version number. Enforce in the data layer, with a test
-- [ ] "Fork to new version" and "diff two versions" in the UI
-- [ ] Nutrient schedule as first-class `recipe_item` rows with `offset_hours` —
+- [x] `recipe_item` (recipe_version_id, ingredient_id, qty_g/qty_l/qty_each,
+      entry_qty, entry_unit, stage, offset_hours, notes) — stage: prep, pitch,
+      fermentation, conditioning, packaging. Canonical columns plus the entry pair,
+      not a bare `qty, unit`: 1c names `recipe_item` under that rule, and the same
+      `CHECK` as `ingredient_lot` keeps exactly one of the three set
+- [x] No `CHECK` on `recipe.beverage_type` or `recipe_item.stage`, for the reason
+      3a gives for `vessel.kind`. `BeverageType` and `Stage` in `db::recipe` enforce
+      them at the only write path
+- [x] **A version referenced by any batch is immutable.** Editing it forks the next
+      version number. Enforce in the data layer, with a test — `locked_at` non-NULL
+      is the freeze; every mutation goes through `ensure_unlocked`, item edits
+      resolving their version first, and `fork_recipe_version` is the way out.
+      3c's `create_batch` calls the idempotent `lock_recipe_version` in its own txn
+- [x] "Fork to new version" and "diff two versions" as data-layer functions —
+      `fork_recipe_version` and `diff_recipe_versions`, the latter over a pure
+      `diff_items` keyed on (ingredient, stage, occurrence) and *not* `offset_hours`,
+      so a nutrient addition moved 24 h → 36 h reads as one change, not a re-add
+- [ ] The same two in the UI, **deferred to the Phase 3 UI pass**: a recipe screen
+      with no batch screen is half a feature, so it lands once 3c exists
+- [x] Nutrient schedule as first-class `recipe_item` rows with `offset_hours` —
       for a sugar wash this is the process variable that decides the batch
 
 **3c. Batches**

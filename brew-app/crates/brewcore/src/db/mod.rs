@@ -1,9 +1,11 @@
 //! The database handle. Every read and write goes through here.
 
 mod connection;
+mod enums;
 mod metric;
 pub mod migrations;
 mod paths;
+pub mod recipe;
 pub mod reference;
 pub mod tier1;
 

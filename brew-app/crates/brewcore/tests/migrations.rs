@@ -37,6 +37,9 @@ fn empty_database_migrates_to_head() {
         "ingredient",
         "ingredient_lot",
         "water_profile",
+        "recipe",
+        "recipe_version",
+        "recipe_item",
     ] {
         assert!(tables.contains(&expected.to_string()), "missing {expected}");
     }
