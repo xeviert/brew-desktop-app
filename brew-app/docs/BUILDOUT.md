@@ -433,22 +433,70 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
       lands once they exist
 
 **3e. Manual measurements**
-- [ ] One `source` with `kind='manual'` per batch; its streams bound via `batch_stream`
-- [ ] Quick-entry form: gravity, pH, temp, TA, taste note — two clicks from the batch
-- [ ] Gravity input accepts SG, °P or Brix, converted to SG on entry
-- [ ] Hydrometer temperature correction, with the calibration temp configurable
-- [ ] Refractometer readings post-pitch need alcohol correction — flag them as
-      refractometer so the correction is applied, and do not silently mix the two
+- [x] One `source` with `kind='manual'` per batch; its streams bound via `batch_stream`.
+      Created on first use, one stream per metric, `external_id = manual/{batch}/{metric}`
+      (MQTT-shaped, for v2's broker). Found through the `batch_stream` join and not
+      through `source.config`, because Tier 1 must not reference Tier 2 — there is no
+      `batch_id` column on `source` to look at. A binding starts at the earlier of the
+      reading and the pitch, and `timeline::set_binding_start` widens it backwards when a
+      backdated reading arrives: the first measurement *typed* is routinely not the
+      earliest one *taken*, and a reading outside its own window is invisible to
+      `batch_for_stream_at`
+- [x] Quick-entry form: gravity, pH, temp, TA, taste note — two clicks from the batch.
+      `record_quick_entry` is the whole call, at one `ts` so two readings from the same
+      bench moment do not land a second apart and draw a trend. The **form** is
+      **deferred to the Phase 3 UI pass** with 3b's recipe screen and 3d's timeline.
+      The taste note goes to `batch_event` as an `EventKind::Note`, not to a column here:
+      a note is something you observed, not a number on a time series
+- [x] Gravity input accepts SG, °P or Brix, converted to SG on entry. `0006_manual.sql`'s
+      `manual_measurement` keeps the entry record — 1c's "canonical column plus entry
+      pair", so `value` is SG and `(entry_value, entry_unit)` is what was on the
+      instrument — and fans the derived number out into a Tier 1 `reading` in the same
+      transaction. `reading` stays `(stream_id, ts, value)`: widening it with five columns
+      that are NULL on 99.99 % of rows would pay for manual entry out of the chart's
+      budget, and a manual reading is never reconstructible from the SG it became
+- [x] Hydrometer temperature correction, with the calibration temp configurable
+      (`measurement.hydrometer_calibration_c`, default 20 °C; 60 °F instruments are
+      common). Applied only when *both* temperatures are given — one alone does not say
+      what to correct against. `calc::hydrometer` is the ratio of a water-density cubic at
+      the two temperatures, **not** the difference form several calculator pages publish,
+      which is wrong for this coefficient set
+- [x] Refractometer readings post-pitch need alcohol correction — flag them as
+      refractometer so the correction is applied, and do not silently mix the two.
+      `Instrument` decides which correction runs and `derive_value` refuses every
+      crossover: a wort correction factor on a hydrometer, a temperature on a
+      refractometer (Terrill's cubic is fitted against reference-temperature hydrometer
+      values and the instrument is ATC — both would double-count), a refractometer
+      reading typed in SG, and a post-pitch reading with no `batch.og` to subtract
+      against. Nothing defaults the wort factor either: it is 1.0 for a sugar wash, which
+      is most of what this app ferments, and 1.04 there costs two gravity points.
+      **A manual gravity does not write `batch.og`/`batch.fg`** — the post-pitch
+      correction *reads* `batch.og`, so a reading that wrote it back would corrupt every
+      later correction, silently and cumulatively. The UI pass gets an explicit
+      "use this as the OG/FG" button
 
 **3f. Calc module (`calc/`, pure functions, heavily tested)**
-- [ ] SG ↔ °P ↔ Brix
+- [x] SG ↔ °P ↔ Brix — landed early with 3e, which cannot store a Brix entry without
+      them. Cubic regressions on de Clerck's Plato tables, with the reverse direction by
+      bisection over `Sg::PLAUSIBLE` rather than a second published polynomial, so both
+      directions are the *same* fit and round-trip exactly. Out of range is
+      `Error::CalcOutOfRange`, never extrapolation. `calc/hydrometer.rs` arrived with them
+      and is not on this list: the temperature correction is a polynomial fit of measured
+      data, and `units/mod.rs` says that is not a unit conversion
 - [ ] Apparent attenuation `(OG − FG) / (OG − 1)`
 - [ ] Real extract, real attenuation, ABW
 - [ ] ABV: simple `(OG − FG) × 131.25` **and** the alternate high-attenuation
       formula — seltzer finishing at 1.000 is exactly where the simple one drifts.
       Show both, label which is which
-- [ ] Refractometer correction (Terrill cubic + wort correction factor) —
-      **verify the coefficients against the source when implementing**
+- [x] Refractometer correction (Terrill cubic + wort correction factor) —
+      **verify the coefficients against the source when implementing**. Landed early with
+      3e. Verified against Sean Terrill's 2011-04-07 post and cross-checked against
+      Brewer's Friend's independent rendering and its worked example. Error band is
+      documented rather than quietly removed: σ ≈ 0.0015 SG, mean bias ≈ +0.0007 SG,
+      fitted on 12 beers at 73–91 % apparent attenuation. deLange's debiased variant
+      differs only in the leading constant; Terrill pinned his to unity deliberately so
+      the formula stays sane outside the interpolated range, and that is the one
+      implemented
 - [ ] Sugar mass → OG for a sugar wash, computed from mass fraction rather than
       PPG, since seltzer base is effectively pure sucrose
 - [ ] Dilution / blending: target OG from a volume of wash plus water

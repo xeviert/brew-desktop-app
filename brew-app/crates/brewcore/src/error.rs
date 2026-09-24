@@ -255,6 +255,61 @@ pub enum Error {
     #[error("stream {stream_id} is already bound to batch {batch_id} over that window")]
     StreamAlreadyBound { stream_id: i64, batch_id: i64 },
 
+    // Phase 3e. `0006_manual.sql` leaves `entry_unit` and `instrument` open like every
+    // vocabulary before them.
+    #[error("unknown instrument '{0}' in the database")]
+    UnknownInstrument(String),
+
+    #[error("unknown entry unit '{0}' in the database")]
+    UnknownEntryUnit(String),
+
+    #[error("measurement {measurement_id} does not exist")]
+    NoSuchMeasurement { measurement_id: i64 },
+
+    /// `manual_measurement_point_idx` makes this unreachable rather than merely
+    /// unreached. It is an error and not an overwrite because the second entry is
+    /// nearly always a different reading typed at a rounded time, and quietly keeping
+    /// one of the two is how a bench log stops matching the bench. `Timestamp` has no
+    /// `Display`, hence the expression form.
+    #[error("this batch already has a {metric} measurement at {}", ts.as_secs())]
+    MeasurementExists {
+        metric: crate::db::Metric,
+        ts: crate::units::Timestamp,
+    },
+
+    /// Brix expresses a gravity and nothing else; °C expresses a temperature and
+    /// nothing else. Accepting the pair would mean guessing which half of it was the
+    /// typo.
+    #[error("{unit} is not a unit of {metric}")]
+    MeasurementUnitMismatch {
+        metric: crate::db::Metric,
+        unit: crate::db::measurement::EntryUnit,
+    },
+
+    /// The instrument decides which correction runs, so a hydrometer claiming to have
+    /// read a pH — or a wort correction factor attached to a hydrometer — is a form
+    /// that would otherwise be answered with a confidently wrong number.
+    #[error("a {instrument} does not measure {metric}")]
+    MeasurementInstrumentMismatch {
+        metric: crate::db::Metric,
+        instrument: crate::db::measurement::Instrument,
+    },
+
+    /// Enforced, not advised. A sensor sending 47 has a next sample; a human typing 47
+    /// into a pH box does not.
+    #[error("{value} is not a plausible {metric}")]
+    MeasurementImplausible {
+        metric: crate::db::Metric,
+        value: f64,
+    },
+
+    /// Terrill's cubic needs the original gravity to subtract the alcohol term, and
+    /// there is no defensible default for it.
+    #[error(
+        "batch {batch_id} has no original gravity to correct a post-pitch refractometer reading against"
+    )]
+    NoOriginalGravity { batch_id: i64 },
+
     #[error("source {source_id} has no sync_state row")]
     MissingSyncState { source_id: i64 },
 
@@ -282,6 +337,13 @@ pub enum Error {
 
     #[error("unknown unit '{0}'")]
     UnknownUnit(String),
+
+    /// Phase 3e. Every formula in [`crate::calc`] is a fit over a stated range, and
+    /// outside it the polynomial keeps returning a number that looks like an answer.
+    /// Refusing is the only way the caller finds out; `what` names the input so the
+    /// message says which of a formula's three arguments was the wrong one.
+    #[error("{what} is outside this formula's range: {value}")]
+    CalcOutOfRange { what: &'static str, value: f64 },
 
     #[error("cannot combine {left} and {right}: this app does not convert currencies")]
     CurrencyMismatch { left: Currency, right: Currency },
@@ -351,12 +413,21 @@ impl Error {
             Error::UsePitchRecorder { .. } => "db.use_pitch_recorder",
             Error::PitchEventLocked { .. } => "db.pitch_event_locked",
             Error::StreamAlreadyBound { .. } => "db.stream_already_bound",
+            Error::UnknownInstrument(_) => "db.unknown_instrument",
+            Error::UnknownEntryUnit(_) => "db.unknown_entry_unit",
+            Error::NoSuchMeasurement { .. } => "db.no_such_measurement",
+            Error::MeasurementExists { .. } => "db.measurement_exists",
+            Error::MeasurementUnitMismatch { .. } => "db.measurement_unit_mismatch",
+            Error::MeasurementInstrumentMismatch { .. } => "db.measurement_instrument_mismatch",
+            Error::MeasurementImplausible { .. } => "db.measurement_implausible",
+            Error::NoOriginalGravity { .. } => "db.no_original_gravity",
             Error::MissingSyncState { .. } => "sync.missing_state",
             Error::SourceNotScheduled { .. } => "sync.not_scheduled",
             Error::BackgroundTask { .. } => "sync.task",
             Error::DimensionMismatch { .. } => "units.dimension_mismatch",
             Error::NotFinite { .. } => "units.not_finite",
             Error::UnknownUnit(_) => "units.unknown_unit",
+            Error::CalcOutOfRange { .. } => "calc.out_of_range",
             Error::CurrencyMismatch { .. } => "money.currency_mismatch",
             Error::InvalidCurrency(_) => "money.invalid_currency",
             Error::InvalidMoney(_) => "money.invalid",

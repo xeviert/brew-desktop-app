@@ -30,6 +30,19 @@ pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
 pub const MIN_POLL_INTERVAL_SECS: u64 = 5;
 pub const MAX_POLL_INTERVAL_SECS: u64 = 86_400;
 
+/// Phase 3e. The two numbers a manual gravity entry needs and cannot guess: what
+/// temperature the hydrometer was calibrated at, and what this refractometer reads on
+/// wort. Both are properties of the user's kit, so they are settings rather than
+/// constants — and both are passed into `db::measurement` as arguments, never read from
+/// here by it, so a recorded measurement is reproducible from its own row.
+pub const DEFAULT_HYDROMETER_CALIBRATION_C: f64 = 20.0;
+pub const MIN_HYDROMETER_CALIBRATION_C: f64 = 0.0;
+pub const MAX_HYDROMETER_CALIBRATION_C: f64 = 30.0;
+
+pub const DEFAULT_REFRACTOMETER_WORT_CORRECTION: f64 = crate::calc::WORT_CORRECTION_DEFAULT;
+pub const MIN_REFRACTOMETER_WORT_CORRECTION: f64 = 0.90;
+pub const MAX_REFRACTOMETER_WORT_CORRECTION: f64 = 1.20;
+
 /// Resolve the config path from `default_dir`, honouring [`CONFIG_PATH_ENV`].
 ///
 /// As with [`crate::db::resolve_db_path`], the caller supplies the directory because
@@ -49,12 +62,17 @@ pub fn resolve_config_path(default_dir: &Path) -> PathBuf {
 ///
 /// `#[serde(default)]` is repeated on every struct, not just this one. Without it on
 /// the inner types, a file containing a bare `[sync]` fails to deserialise.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// No `Eq`: [`Measurement`] holds `f64`s, which are not `Eq`. Nothing needs it —
+/// every use is `assert_eq!`, `clone_from`, `Serialize` or `tauri::State`, and all of
+/// those want `PartialEq` at most.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub fermentrack: Fermentrack,
     pub sync: SyncConfig,
     pub ui: Ui,
+    pub measurement: Measurement,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +112,40 @@ pub struct Ui {
     pub gravity_display: GravityDisplay,
 }
 
+/// Phase 3e. The defaults the manual-entry form starts from.
+///
+/// Defaults and not silent corrections: 20 °C is the usual hydrometer calibration but
+/// 60 °F instruments are common, and the wort correction factor is 1.0 for a sugar wash
+/// — which is most of what this app ferments. `db::measurement` applies neither unless
+/// it is passed one.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Measurement {
+    pub hydrometer_calibration_c: f64,
+    pub refractometer_wort_correction: f64,
+}
+
+impl Default for Measurement {
+    fn default() -> Self {
+        Self {
+            hydrometer_calibration_c: DEFAULT_HYDROMETER_CALIBRATION_C,
+            refractometer_wort_correction: DEFAULT_REFRACTOMETER_WORT_CORRECTION,
+        }
+    }
+}
+
+/// `f64::clamp` propagates NaN, and TOML has `nan` and `inf` literals — so a
+/// hand-edited file can hand us a value that survives clamping and then poisons every
+/// reading it touches. A non-finite value is not out of range, it is absent, so it goes
+/// back to the default rather than to a bound.
+fn clamp_finite(value: f64, default: f64, min: f64, max: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(min, max)
+    } else {
+        default
+    }
+}
+
 impl Config {
     /// Coerce into range, returning a note per adjustment.
     ///
@@ -121,6 +173,34 @@ impl Config {
             self.sync.poll_interval_secs = clamped;
         }
 
+        let calibration = clamp_finite(
+            self.measurement.hydrometer_calibration_c,
+            DEFAULT_HYDROMETER_CALIBRATION_C,
+            MIN_HYDROMETER_CALIBRATION_C,
+            MAX_HYDROMETER_CALIBRATION_C,
+        );
+        if calibration != self.measurement.hydrometer_calibration_c {
+            notes.push(format!(
+                "measurement.hydrometer_calibration_c {} is out of range, using {calibration}",
+                self.measurement.hydrometer_calibration_c
+            ));
+            self.measurement.hydrometer_calibration_c = calibration;
+        }
+
+        let wort_correction = clamp_finite(
+            self.measurement.refractometer_wort_correction,
+            DEFAULT_REFRACTOMETER_WORT_CORRECTION,
+            MIN_REFRACTOMETER_WORT_CORRECTION,
+            MAX_REFRACTOMETER_WORT_CORRECTION,
+        );
+        if wort_correction != self.measurement.refractometer_wort_correction {
+            notes.push(format!(
+                "measurement.refractometer_wort_correction {} is out of range, using {wort_correction}",
+                self.measurement.refractometer_wort_correction
+            ));
+            self.measurement.refractometer_wort_correction = wort_correction;
+        }
+
         notes
     }
 
@@ -139,6 +219,34 @@ impl Config {
                     "must be between {MIN_POLL_INTERVAL_SECS} and {MAX_POLL_INTERVAL_SECS} seconds"
                 ),
             });
+        }
+
+        // Non-finite is checked first and by name: a NaN fails every range test, and
+        // "must be between 0 and 30" is the wrong thing to tell someone who typed `nan`.
+        for (field, value, range) in [
+            (
+                "measurement.hydrometer_calibration_c",
+                self.measurement.hydrometer_calibration_c,
+                MIN_HYDROMETER_CALIBRATION_C..=MAX_HYDROMETER_CALIBRATION_C,
+            ),
+            (
+                "measurement.refractometer_wort_correction",
+                self.measurement.refractometer_wort_correction,
+                MIN_REFRACTOMETER_WORT_CORRECTION..=MAX_REFRACTOMETER_WORT_CORRECTION,
+            ),
+        ] {
+            if !value.is_finite() {
+                return Err(Error::ConfigInvalid {
+                    field,
+                    reason: "must be a finite number".to_owned(),
+                });
+            }
+            if !range.contains(&value) {
+                return Err(Error::ConfigInvalid {
+                    field,
+                    reason: format!("must be between {} and {}", range.start(), range.end()),
+                });
+            }
         }
 
         // Empty means "not configured yet" and is always legal.
@@ -533,6 +641,65 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_measurement_defaults_are_a_twenty_degree_hydrometer_and_a_wort_factor_of_one_oh_four() {
+        let config = Config::default();
+        assert_eq!(config.measurement.hydrometer_calibration_c, 20.0);
+        assert_eq!(config.measurement.refractometer_wort_correction, 1.04);
+    }
+
+    #[test]
+    fn measurement_settings_outside_their_bands_are_clamped() {
+        let mut config = Config::default();
+        config.measurement.hydrometer_calibration_c = 500.0;
+        config.measurement.refractometer_wort_correction = 0.1;
+
+        assert_eq!(config.normalize().len(), 2);
+        assert_eq!(
+            config.measurement.hydrometer_calibration_c,
+            MAX_HYDROMETER_CALIBRATION_C
+        );
+        assert_eq!(
+            config.measurement.refractometer_wort_correction,
+            MIN_REFRACTOMETER_WORT_CORRECTION
+        );
+    }
+
+    /// TOML has `nan` and `inf` literals and `f64::clamp` propagates NaN, so a
+    /// hand-edited file could otherwise hand a NaN straight through to a reading.
+    #[test]
+    fn a_non_finite_measurement_setting_goes_back_to_the_default_not_to_a_bound() {
+        let mut config = Config::default();
+        config.measurement.hydrometer_calibration_c = f64::NAN;
+        config.measurement.refractometer_wort_correction = f64::INFINITY;
+
+        assert!(config.validate().is_err());
+        assert_eq!(config.normalize().len(), 2);
+        assert_eq!(
+            config.measurement.hydrometer_calibration_c,
+            DEFAULT_HYDROMETER_CALIBRATION_C
+        );
+        assert_eq!(
+            config.measurement.refractometer_wort_correction,
+            DEFAULT_REFRACTOMETER_WORT_CORRECTION
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_names_the_measurement_field_it_rejected() {
+        let mut config = Config::default();
+        config.measurement.refractometer_wort_correction = 2.0;
+
+        let err = config.validate().unwrap_err();
+        assert_eq!(err.code(), "config.invalid");
+        assert!(
+            err.to_string()
+                .contains("measurement.refractometer_wort_correction"),
+            "{err}"
+        );
     }
 
     #[test]

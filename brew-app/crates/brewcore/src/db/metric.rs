@@ -29,10 +29,18 @@ pub enum Metric {
     /// The BrewPi controller state, stored as its integer. See
     /// [`crate::fermentrack::ControllerState`].
     State,
+    /// Phase 3e, manual entry only. Dimensionless, which is why
+    /// `tests/schema_conventions.rs` blesses a bare `ph` column name.
+    Ph,
+    /// Titratable acidity, **g/L as tartaric acid** — see [`crate::units::GramsPerLitre`],
+    /// which fixes the reference acid. Phase 3e, manual entry only.
+    Ta,
 }
 
 impl Metric {
-    pub const ALL: [Metric; 8] = [
+    /// Append only. The literal in `the_stored_strings_are_pinned` mirrors this order,
+    /// and reordering it is churn that means nothing.
+    pub const ALL: [Metric; 10] = [
         Metric::TempC,
         Metric::SetpointC,
         Metric::FridgeTempC,
@@ -41,6 +49,8 @@ impl Metric {
         Metric::Sg,
         Metric::GravityTempC,
         Metric::State,
+        Metric::Ph,
+        Metric::Ta,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -53,6 +63,8 @@ impl Metric {
             Metric::Sg => "sg",
             Metric::GravityTempC => "gravity_temp_c",
             Metric::State => "state",
+            Metric::Ph => "ph",
+            Metric::Ta => "ta",
         }
     }
 
@@ -64,6 +76,24 @@ impl Metric {
 impl std::fmt::Display for Metric {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// The wire form is the stored form. Hand-written rather than derived, because a
+/// derive would emit `"TempC"` and leave the database and the frontend disagreeing
+/// about the same eight characters. `db_enum!` does exactly this for every other
+/// vocabulary; `Metric` predates it and keeps its own copy.
+impl serde::Serialize for Metric {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Metric {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Metric::parse(&text)
+            .ok_or_else(|| serde::de::Error::custom(crate::Error::UnknownMetric(text.clone())))
     }
 }
 
@@ -115,8 +145,31 @@ mod tests {
                 "sg",
                 "gravity_temp_c",
                 "state",
+                "ph",
+                "ta",
             ]
         );
+    }
+
+    #[test]
+    fn the_wire_form_is_the_stored_form() {
+        for metric in Metric::ALL {
+            let json = serde_json::to_string(&metric).unwrap();
+            assert_eq!(json, format!("\"{}\"", metric.as_str()));
+            assert_eq!(serde_json::from_str::<Metric>(&json).unwrap(), metric);
+        }
+        assert!(serde_json::from_str::<Metric>("\"manual_sg\"").is_err());
+    }
+
+    /// A manual thermometer and the fermenter probe are the same physical quantity,
+    /// so they share a `Metric` and differ by `source.kind`. Putting provenance in
+    /// this vocabulary would need a second plausibility band, a second °C
+    /// canonicalisation and a second axis on Phase 4's chart — and would make the
+    /// spot-check-against-the-probe comparison impossible to draw.
+    #[test]
+    fn there_is_no_separate_metric_for_a_manual_temperature() {
+        assert_eq!(Metric::parse("manual_temp_c"), None);
+        assert_eq!(Metric::parse("manual_sg"), None);
     }
 
     /// docs/BUILDOUT.md "Scope": no table, column or value in our own code is named

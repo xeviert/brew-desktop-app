@@ -3,6 +3,7 @@
 pub mod batch;
 mod connection;
 mod enums;
+pub mod measurement;
 mod metric;
 pub mod migrations;
 mod paths;

@@ -3,7 +3,8 @@
 
 use brewcore::{
     config::{
-        self, Config, Fermentrack, MAX_POLL_INTERVAL_SECS, MIN_POLL_INTERVAL_SECS, SyncConfig, Ui,
+        self, Config, Fermentrack, MAX_POLL_INTERVAL_SECS, MIN_POLL_INTERVAL_SECS, Measurement,
+        SyncConfig, Ui,
     },
     units::{GravityDisplay, TempDisplay},
 };
@@ -109,6 +110,10 @@ fn save_then_load_round_trips() {
         ui: Ui {
             temp_display: TempDisplay::F,
             gravity_display: GravityDisplay::Plato,
+        },
+        measurement: Measurement {
+            hydrometer_calibration_c: 15.5,
+            refractometer_wort_correction: 1.0,
         },
     };
 

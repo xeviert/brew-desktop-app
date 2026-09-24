@@ -45,6 +45,7 @@ fn empty_database_migrates_to_head() {
         "batch_event",
         "batch_stream",
         "annotation",
+        "manual_measurement",
     ] {
         assert!(tables.contains(&expected.to_string()), "missing {expected}");
     }

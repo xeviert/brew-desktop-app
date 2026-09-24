@@ -13,6 +13,8 @@
 //! | Mass | grams, `REAL` |
 //! | Time | UTC epoch seconds, `INTEGER` |
 //! | Money | integer minor units + ISO 4217 code |
+//! | pH | dimensionless, `REAL` |
+//! | Titratable acidity | g/L as tartaric acid, `REAL` |
 //!
 //! # Definitional here, empirical in `calc`
 //!
@@ -24,12 +26,14 @@
 //!
 //! Display preference is config, never storage.
 
+mod acidity;
 mod gravity;
 mod money;
 mod quantity;
 mod temperature;
 mod time;
 
+pub use acidity::{GramsPerLitre, Ph};
 pub use gravity::{GravityDisplay, Sg};
 pub use money::{Currency, Money};
 pub use quantity::{Dimension, Grams, Litres, Quantity, Unit};

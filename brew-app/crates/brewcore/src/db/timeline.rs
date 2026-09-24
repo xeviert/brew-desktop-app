@@ -285,6 +285,66 @@ pub fn unbind_stream(conn: &Connection, binding_id: i64, at: Timestamp) -> Resul
     Ok(changed == 1)
 }
 
+/// Widen a binding backwards. `false` if `starts_at` is not earlier than the current
+/// start, so the caller can widen unconditionally and let this decide.
+///
+/// **Only ever earlier.** Moving a start later would drop readings out of the window
+/// they were already charted in — silently, since nothing in Tier 1 records which
+/// window it was read through.
+///
+/// Phase 3e needs it: a manual stream is bound the first time a measurement is typed,
+/// and the first one typed is routinely not the earliest one taken. A pre-pitch OG
+/// entered an hour after the pitch would otherwise sit outside its own window and be
+/// invisible to [`batch_for_stream_at`].
+///
+/// The overlap check is re-run against the *new* window, for the reason
+/// [`bind_stream`] gives: widening is an insert as far as the exclusion rule cares.
+pub fn set_binding_start(conn: &Connection, binding_id: i64, starts_at: Timestamp) -> Result<bool> {
+    let current: Option<BatchStreamRow> = conn
+        .query_row(
+            &format!("SELECT {BINDING_COLUMNS} FROM batch_stream WHERE id = ?"),
+            [binding_id],
+            binding_from_row,
+        )
+        .optional()?;
+    let Some(current) = current else {
+        return Err(Error::NoSuchBatchStream { binding_id });
+    };
+    if starts_at >= current.starts_at {
+        return Ok(false);
+    }
+
+    let clash: Option<i64> = conn
+        .query_row(
+            "SELECT batch_id FROM batch_stream \
+             WHERE stream_id = ?1 AND batch_id <> ?2 AND id <> ?5 \
+               AND (?4 IS NULL OR starts_at < ?4) \
+               AND (ends_at IS NULL OR ends_at > ?3) \
+             LIMIT 1",
+            params![
+                current.stream_id,
+                current.batch_id,
+                starts_at,
+                current.ends_at,
+                binding_id
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(other) = clash {
+        return Err(Error::StreamAlreadyBound {
+            stream_id: current.stream_id,
+            batch_id: other,
+        });
+    }
+
+    conn.execute(
+        "UPDATE batch_stream SET starts_at = ? WHERE id = ?",
+        params![starts_at, binding_id],
+    )?;
+    Ok(true)
+}
+
 pub fn list_batch_streams(conn: &Connection, batch_id: i64) -> Result<Vec<BatchStreamRow>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {BINDING_COLUMNS} FROM batch_stream WHERE batch_id = ? ORDER BY starts_at, id"
@@ -725,6 +785,55 @@ mod tests {
 
         let rows = list_batch_streams(&conn, batch_id).unwrap();
         assert_eq!(rows[0].ends_at, Some(at(1_000)));
+    }
+
+    /// Backdating is the whole point; moving a start forward would orphan readings that
+    /// were already charted inside the old window.
+    #[test]
+    fn a_binding_start_can_only_ever_move_earlier() {
+        let mut conn = db();
+        let (_, stream_id) = stream(&mut conn, "FV1");
+        let batch_id = batch(&conn, "SELTZER-017");
+        let binding = bind_stream(&conn, batch_id, stream_id, at(1_000), None).unwrap();
+
+        assert!(set_binding_start(&conn, binding, at(0)).unwrap());
+        assert_eq!(
+            batch_for_stream_at(&conn, stream_id, at(0)).unwrap(),
+            Some(batch_id)
+        );
+
+        assert!(!set_binding_start(&conn, binding, at(5_000)).unwrap());
+        assert!(!set_binding_start(&conn, binding, at(0)).unwrap());
+        assert_eq!(
+            list_batch_streams(&conn, batch_id).unwrap()[0].starts_at,
+            at(0)
+        );
+    }
+
+    #[test]
+    fn widening_a_binding_still_refuses_to_overlap_another_batch() {
+        let mut conn = db();
+        let (_, stream_id) = stream(&mut conn, "FV1");
+        let seventeen = batch(&conn, "SELTZER-017");
+        let eighteen = batch(&conn, "SELTZER-018");
+
+        bind_stream(&conn, seventeen, stream_id, at(0), Some(at(1_000))).unwrap();
+        let later = bind_stream(&conn, eighteen, stream_id, at(1_000), None).unwrap();
+
+        let err = set_binding_start(&conn, later, at(500)).unwrap_err();
+        assert_eq!(err.code(), "db.stream_already_bound");
+        assert_eq!(
+            list_batch_streams(&conn, eighteen).unwrap()[0].starts_at,
+            at(1_000),
+            "a refused widening must not have written"
+        );
+    }
+
+    #[test]
+    fn widening_a_binding_that_does_not_exist_says_so() {
+        let conn = db();
+        let err = set_binding_start(&conn, 404, at(0)).unwrap_err();
+        assert_eq!(err.code(), "db.no_such_batch_stream");
     }
 
     #[test]
