@@ -27,8 +27,8 @@ use super::{
     reference::{CanonicalQty, canonical_for_ingredient, canonical_from_columns},
 };
 use crate::{
-    Error, Result,
-    units::{Grams, Litres, Quantity, Sg, Timestamp},
+    Error, Result, calc,
+    units::{Currency, Grams, Litres, Money, Quantity, Sg, Timestamp},
 };
 
 db_enum!(
@@ -475,6 +475,94 @@ pub fn plan_vs_actual(conn: &Connection, batch_id: i64) -> Result<PlanVsActual> 
     })
 }
 
+// ------------------------------------------------------------------ cost
+
+/// What a batch cost, from the lots its additions came from.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct BatchCost {
+    pub batch_id: i64,
+    /// The batch's own volume, or the recipe version's target when it has none.
+    pub volume_l: Option<Litres>,
+    pub total: Option<Money>,
+    /// `None` when there is no total or no volume to divide it by.
+    pub per_litre: Option<Money>,
+    pub lines_costed: usize,
+    pub lines_without_cost: usize,
+}
+
+/// Cost per batch and per litre — 3f's last item, and Phase 7's first.
+///
+/// Its own `SELECT` rather than a wider [`BatchIngredientRow`]: that struct is on the
+/// command surface, and what a lot cost is not part of what an addition *is*. The
+/// arithmetic is [`crate::calc::cost`], which is where it can be tested without a
+/// database; this function's whole job is turning rows into
+/// [`CostLine`](crate::calc::cost::CostLine)s.
+///
+/// A lot with no price becomes a `lines_without_cost` rather than a zero. The
+/// per-unit price comes from
+/// [`LotRow::cost_per_canonical_unit`](crate::db::reference::LotRow::cost_per_canonical_unit),
+/// so a sub-cent
+/// bulk price survives the trip; see its doc for why that is an `f64`.
+pub fn batch_cost(conn: &Connection, batch_id: i64) -> Result<BatchCost> {
+    let batch = get_batch(conn, batch_id)?;
+
+    let mut stmt = conn.prepare(
+        "SELECT bi.qty_g, bi.qty_l, bi.qty_each, \
+                lot.qty_g, lot.qty_l, lot.qty_each, \
+                lot.total_cost_minor, lot.currency \
+         FROM batch_ingredient bi JOIN ingredient_lot lot ON lot.id = bi.ingredient_lot_id \
+         WHERE bi.batch_id = ?",
+    )?;
+    let rows = stmt.query_map([batch_id], |row| {
+        let used = canonical_from_columns(0, row.get(0)?, row.get(1)?, row.get(2)?)?;
+        let stock = canonical_from_columns(3, row.get(3)?, row.get(4)?, row.get(5)?)?;
+        let cost = row
+            .get::<_, Option<i64>>(6)?
+            .zip(row.get::<_, Option<Currency>>(7)?)
+            .map(|(minor, currency)| Money::new(minor, currency));
+        Ok((used, stock, cost))
+    })?;
+
+    let mut lines = Vec::new();
+    let mut lines_without_cost = 0usize;
+    for row in rows {
+        let (used, stock, cost) = row?;
+        // Both quantities came from the same ingredient's `default_unit`, so they
+        // are always the same dimension — `canonical_for_ingredient` is the only
+        // write path for either. The price is minor units per *that* dimension.
+        match cost.filter(|_| stock.amount() != 0.0) {
+            Some(cost) => lines.push(calc::cost::CostLine {
+                per_unit_minor: cost.minor as f64 / stock.amount(),
+                currency: cost.currency,
+                qty: used.amount(),
+            }),
+            None => lines_without_cost += 1,
+        }
+    }
+
+    let rolled = calc::cost::total(lines, lines_without_cost)?;
+    let volume_l = match batch.volume_l {
+        Some(v) => Some(v),
+        None => match batch.recipe_version_id {
+            Some(id) => get_recipe_version(conn, id)?.target_volume_l,
+            None => None,
+        },
+    };
+    let per_litre = match (rolled.total, volume_l) {
+        (Some(total), Some(v)) if v.get() > 0.0 => Some(calc::cost::per_litre(total, v)?),
+        _ => None,
+    };
+
+    Ok(BatchCost {
+        batch_id,
+        volume_l,
+        total: rolled.total,
+        per_litre,
+        lines_costed: rolled.lines_costed,
+        lines_without_cost: rolled.lines_without_cost,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,6 +603,19 @@ mod tests {
 
     /// An ingredient with one lot of it, which is what an actual points at.
     fn stocked(conn: &Connection, name: &str, category: Category, unit: Unit) -> (i64, i64) {
+        priced(conn, name, category, unit, 25.0, None)
+    }
+
+    /// The same, with a price on the lot and its size spelled out — what
+    /// [`batch_cost`] needs and what `stocked` deliberately does not have.
+    fn priced(
+        conn: &Connection,
+        name: &str,
+        category: Category,
+        unit: Unit,
+        size: f64,
+        cost: Option<Money>,
+    ) -> (i64, i64) {
         let ingredient_id = ingredient(conn, name, category, unit);
         let lot = create_lot(
             conn,
@@ -522,8 +623,8 @@ mod tests {
                 ingredient_id,
                 supplier: None,
                 lot_code: None,
-                entry: Quantity::new(25.0, unit).unwrap(),
-                cost: None,
+                entry: Quantity::new(size, unit).unwrap(),
+                cost,
                 purchased_at: None,
                 expires_at: None,
                 notes: None,
@@ -531,6 +632,10 @@ mod tests {
         )
         .unwrap();
         (ingredient_id, lot)
+    }
+
+    fn eur(minor: i64) -> Money {
+        Money::new(minor, Currency::EUR)
     }
 
     /// A seltzer recipe with one version. The shape most tests below start from.
@@ -877,5 +982,150 @@ mod tests {
         let row = get_batch(&conn, batch).unwrap();
         assert_eq!(row.volume_l, Some(Litres::new(19.5).unwrap()));
         assert_eq!(row.fg, Some(Sg::new(1.000).unwrap()));
+    }
+
+    /// The worked case the `f64` unit price exists for: €12.50 for a 5 kg sack of
+    /// sucrose is 0.25 minor units per gram, and 4.2 kg of it is €10.50. An integer
+    /// per-unit price would make this €0.00.
+    #[test]
+    fn a_batch_built_from_a_cheap_bulk_lot_costs_more_than_nothing() {
+        let conn = db();
+        let (_, sugar) = priced(
+            &conn,
+            "Sucrose",
+            Category::Sugar,
+            Unit::Kg,
+            5.0,
+            Some(eur(1250)),
+        );
+        let (_, yeast) = priced(
+            &conn,
+            "EC-1118",
+            Category::Yeast,
+            Unit::G,
+            500.0,
+            Some(eur(2400)),
+        );
+        let batch = create_batch(&conn, &new_batch("SELTZER-001", None), T0).unwrap();
+        add_batch_ingredient(&conn, batch, &actual(sugar, 4.2, Unit::Kg, Stage::Prep)).unwrap();
+        add_batch_ingredient(&conn, batch, &actual(yeast, 25.0, Unit::G, Stage::Pitch)).unwrap();
+
+        let cost = batch_cost(&conn, batch).unwrap();
+        // 4200 g x 0.25 = 1050, plus 25 g x 4.8 = 120.
+        assert_eq!(cost.total, Some(eur(1170)));
+        assert_eq!(cost.lines_costed, 2);
+        assert_eq!(cost.lines_without_cost, 0);
+    }
+
+    /// The volume falls back to the recipe version's target, because a batch that has
+    /// not been measured yet still has a planned cost per litre.
+    #[test]
+    fn cost_per_litre_falls_back_to_the_recipe_versions_target_volume() {
+        let conn = db();
+        let version = seltzer_recipe(&conn); // target_volume_l = 20 L
+        let (_, sugar) = priced(
+            &conn,
+            "Sucrose",
+            Category::Sugar,
+            Unit::Kg,
+            5.0,
+            Some(eur(1250)),
+        );
+        let batch = create_batch(&conn, &new_batch("SELTZER-002", Some(version)), T0).unwrap();
+        add_batch_ingredient(&conn, batch, &actual(sugar, 4.0, Unit::Kg, Stage::Prep)).unwrap();
+
+        let cost = batch_cost(&conn, batch).unwrap();
+        assert_eq!(cost.volume_l, Some(Litres::new(20.0).unwrap()));
+        assert_eq!(cost.total, Some(eur(1000)));
+        assert_eq!(cost.per_litre, Some(eur(50)));
+
+        // A measured volume wins over the plan.
+        set_batch_measurements(&conn, batch, Some(Litres::new(16.0).unwrap()), None, None).unwrap();
+        let cost = batch_cost(&conn, batch).unwrap();
+        assert_eq!(cost.volume_l, Some(Litres::new(16.0).unwrap()));
+        assert_eq!(cost.per_litre, Some(eur(63))); // 62.5, rounded
+    }
+
+    /// A lot with no price is counted, not treated as free. A total that silently
+    /// omitted it would look like a total.
+    #[test]
+    fn an_unpriced_lot_is_reported_rather_than_costed_at_zero() {
+        let conn = db();
+        let (_, sugar) = priced(
+            &conn,
+            "Sucrose",
+            Category::Sugar,
+            Unit::Kg,
+            5.0,
+            Some(eur(1250)),
+        );
+        let (_, nutrient) = stocked(&conn, "Fermaid O", Category::Nutrient, Unit::G);
+        let batch = create_batch(&conn, &new_batch("SELTZER-003", None), T0).unwrap();
+        add_batch_ingredient(&conn, batch, &actual(sugar, 4.0, Unit::Kg, Stage::Prep)).unwrap();
+        add_batch_ingredient(
+            &conn,
+            batch,
+            &actual(nutrient, 10.0, Unit::G, Stage::Fermentation),
+        )
+        .unwrap();
+
+        let cost = batch_cost(&conn, batch).unwrap();
+        assert_eq!(cost.total, Some(eur(1000)));
+        assert_eq!(cost.lines_costed, 1);
+        assert_eq!(cost.lines_without_cost, 1);
+    }
+
+    /// No priced lot at all is `None`, and `None` is not zero: an unpriced batch did
+    /// not cost nothing.
+    #[test]
+    fn a_batch_with_no_priced_lots_has_no_total_rather_than_a_zero_one() {
+        let conn = db();
+        let (_, sugar) = stocked(&conn, "Sucrose", Category::Sugar, Unit::Kg);
+        let batch = create_batch(&conn, &new_batch("SELTZER-004", None), T0).unwrap();
+        add_batch_ingredient(&conn, batch, &actual(sugar, 4.0, Unit::Kg, Stage::Prep)).unwrap();
+
+        let cost = batch_cost(&conn, batch).unwrap();
+        assert!(cost.total.is_none());
+        assert!(cost.per_litre.is_none());
+        assert_eq!(cost.lines_without_cost, 1);
+    }
+
+    /// `units::money`'s policy, reaching the one place in the app that could have
+    /// been tempted to break it.
+    #[test]
+    fn a_batch_spanning_two_currencies_fails_loudly() {
+        let conn = db();
+        let (_, sugar) = priced(
+            &conn,
+            "Sucrose",
+            Category::Sugar,
+            Unit::Kg,
+            5.0,
+            Some(eur(1250)),
+        );
+        let (_, yeast) = priced(
+            &conn,
+            "EC-1118",
+            Category::Yeast,
+            Unit::G,
+            500.0,
+            Some(Money::new(2400, Currency::USD)),
+        );
+        let batch = create_batch(&conn, &new_batch("SELTZER-005", None), T0).unwrap();
+        add_batch_ingredient(&conn, batch, &actual(sugar, 4.0, Unit::Kg, Stage::Prep)).unwrap();
+        add_batch_ingredient(&conn, batch, &actual(yeast, 25.0, Unit::G, Stage::Pitch)).unwrap();
+
+        let err = batch_cost(&conn, batch).unwrap_err();
+        assert_eq!(err.code(), "money.currency_mismatch");
+    }
+
+    #[test]
+    fn a_batch_with_no_additions_costs_nothing_known() {
+        let conn = db();
+        let batch = create_batch(&conn, &new_batch("SELTZER-006", None), T0).unwrap();
+        let cost = batch_cost(&conn, batch).unwrap();
+        assert!(cost.total.is_none());
+        assert_eq!(cost.lines_costed, 0);
+        assert_eq!(cost.lines_without_cost, 0);
     }
 }

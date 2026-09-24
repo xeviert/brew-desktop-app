@@ -483,11 +483,24 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
       `Error::CalcOutOfRange`, never extrapolation. `calc/hydrometer.rs` arrived with them
       and is not on this list: the temperature correction is a polynomial fit of measured
       data, and `units/mod.rs` says that is not a unit conversion
-- [ ] Apparent attenuation `(OG − FG) / (OG − 1)`
-- [ ] Real extract, real attenuation, ABW
-- [ ] ABV: simple `(OG − FG) × 131.25` **and** the alternate high-attenuation
-      formula — seltzer finishing at 1.000 is exactly where the simple one drifts.
-      Show both, label which is which
+- [x] Apparent attenuation `(OG − FG) / (OG − 1)` — `calc/attenuation.rs`, a **fraction**
+      like `yeast_strain.attenuation_*`, and deliberately **not clamped to 1.0**: a wash
+      finishing at 0.998 attenuates past 100 %, and that is the number that says it went
+      dry. One shared guard refuses a swapped pair and an `OG` within two gravity points
+      of water — `Sg::PLAUSIBLE` starts at 0.900, so 1.0002 reaches the divide today
+- [x] Real extract, real attenuation, ABW — Balling, the same file. `RE = 0.1808·OE +
+      0.8192·AE` off 3f's own `sg_to_plato`, which is why these land after 3e rather than
+      beside it. ABW is published in percent and divided by 100 here, said out loud in the
+      doc: the first version of this shipped a percent through a fraction's signature and
+      the textbook test caught it. Refused past 30 °P — Balling's denominator reaches zero
+      at 193 °P and is fiction long before
+- [x] ABV: `calc/abv.rs`, `simple` and `alternate`, and **no function called `abv`**.
+      Neither is the default and neither is named for the quantity, so a caller has to
+      name the one it is showing — "show both, label which is which" is unenforceable if
+      one of them can be reached by accident. `alternate` is Hall, *Zymurgy* Summer 1995,
+      coefficients verified against the source. They agree within 0.1 pp on a 1.050/1.010
+      beer and differ by 0.4 pp on a 1.075 → 0.998 seltzer, which is the test that earns
+      two functions
 - [x] Refractometer correction (Terrill cubic + wort correction factor) —
       **verify the coefficients against the source when implementing**. Landed early with
       3e. Verified against Sean Terrill's 2011-04-07 post and cross-checked against
@@ -497,13 +510,41 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
       differs only in the leading constant; Terrill pinned his to unity deliberately so
       the formula stays sane outside the interpolated range, and that is the one
       implemented
-- [ ] Sugar mass → OG for a sugar wash, computed from mass fraction rather than
-      PPG, since seltzer base is effectively pure sucrose
-- [ ] Dilution / blending: target OG from a volume of wash plus water
-- [ ] Yeast pitch rate: cells from rate × volume × °P; dry-yeast grams
-- [ ] YAN target and staggered-nutrient math for zero-nitrogen sugar bases
-- [ ] Cost per batch and per litre from `batch_ingredient` × lot unit cost
-- [ ] Every formula unit-tested against a known worked example with its source cited
+- [x] Sugar mass → OG for a sugar wash, from mass fraction rather than PPG —
+      `calc/sugar.rs`. `°P = 100·sugar/(sugar + water)` is *exact* for sucrose, so the only
+      fit in the path is `plato_to_sg`. Water is 0.99823 kg/L at 20 °C, stated rather than
+      taken as 1.000: it is 0.04 °P on a 20 °P wash. `sugar_for_og` inverts it in closed
+      form — the mass fraction is algebra, and re-inverting numerically would put
+      `plato_to_sg`'s bisection in the loop for nothing
+- [x] Dilution / blending: `blend` over any number of parts, `dilute` as its two-part
+      case. Conserves **extract mass**, not gravity points, which makes the resulting
+      gravity exact and independent of whether volumes add; the returned *volume* is the
+      approximation, at under 0.5 % for what this app blends, and the doc says which half
+      is which
+- [x] Yeast pitch rate: `calc/pitch.rs`, `cells_needed` and `dry_yeast_grams`. **Pure —
+      no migration.** `yeast_strain` has no cells-per-gram, viability or pack-size column
+      and is not getting one in Phase 3; they are arguments with cited consts
+      (`RATE_ALE`, `DRY_CELLS_PER_GRAM`). `YeastForm` is not matched on here either: a
+      `calc` function reading a `db` enum would be the first thing in the module to import
+      from the layer above it, so the form decides at the call site
+- [x] YAN target and staggered-nutrient math — `calc/yan.rs`. Per-product nitrogen
+      yield is an **argument**, with cited consts: DAP is stoichiometric (212 mg N/g,
+      21.2 % by mass) and the only exact one; Fermaid O's supplier figure and TOSNA's
+      differ fourfold and the doc says so rather than picking quietly. Nothing defaults the
+      demand factor, same rule as the wort correction. `stagger` takes dose *fractions*,
+      not a count, and refuses a set that does not sum to 1.0 — a set summing to 0.9
+      under-feeds by a tenth and looks exactly like a nitrogen-limited ferment.
+      Timing stays in 3b's `recipe_item.offset_hours`, where a schedule is actually stored
+- [x] Cost per batch and per litre — split in two, because `calc` takes no `Connection`:
+      `calc/cost.rs` folds priced lines, `db::batch::batch_cost` does the join. Its own
+      `SELECT` rather than a wider `BatchIngredientRow`, which is on the command surface and
+      whose business is not what a lot cost. The fold accumulates in `f64` minor units and
+      **rounds once at the end**, for 3a's reason: €12.50 over 5 kg is 0.25 minor units per
+      gram. An unpriced lot is `lines_without_cost`, never a zero, and no total at all is
+      `None` — a batch nobody priced did not cost nothing. Mixed currencies are
+      `money.currency_mismatch`. Volume falls back to the recipe version's target.
+      Phase 7's cost report is now a call, not a rewrite
+- [x] Every formula unit-tested against a known worked example with its source cited
 
 **Done when:** a batch can be created from a recipe version, pitched, have manual
 readings and events logged against it, and show a correct OG/FG/ABV and

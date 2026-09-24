@@ -64,7 +64,8 @@ CREATE TABLE ingredient (
 -- price. Minor units per canonical unit would be an integer that rounds to zero:
 -- EUR 12.50 for 5 kg of sucrose is 0.25 cents/g, which truncates to 0 and makes
 -- every cost in Phase 7 read EUR 0.00. Per-unit cost is a division done in f64 at
--- the point of display (`db::reference::lot_cost_per_canonical_unit`).
+-- the point of display (`db::reference::LotRow::cost_per_canonical_unit`), and
+-- folded back up into a batch total by `db::batch::batch_cost`.
 CREATE TABLE ingredient_lot (
   id               INTEGER PRIMARY KEY,
   ingredient_id    INTEGER NOT NULL REFERENCES ingredient(id),

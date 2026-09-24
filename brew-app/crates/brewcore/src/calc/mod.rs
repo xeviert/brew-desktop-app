@@ -8,15 +8,34 @@
 //! fitted over, and an error band — and refuses inputs outside that range with
 //! [`crate::Error::CalcOutOfRange`] rather than extrapolating quietly.
 //!
-//! Phase 3e landed the three formulas manual entry needs. The rest of 3f — attenuation,
-//! real extract, ABV, sugar-mass → OG, dilution, pitch rate, YAN — is still to come.
+//! Two exceptions to that framing, both deliberate. [`attenuation::apparent`] is
+//! arithmetic on two readings and needs no source; it lives beside the Balling
+//! formulas because nobody would look for it anywhere else. And [`cost`] is exact
+//! integer money, here rather than in `db` so the folding is testable without a
+//! database — `db::batch::batch_cost` supplies the rows.
+//!
+//! Nothing in this module reads the config or the database, and nothing defaults a
+//! parameter that changes the answer: the wort correction factor, the nitrogen
+//! demand factor and yeast viability are all arguments, each with a documented
+//! constant a caller may choose to pass.
 
+pub mod abv;
+pub mod attenuation;
+pub mod cost;
 pub mod gravity;
 pub mod hydrometer;
+pub mod pitch;
 pub mod refractometer;
+pub mod sugar;
+pub mod yan;
 
 pub use gravity::{brix_to_sg, plato_to_sg, sg_to_brix, sg_to_plato};
 pub use hydrometer::correct_for_temperature;
 pub use refractometer::{
     WORT_CORRECTION_DEFAULT, final_gravity_from_brix, original_gravity_from_brix,
 };
+pub use sugar::{blend, dilute, og_from_sugar, sugar_for_og};
+
+// `abv`, `attenuation`, `cost`, `pitch` and `yan` are not re-exported flat: each has
+// a `simple`/`real`/`total` on it whose meaning comes entirely from its module.
+// `calc::abv::simple` reads; `calc::simple` does not.
