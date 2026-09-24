@@ -1,5 +1,6 @@
 //! The database handle. Every read and write goes through here.
 
+pub mod batch;
 mod connection;
 mod enums;
 mod metric;
@@ -8,6 +9,7 @@ mod paths;
 pub mod recipe;
 pub mod reference;
 pub mod tier1;
+pub mod timeline;
 
 use std::{
     collections::BTreeMap,

@@ -40,6 +40,11 @@ fn empty_database_migrates_to_head() {
         "recipe",
         "recipe_version",
         "recipe_item",
+        "batch",
+        "batch_ingredient",
+        "batch_event",
+        "batch_stream",
+        "annotation",
     ] {
         assert!(tables.contains(&expected.to_string()), "missing {expected}");
     }

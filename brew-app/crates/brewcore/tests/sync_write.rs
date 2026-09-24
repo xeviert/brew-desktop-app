@@ -9,7 +9,7 @@
 //! there was no write path to assert against.
 
 use brewcore::{
-    db::{Db, Metric, SourceKind, tier1},
+    db::{Db, Metric, SourceKind, batch, recipe, tier1, timeline},
     fermentrack::{Client, ClientSettings, SyncState, SyncStep, ingest, log_url, store},
     units::Timestamp,
 };
@@ -70,6 +70,23 @@ impl Rig {
                 Ok(rows.collect::<rusqlite::Result<_>>()?)
             })
             .expect("read the readings back")
+    }
+
+    /// The `annotation` rows this source has, oldest first. Channel as its stored
+    /// string, so the test asserts what is actually in the file.
+    fn annotations(&self) -> Vec<(Timestamp, String, String)> {
+        self.db
+            .read(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT ts, channel, text FROM annotation \
+                     WHERE source_id = ? ORDER BY ts, channel",
+                )?;
+                let rows = stmt.query_map([self.source_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })?;
+                Ok(rows.collect::<rusqlite::Result<_>>()?)
+            })
+            .expect("read the annotations back")
     }
 
     fn external_ids(&self) -> Vec<(String, Metric)> {
@@ -442,4 +459,136 @@ async fn an_idle_poll_records_that_it_happened_without_touching_anything_else() 
     assert_eq!(after.byte_offset, before.byte_offset);
     assert_eq!(after.header, before.header);
     assert_eq!(after.last_ts, before.last_ts);
+}
+
+// ---------------------------------------------------------------------------
+// Annotations (Phase 3d's half of the write path)
+// ---------------------------------------------------------------------------
+
+/// The other thing a `_full.csv` row carries. Phase 3d offers these as suggested
+/// `batch_event`s, which it can only do if the sync path stored them in the first
+/// place — before this they were parsed and dropped.
+#[tokio::test]
+async fn annotations_are_stored_alongside_the_readings_and_only_once() {
+    let mut spec = Scenario::Ugly.spec();
+    spec.rows = 10;
+    let body = spec.full_csv();
+    let remote_path = spec.remote_path(Kind::Full);
+    let server = FixtureServer::start(&remote_path, body.clone()).await;
+    let url = log_url(&server.base_url(), &remote_path).expect("a usable URL");
+    let mut rig = Rig::new(&remote_path);
+    let client = client();
+
+    poll(&mut rig, &client, &url).await;
+
+    let stored = rig.annotations();
+    let texts: Vec<&str> = stored.iter().map(|(_, _, text)| text.as_str()).collect();
+    assert!(
+        texts.contains(&"Temp profile started, target 18.0C"),
+        "an annotation containing the delimiter did not survive: {texts:?}"
+    );
+    assert!(
+        texts.contains(&"Fridge renamed to \"Chest 2\""),
+        "an annotation containing the quotechar did not survive: {texts:?}"
+    );
+    // `beer_ann` is ours as `vessel`, `fridge_ann` as `chamber`. Fermentrack's naming
+    // stays quarantined, and the schema linter would refuse either spelling anyway.
+    assert!(stored.iter().any(|(_, c, _)| c == "vessel"));
+    assert!(stored.iter().any(|(_, c, _)| c == "chamber"));
+
+    // A server that ignores `Range` re-sends the whole file every poll. The composite
+    // primary key is what makes that free rather than a growing pile of duplicates.
+    poll(&mut rig, &client, &url).await;
+    assert_eq!(rig.annotations(), stored);
+}
+
+/// Annotations are Tier 1, derived from the same bytes as the readings. A Rebuild that
+/// re-derived one and not the other would leave 3d's suggestions quoting a file the
+/// readings no longer agree with.
+#[tokio::test]
+async fn a_restart_clears_the_annotations_with_the_readings() {
+    let mut long = Scenario::Ugly.spec();
+    long.rows = 30;
+    let body = long.full_csv();
+    let remote_path = long.remote_path(Kind::Full);
+    let server = FixtureServer::start(&remote_path, body).await;
+    let url = log_url(&server.base_url(), &remote_path).expect("a usable URL");
+    let mut rig = Rig::new(&remote_path);
+    let client = client();
+
+    poll(&mut rig, &client, &url).await;
+    assert!(!rig.annotations().is_empty());
+
+    let mut shorter = Scenario::Ugly.spec();
+    shorter.rows = 5;
+    server.set_body(shorter.full_csv());
+    let step = poll(&mut rig, &client, &url).await;
+    assert!(matches!(step, SyncStep::Restart(_)), "{step:?}");
+
+    assert!(
+        rig.annotations().is_empty(),
+        "the previous log's annotations survived the restart"
+    );
+}
+
+/// The two halves of Phase 3d meeting: a real sync, a batch bound to the stream it
+/// produced, and the log's own annotations offered back as events.
+#[tokio::test]
+async fn a_bound_batch_is_offered_the_synced_annotations_as_events() {
+    let mut spec = Scenario::Ugly.spec();
+    spec.rows = 10;
+    let body = spec.full_csv();
+    let remote_path = spec.remote_path(Kind::Full);
+    let server = FixtureServer::start(&remote_path, body).await;
+    let url = log_url(&server.base_url(), &remote_path).expect("a usable URL");
+    let mut rig = Rig::new(&remote_path);
+    let client = client();
+
+    poll(&mut rig, &client, &url).await;
+
+    let (stream_id, _) = rig
+        .db
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT id, metric FROM stream WHERE source_id = ? LIMIT 1",
+                [rig.source_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Metric>(1)?)),
+            )?)
+        })
+        .expect("the sync created a stream");
+
+    let suggested = rig
+        .db
+        .write(|conn| {
+            let batch_id = batch::create_batch(
+                conn,
+                &batch::NewBatch {
+                    code: "SELTZER-017".into(),
+                    recipe_version_id: None,
+                    beverage_type: recipe::BeverageType::Seltzer,
+                    vessel_id: None,
+                    volume_l: None,
+                    og: None,
+                    notes: None,
+                },
+                Timestamp::from_secs(0),
+            )?;
+            // Open-ended, from the epoch: the fixture's own timestamps are what the
+            // window has to contain, and this test is not about the window.
+            timeline::bind_stream(conn, batch_id, stream_id, Timestamp::from_secs(0), None)?;
+            timeline::suggest_events_for_batch(conn, batch_id)
+        })
+        .expect("bind the stream and read the suggestions back");
+
+    let texts: Vec<&str> = suggested.iter().map(|s| s.text.as_str()).collect();
+    assert!(
+        texts.contains(&"Temp profile started, target 18.0C"),
+        "{texts:?}"
+    );
+    assert!(
+        suggested
+            .iter()
+            .any(|s| s.kind == Some(timeline::EventKind::TempRamp)),
+        "a setpoint annotation should pre-select a temp ramp: {suggested:?}"
+    );
 }

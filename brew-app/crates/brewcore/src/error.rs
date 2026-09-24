@@ -188,6 +188,73 @@ pub enum Error {
     #[error("recipe version {recipe_version_id} is in use by a batch; fork it to edit")]
     RecipeVersionLocked { recipe_version_id: i64 },
 
+    // Phase 3c. `0004_batch.sql` leaves `status` open like every vocabulary before it.
+    #[error("unknown batch status '{0}' in the database")]
+    UnknownBatchStatus(String),
+
+    #[error("batch {batch_id} does not exist")]
+    NoSuchBatch { batch_id: i64 },
+
+    #[error("ingredient lot {lot_id} does not exist")]
+    NoSuchLot { lot_id: i64 },
+
+    /// The status machine, refusing in the data layer rather than in the UI: a
+    /// greyed-out button is not a rule, it is a suggestion the next caller ignores.
+    #[error("batch {batch_id} cannot go from {from} to {to}")]
+    IllegalBatchTransition {
+        batch_id: i64,
+        from: crate::db::batch::BatchStatus,
+        to: crate::db::batch::BatchStatus,
+    },
+
+    /// Pitch is t=0 for the overlay, the finish detector and lag time alike. A batch
+    /// that ferments without one can never be compared to anything.
+    #[error("batch {batch_id} has no pitch time; record the pitch before fermenting")]
+    BatchNotPitched { batch_id: i64 },
+
+    #[error("batch {batch_id} is archived")]
+    BatchArchived { batch_id: i64 },
+
+    #[error("this is a {batch} batch, but the recipe version is {recipe}")]
+    BeverageTypeMismatch {
+        batch: crate::db::recipe::BeverageType,
+        recipe: crate::db::recipe::BeverageType,
+    },
+
+    // Phase 3d. `0005_timeline.sql` leaves `kind` and `channel` open like every
+    // vocabulary before them.
+    #[error("unknown event kind '{0}' in the database")]
+    UnknownEventKind(String),
+
+    #[error("unknown annotation channel '{0}' in the database")]
+    UnknownAnnotationChannel(String),
+
+    #[error("batch event {event_id} does not exist")]
+    NoSuchBatchEvent { event_id: i64 },
+
+    #[error("stream binding {binding_id} does not exist")]
+    NoSuchBatchStream { binding_id: i64 },
+
+    /// Pitch is two facts written as one: the event on the timeline and
+    /// `batch.pitched_at`, which 3c's status machine reads. `record_pitch` writes
+    /// both; a bare `add_event` would write only the first, and the batch would carry
+    /// a pitch it could not ferment from.
+    #[error("record the pitch through `record_pitch`, not as a plain event")]
+    UsePitchRecorder { batch_id: i64 },
+
+    /// A fermenting batch with no pitch time is exactly the state
+    /// [`Error::BatchNotPitched`] exists to prevent, so the pitch event stops being
+    /// deletable the moment the batch leaves `planned`.
+    #[error("batch {batch_id} has already left planned; its pitch cannot be removed")]
+    PitchEventLocked { batch_id: i64 },
+
+    /// One stream, one batch, at any instant. Overlapping bindings would put two
+    /// batches' names on one curve, and neither Phase 4's chart nor Phase 5's overlay
+    /// has any way to choose between them afterwards. Windows are half-open, so a
+    /// fermenter turnaround — 18 starting exactly when 17 ends — is not an overlap.
+    #[error("stream {stream_id} is already bound to batch {batch_id} over that window")]
+    StreamAlreadyBound { stream_id: i64, batch_id: i64 },
+
     #[error("source {source_id} has no sync_state row")]
     MissingSyncState { source_id: i64 },
 
@@ -270,6 +337,20 @@ impl Error {
             Error::NoSuchRecipeVersion { .. } => "db.no_such_recipe_version",
             Error::NoSuchRecipeItem { .. } => "db.no_such_recipe_item",
             Error::RecipeVersionLocked { .. } => "db.recipe_version_locked",
+            Error::UnknownBatchStatus(_) => "db.unknown_batch_status",
+            Error::NoSuchBatch { .. } => "db.no_such_batch",
+            Error::NoSuchLot { .. } => "db.no_such_lot",
+            Error::IllegalBatchTransition { .. } => "db.illegal_batch_transition",
+            Error::BatchNotPitched { .. } => "db.batch_not_pitched",
+            Error::BatchArchived { .. } => "db.batch_archived",
+            Error::BeverageTypeMismatch { .. } => "db.beverage_type_mismatch",
+            Error::UnknownEventKind(_) => "db.unknown_event_kind",
+            Error::UnknownAnnotationChannel(_) => "db.unknown_annotation_channel",
+            Error::NoSuchBatchEvent { .. } => "db.no_such_batch_event",
+            Error::NoSuchBatchStream { .. } => "db.no_such_batch_stream",
+            Error::UsePitchRecorder { .. } => "db.use_pitch_recorder",
+            Error::PitchEventLocked { .. } => "db.pitch_event_locked",
+            Error::StreamAlreadyBound { .. } => "db.stream_already_bound",
             Error::MissingSyncState { .. } => "sync.missing_state",
             Error::SourceNotScheduled { .. } => "sync.not_scheduled",
             Error::BackgroundTask { .. } => "sync.task",

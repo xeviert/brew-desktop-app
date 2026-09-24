@@ -15,11 +15,29 @@ use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::{Result, db::Metric, units::Timestamp};
+use super::enums::db_enum;
+use crate::{Error, Result, db::Metric, units::Timestamp};
 
 /// One row of `reading`, ready to insert. A tuple rather than a struct: it is only
 /// ever built and immediately consumed, and a `Vec` of it is the batch.
 pub type NewReading = (i64, Timestamp, f64);
+
+/// One row of `annotation`, ready to insert. A tuple for the same reason
+/// [`NewReading`] is one.
+pub type NewAnnotation<'a> = (Timestamp, AnnotationChannel, &'a str);
+
+db_enum!(
+    /// Which side of the chamber an annotation is about. Not a `CHECK` in the schema —
+    /// see `0005_timeline.sql`.
+    ///
+    /// Our vocabulary, not Fermentrack's: `beer_ann` and `fridge_ann` are column names
+    /// that stay inside [`csv_log`](crate::fermentrack::csv_log), and the schema
+    /// linter would reject either of them here anyway.
+    AnnotationChannel,
+    UnknownAnnotationChannel,
+    (Vessel, "vessel"),
+    (Chamber, "chamber"),
+);
 
 /// The `source.kind` vocabulary, mirroring the `CHECK` in `0001_tier1.sql`.
 ///
@@ -177,6 +195,39 @@ pub fn insert_readings(tx: &Transaction<'_>, rows: &[NewReading]) -> Result<usiz
         inserted += stmt.execute(params![stream_id, ts, value])?;
     }
     Ok(inserted)
+}
+
+/// Insert annotations, ignoring ones already present. Returns how many were *new*.
+///
+/// The same shape as [`insert_readings`] and for the same reasons: one prepared
+/// statement across the batch, and a named conflict target rather than
+/// `INSERT OR IGNORE`, so a bad `source_id` is an error instead of silent loss.
+///
+/// Two annotations on one `(source, ts, channel)` cannot happen — the CSV has one
+/// cell per channel per row — so the conflict only ever fires on re-ingested bytes.
+pub fn insert_annotations(
+    tx: &Transaction<'_>,
+    source_id: i64,
+    rows: &[NewAnnotation<'_>],
+) -> Result<usize> {
+    let mut stmt = tx.prepare(
+        "INSERT INTO annotation (source_id, ts, channel, text) VALUES (?, ?, ?, ?) \
+         ON CONFLICT(source_id, ts, channel) DO NOTHING",
+    )?;
+    let mut inserted = 0;
+    for (ts, channel, text) in rows {
+        inserted += stmt.execute(params![source_id, ts, channel, text])?;
+    }
+    Ok(inserted)
+}
+
+/// Drop every annotation belonging to a source. The other half of Rebuild.
+///
+/// Annotations are Tier 1, derived from the same bytes as the readings. A rebuild that
+/// re-derived one and not the other would leave a timeline whose suggestions came from
+/// a file the readings no longer agree with.
+pub fn delete_annotations_for_source(tx: &Transaction<'_>, source_id: i64) -> Result<usize> {
+    Ok(tx.execute("DELETE FROM annotation WHERE source_id = ?", [source_id])?)
 }
 
 /// Drop every reading belonging to a source. The "Rebuild from scratch" primitive;

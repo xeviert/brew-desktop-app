@@ -224,7 +224,12 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
       `fermentrack/store.rs` (offsets, headers, the `SyncState` row)
 - [x] 2g's two primitives land here, unwired: `delete_readings_for_source` (Rebuild —
       a restart deletes before refetching, or `DO NOTHING` preserves exactly the bad
-      rows Rebuild exists to fix) and `newest_reading` (the footer's data age)
+      rows Rebuild exists to fix) and `newest_reading` (the footer's data age).
+      3d added `insert_annotations` / `delete_annotations_for_source` alongside
+      them: `annotation` is Tier 1, derived from the same bytes, so it is written
+      in the same transaction and deleted by the same Rebuild — re-deriving one
+      and not the other leaves 3d's suggestions quoting a file the readings no
+      longer agree with
 
 **2f. Discovery — no API lists the logs**
 - [x] v1: user pastes the log URL, or a path relative to the configured base, once
@@ -342,29 +347,90 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
 - [x] Nutrient schedule as first-class `recipe_item` rows with `offset_hours` —
       for a sugar wash this is the process variable that decides the batch
 
-**3c. Batches**
-- [ ] `batch` (code, recipe_version_id, beverage_type, vessel_id, status,
-      volume_l, og, fg, pitched_at, archived_at, notes)
-- [ ] `batch.code` unique; next code auto-suggested per type (`SELTZER-018`)
-- [ ] Status machine: planned → fermenting → conditioning → packaged → archived.
-      Illegal transitions rejected in the data layer, not just greyed out in the UI
-- [ ] `beverage_type` drives which optional side tables apply — no nullable
-      beer-only columns on `batch`
-- [ ] `batch_ingredient` (batch_id, ingredient_lot_id, qty, unit, stage, added_at)
-      — the *actuals*, against `recipe_item`'s plan
-- [ ] Planned-vs-actual view per batch
-- [ ] Never hard-delete a batch; `archived_at` only
+**3c. Batches** — `0004_batch.sql`, `db/batch.rs`
+- [x] `batch` (code, recipe_version_id, beverage_type, vessel_id, status,
+      volume_l, og, fg, pitched_at, archived_at, notes). `recipe_version_id` is
+      **nullable**: an experiment with no written recipe is still a batch, and a
+      throwaway recipe to satisfy a foreign key would be fiction in the one tier
+      that is never reconstructible. `plan_vs_actual` reports its every addition as
+      unplanned instead
+- [x] `create_batch` calls 3b's `lock_recipe_version` — the call 3b was written for.
+      It first checks the version's recipe agrees with the batch's `beverage_type`,
+      and refuses *before* the lock, so a typo leaves the version still editable
+- [x] `batch.code` unique; next code auto-suggested per type (`SELTZER-018`).
+      `suggest_batch_code` skips codes that don't fit the series rather than
+      rejecting them — `UNIQUE` is the only enforcement here
+- [x] Status machine: planned → fermenting → conditioning → packaged. Illegal
+      transitions rejected in the data layer, not just greyed out in the UI; a
+      no-op (`x → x`) is `Ok(false)`, the same idempotence rule as
+      `lock_recipe_version`. ~~→ archived~~ — **`archived_at` is the archive**, not
+      a status value: two places recording one fact is two places to disagree, and
+      an archived batch should still read as whatever it was doing when it was put
+      away
+- [x] `pitched_at` non-NULL is the gate out of `planned`. 3d's `pitch` event will
+      write that column rather than replace the rule — pitch is t=0 for the overlay,
+      the finish detector and lag time alike, and discovering afterwards that half
+      the batches have no t=0 is not a fix
+- [x] `beverage_type` drives which optional side tables apply — no nullable
+      beer-only columns on `batch`. It lives on `batch` in its own right and is not
+      read through the recipe, because a batch may have none
+- [x] `batch_ingredient` (batch_id, ingredient_lot_id, ~~qty, unit~~ **canonical
+      qty + entry pair**, stage, added_at) — the *actuals*, against `recipe_item`'s
+      plan. The `qty, unit` above predates 1c: a bare pair makes `SUM(qty)`
+      meaningless, which is every cost and every planned-vs-actual delta, so this
+      carries `qty_g`/`qty_l`/`qty_each` + `entry_qty`/`entry_unit` under the same
+      `CHECK` as `recipe_item` and `ingredient_lot`. `canonical_for_lot` resolves
+      the lot's ingredient and then calls 3a's `canonical_for_ingredient`, so the
+      dimension check is one code path across all three tables
+- [x] Planned-vs-actual view per batch — `plan_vs_actual`, keyed on
+      (ingredient, stage, occurrence) exactly as `diff_items` is, and *not* on when
+      the addition happened: a nutrient that slipped six hours is the row the batch
+      is diagnosed from, and keying on the time splits it into an omission plus a
+      surprise
+- [x] Never hard-delete a batch; `archived_at` only. An archived batch takes no
+      transition, no pitch time and no further additions
 
-**3d. Timeline and stream binding**
-- [ ] `batch_event` (batch_id, ts, kind, payload JSON, note)
-- [ ] Event kinds: pitch, nutrient_addition, flavoring_addition, temp_ramp,
-      cold_crash, transfer, fining, carbonation, package
-- [ ] `pitch` is required to leave `planned` — it is t=0 for every later comparison
-- [ ] `batch_stream` (batch_id, stream_id, starts_at, ends_at)
-- [ ] Reject overlapping bindings of one stream to two batches (SQLite has no
-      exclusion constraint — check on write, and test it)
-- [ ] Import Fermentrack's `beer_ann` / `fridge_ann` cells as suggested events
-- [ ] Timeline UI: events + manual measurements on one vertical list
+**3d. Timeline and stream binding** — `0005_timeline.sql`, `db/timeline.rs`
+- [x] `batch_event` (batch_id, ts, kind, payload JSON, note). `payload` is opaque
+      JSON at the data layer, like `source.config` and `ingredient.attrs` —
+      every kind carries different fields and none of them is queried
+- [x] Event kinds: pitch, nutrient_addition, flavoring_addition, temp_ramp,
+      cold_crash, transfer, fining, carbonation, package, **note**. The last is
+      beyond the list above on purpose: an imported annotation that maps to no
+      process step needs a home, and free text with nowhere to go is where a
+      closed set quietly stops being closed
+- [x] `pitch` is required to leave `planned` — it is t=0 for every later comparison.
+      **The event is the write path**: `record_pitch` inserts the row, sets
+      `batch.pitched_at` and moves planned → fermenting in one call, and `add_event`
+      refuses `EventKind::Pitch` so the column and the row cannot be written apart.
+      A partial unique index (`WHERE kind = 'pitch'`) makes a second pitch an error
+      rather than a silent second t=0. Undoing one is `undo_pitch`, the only
+      backwards status move in the app — it deletes the row, NULLs the column and
+      returns the batch to `planned` together, and is refused once the batch is
+      past `fermenting`
+- [x] `batch_stream` (batch_id, stream_id, starts_at, ends_at). No
+      `ON DELETE CASCADE` on `stream_id`: `stream` rows outlive a Rebuild precisely
+      so a binding survives one
+- [x] Reject overlapping bindings of one stream to two batches (SQLite has no
+      exclusion constraint — check on write, and test it). A `SELECT` before the
+      `INSERT` in the caller's transaction, over half-open `[starts_at, ends_at)`
+      so batch 18 may start exactly when 17 ends — that turnaround is what the
+      table is for. Two windows on the *same* batch are not an overlap: a sensor
+      unplugged and reconnected is one curve in two pieces
+- [x] Import Fermentrack's `beer_ann` / `fridge_ann` cells as suggested events.
+      **Stored at ingest, suggested on read**: 0005 adds a Tier 1 `annotation`
+      table that 2e's commit path fills in its existing transaction, and
+      `suggest_events_for_batch` reads it back through `batch_stream`. Writing
+      `batch_event` rows at ingest was rejected — it would have the Phase 2 sync
+      path writing Tier 2, which is the seam Option 2 exists to keep. A suggestion
+      is a computed struct, not a row; `accept_suggestion` is what makes it an
+      event, with `payload` recording that Fermentrack said it. The channels are
+      `vessel`/`chamber`, not `beer_ann`/`fridge_ann` — the schema linter rejects
+      any name containing "beer", and Fermentrack's vocabulary stays quarantined
+- [ ] Timeline UI: events + manual measurements on one vertical list —
+      **deferred to the Phase 3 UI pass**, with 3b's recipe screen and a batch
+      screen. Half of what this list renders is 3e's manual measurements, so it
+      lands once they exist
 
 **3e. Manual measurements**
 - [ ] One `source` with `kind='manual'` per batch; its streams bound via `batch_stream`
@@ -607,6 +673,17 @@ CREATE TABLE sync_state (
   last_error  TEXT,                   -- surfaced in the status footer
   synced_at   INTEGER NOT NULL
 );
+
+-- Added by 0005, but Tier 1: the `beer_ann` / `fridge_ann` cells of the same rows
+-- the readings come from, so a Rebuild deletes and re-derives both together.
+-- 3d reads it back through `batch_stream` as suggested `batch_event`s.
+CREATE TABLE annotation (
+  source_id   INTEGER NOT NULL REFERENCES source(id),
+  ts          INTEGER NOT NULL,
+  channel     TEXT NOT NULL,          -- 'vessel' | 'chamber'
+  text        TEXT NOT NULL,
+  PRIMARY KEY (source_id, ts, channel)
+) WITHOUT ROWID;
 ```
 
 `WITHOUT ROWID` plus the composite PK makes `WHERE stream_id = ? AND ts BETWEEN ?
@@ -628,7 +705,10 @@ recipe ──< recipe_version ──< recipe_item >── ingredient
 
 `batch_stream` is the join that makes everything else work: it maps a physical
 sensor to a batch for a time window, so the same fermenter can host batch 17 and
-then batch 18 with the curves staying separate.
+then batch 18 with the curves staying separate. Windows are half-open
+`[starts_at, ends_at)` so that turnaround is not an overlap, and one stream may
+not be bound to two batches at once — SQLite has no exclusion constraint, so
+`bind_stream` checks before it inserts.
 
 Fuller Tier 2 shape, plus the reasoning behind it, in *Phase 3 in detail* below.
 
@@ -835,6 +915,24 @@ can rely on it.
 finish detector measures from it, and lag time is derived from it. Require it to
 leave `planned` rather than discovering later that half the batches can't be
 compared.
+
+Which means the pitch *event* is the write path for `batch.pitched_at`, not a
+second record of it: `record_pitch` writes the row, the column and the status
+transition together, `add_event` refuses the kind outright, and a partial unique
+index allows exactly one per batch. The column stays, because 3c's gate and every
+later query read it — but it is a denormalisation of the event, and only one
+function may write it. Undo is `undo_pitch`, deliberately a single named
+operation rather than a generic delete, because putting a batch back to `planned`
+is the only backwards move the status machine permits and it should be findable.
+
+Fermentrack's own `beer_ann` / `fridge_ann` cells are the seed for this list, but
+they arrive through Tier 1: the sync path stores them in `annotation` (same
+transaction as the readings, same Rebuild), and `suggest_events_for_batch` joins
+them to a batch through `batch_stream`. A suggestion is a computed struct with a
+keyword guess at its kind — deliberately shallow, since it exists to pre-select a
+dropdown and a cleverer classifier's mistakes would land in the one tier that is
+never reconstructible. Nothing becomes a `batch_event` until `accept_suggestion`
+is called, and what it writes records where it came from.
 
 ### Tier 2 shape after this phase
 

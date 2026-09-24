@@ -28,7 +28,7 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::{
     Result,
-    db::{Db, tier1},
+    db::{Db, tier1, tier1::AnnotationChannel},
     fermentrack::{LogRow, SyncState, SyncStep},
     units::Timestamp,
 };
@@ -44,6 +44,9 @@ pub struct CommitReport {
     pub streams_created: usize,
     /// Non-zero only on a restart.
     pub readings_deleted: usize,
+    /// `beer_ann` / `fridge_ann` cells that were not already stored. Phase 3d offers
+    /// them as suggested `batch_event`s; they are not readings and are counted apart.
+    pub annotations_inserted: usize,
 }
 
 /// Read a source's sync state back. `None` when the source has never been set up.
@@ -136,12 +139,20 @@ pub fn commit(
             SyncStep::Nothing => {}
             SyncStep::Restart(_) => {
                 report.readings_deleted = tier1::delete_readings_for_source(&tx, state.source_id)?;
+                // Annotations are derived from the same bytes. A rebuild that
+                // re-derived one and not the other would leave 3d's suggestions
+                // quoting a file the readings no longer agree with.
+                tier1::delete_annotations_for_source(&tx, state.source_id)?;
             }
             SyncStep::Advance(advance) => {
                 let (rows, streams_created) = fan_out(&tx, state.source_id, &advance.rows)?;
                 report.streams_created = streams_created;
                 report.rows_inserted = tier1::insert_readings(&tx, &rows)?;
                 report.rows_ignored = rows.len() - report.rows_inserted;
+
+                let annotations = annotations(&advance.rows);
+                report.annotations_inserted =
+                    tier1::insert_annotations(&tx, state.source_id, &annotations)?;
             }
         }
 
@@ -186,6 +197,28 @@ pub fn commit(
         "committed a sync step"
     );
     Ok(report)
+}
+
+/// The annotation cells of a chunk, as `annotation` rows.
+///
+/// Free text a human typed into Fermentrack, kept because it is the only record of what
+/// was done to a batch before this app existed — Phase 3d's
+/// [`suggest_events_for_batch`](crate::db::timeline::suggest_events_for_batch) reads it
+/// back through `batch_stream`. It is not a reading and does not go through
+/// [`fan_out`]: there is no stream for it and no number in it.
+fn annotations(rows: &[LogRow]) -> Vec<tier1::NewAnnotation<'_>> {
+    let mut out = Vec::new();
+    for row in rows {
+        for (channel, text) in [
+            (AnnotationChannel::Vessel, row.beer_ann.as_deref()),
+            (AnnotationChannel::Chamber, row.fridge_ann.as_deref()),
+        ] {
+            if let Some(text) = text {
+                out.push((row.ts, channel, text));
+            }
+        }
+    }
+    out
 }
 
 /// One CSV row to up to eight `(stream_id, ts, value)` triples, creating any stream
