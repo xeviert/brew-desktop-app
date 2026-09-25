@@ -1,9 +1,23 @@
-# Buildout Plan — Option 1 (App on top of Fermentrack)
+# Buildout Plan — v2 (own controller over MQTT, via a Raspberry Pi)
 
-Target: a Tauri desktop app that reads Fermentrack's data, enriches it with batch /
+> **Direction change, 2026-09-25: straight to v2.** Phases 0–3 were built for
+> Option 1 (the app on top of Fermentrack). Hardware for fermentation tracking
+> isn't all here yet, so the plan now skips Fermentrack and goes straight to v2:
+> ESP32s and an iSpindle publish over MQTT to an always-on Raspberry Pi, and the
+> desktop app syncs from the Pi. What that changes, and why, is in
+> [ARCHITECTURE.md — "Decision: straight to v2"](../ARCHITECTURE.md#decision-straight-to-v2).
+> The new work is **Phase V**, between Phase 3 and Phase 4. It is lettered, not
+> numbered, because code comments and frozen migrations already cite Phases 4–7
+> by number. The `fermentrack` module stays in the tree, tested and unused: part
+> of it moves into a shared module in Va, and the rest is the fallback if v2
+> stalls.
+
+Target: a Tauri desktop app that reads sensor data, enriches it with batch /
 recipe / production records in a local SQLite file, and becomes the brewery
-operating system. Fermentrack stays the fermentation-control appliance and the
-logger of record. See [../ARCHITECTURE.md](../ARCHITECTURE.md) for the why.
+operating system. ~~Fermentrack stays the fermentation-control appliance and the
+logger of record~~ — **v2:** the ESP32 firmware is the control appliance, and
+`brewd` on the Pi is the logger of record. See [../ARCHITECTURE.md](../ARCHITECTURE.md)
+for the why.
 
 **Scope:** hard seltzer first, but beer and other alcoholic fermentables are in
 scope from the start. That is a schema constraint, not a someday-feature — no
@@ -13,10 +27,11 @@ schedules) hangs off optional per-type tables rather than being bolted onto a
 seltzer-shaped core. Fermentrack's own `Beer` naming stays quarantined inside the
 `fermentrack` module.
 
-**MQTT is v2, not v1.** v1 talks HTTP to Fermentrack, which has no MQTT anyway.
-v2 drops Fermentrack and speaks MQTT straight to the ESP32s. Nothing in v1 should
-assume a broker exists; the traits in "Keeping the Option 2 door open" are where
-MQTT lands later.
+**MQTT belongs to the Pi, not the desktop app.** ~~Nothing in v1 should assume a
+broker exists~~ — v2 needs one, and it runs on the Pi next to `brewd`. The desktop
+app still takes no MQTT dependency. It syncs `brewd`'s journals over HTTP with the
+same byte-offset resume Phase 2 built for Fermentrack. `brewd` is the only MQTT
+client that ingests, and it also publishes setpoints (Phase 6).
 
 ---
 
@@ -31,10 +46,28 @@ MQTT lands later.
 - [x] Cadence: `data_point_log_interval` default 30 s (10 s…1 h). Keep everything
 - [x] Control path: `brewpi-script` socket, cp437, `setBeer=<temp>` etc.
 - [x] Lock the frontend stack (proposal below)
-- [ ] **Blocked — no Fermentrack instance yet.** Confirm against a real box:
-      `curl http://<host>/api/devices/`, list `/data/`, capture one real `_full.csv`
-- [ ] Unblock the blocker: write a fixture generator instead (see Phase 2 detail).
+- [ ] ~~**Blocked — no Fermentrack instance yet.** Confirm against a real box:
+      `curl http://<host>/api/devices/`, list `/data/`, capture one real `_full.csv`~~
+      — **obsolete under v2**: no Fermentrack box will exist
+- [x] Unblock the blocker: write a fixture generator instead (see Phase 2 detail).
       Phases 1–2 are fully buildable without Fermentrack ever running
+
+**v2 spikes** — these gate Phase V, and each ends in a committed capture, not a note
+- [ ] Pick the Raspberry Pi model (TBD) and record it in [HARDWARE.md](HARDWARE.md).
+      It needs an OS on an SSD or a high-endurance card: `brewd` appends a journal
+      line every few seconds, all year
+- [ ] Mosquitto on the Pi: one listener on the LAN, one user for devices and one
+      for `brewd`, and persistence off. `brewd`'s journal is the record, not the broker
+- [ ] Reflash ESP32 #1 from BrewPi-ESP32 to ESPHome: `dallas_temp` for both probes,
+      a `thermostat` climate, and the `mqtt:` component (no Home Assistant API).
+      Capture every topic and payload it publishes, plus the setpoint command topic,
+      from `mosquitto_sub -v -t '#'`
+- [ ] iSpindle on the same broker. Capture one full wake cycle: the stock firmware
+      publishes one topic per field (`ispindel/<name>/tilt`, `temperature`,
+      `battery`, `gravity`, `interval`, `RSSI`, …). Confirm the field list against
+      the capture, not against this line
+- [ ] Record in config which unit the iSpindle's calibration polynomial outputs (SG
+      or °P). No payload says so
 
 ### Phase 1 — Skeleton
 **1a. Project shape**
@@ -85,6 +118,12 @@ MQTT lands later.
 its schema version in the UI, and `cargo test --workspace` is green in CI.
 
 ### Phase 2 — Ingest
+> **v2:** Phase 2 is done, and most of it survives. The scheduler (2g), the Tier 1
+> write path (2e) and the offset discipline (2c–2d) are what Phase V's journal
+> sync reuses. What goes dormant is the Fermentrack-specific surface: the
+> `_full.csv` dialect (2b), discovery (2f) and the real-capture validation. Va
+> lists what moves.
+
 **2a. Test rig first — you have no Fermentrack** (`crates/fixtures`, package `brewfixture`)
 - [x] `xtask gen-fixture`: emit a byte-accurate `_full.csv` (header + rows,
       `%Y/%m/%d %H:%M:%SZ`, plausible ferment curve, gaps, absent sensors, an
@@ -104,7 +143,9 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
       — landed with 2e as `tests/sync_write.rs`, run under both `RangeMode`s and
       asserted to reach the same database either way. 2c has the transport half:
       `a_resume_fetches_only_the_bytes_appended_since_the_last_sync`
-- [ ] Replace fixtures with a real capture once Fermentrack is up — same tests
+- [ ] ~~Replace fixtures with a real capture once Fermentrack is up — same tests~~
+      — **obsolete under v2**. Vd's journal fixtures get the real-capture treatment
+      instead, from the Phase 0 v2 spikes
 
 **2b. Parser (`fermentrack/csv_log.rs`)**
 - [x] Parse the header row into a column map; unknown columns ignored, not fatal
@@ -249,7 +290,8 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 - [x] `probe_log` asserts `log_url(base_url, remote_path) == url` before returning.
       `source.config` holds `base_url` + ids; the path lives only in `sync_state`,
       where the `ON CONFLICT` that resets `byte_offset` on a repoint can see it change
-- [ ] Optional helper: scrape `/beer/list/` and `/gravity/logs/` to offer a picklist.
+- [ ] ~~Optional helper: scrape `/beer/list/` and `/gravity/logs/` to offer a picklist.~~
+      **Obsolete under v2** — `brewd` can list its own journals (Vc).
       **Deferred**: paste-a-URL covers one or two fermenters, and scraping needs an
       HTML parser dependency plus a golden of Fermentrack's list page that cannot be
       captured without a live box. Revisit after the Phase 0 validation run
@@ -279,9 +321,9 @@ its schema version in the UI, and `cargo test --workspace` is green in CI.
 - [x] `ReadingSource` is `dyn`-safe (`async-trait`) and lives in `sync/`, which imports
       nothing from `fermentrack`. v2's MQTT source is a new impl, not a new scheduler
 
-**2h. Deferred**
-- [ ] `_annotations.almost_json` → parked; annotations are already in `_full.csv`
-- [ ] HTTP listener for `GenericPushTarget` — only if 60 s latency proves too slow
+**2h. Deferred** — both **obsolete under v2**, being Fermentrack features
+- [ ] ~~`_annotations.almost_json` → parked; annotations are already in `_full.csv`~~
+- [ ] ~~HTTP listener for `GenericPushTarget` — only if 60 s latency proves too slow~~
 
 **Done when:** pointing the app at the fixture server and growing the file
 produces a correct, gap-free, duplicate-free `reading` table across app restarts.
@@ -426,7 +468,10 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
       is a computed struct, not a row; `accept_suggestion` is what makes it an
       event, with `payload` recording that Fermentrack said it. The channels are
       `vessel`/`chamber`, not `beer_ann`/`fridge_ann` — the schema linter rejects
-      any name containing "beer", and Fermentrack's vocabulary stays quarantined
+      any name containing "beer", and Fermentrack's vocabulary stays quarantined.
+      **Dormant under v2**: no v2 source writes `annotation`, so
+      `suggest_events_for_batch` returns nothing. The table and function stay; they
+      cost nothing and would be revived by a Fermentrack fallback
 - [ ] Timeline UI: events + manual measurements on one vertical list —
       **deferred to the Phase 3 UI pass**, with 3b's recipe screen and a batch
       screen. Half of what this list renders is 3e's manual measurements, so it
@@ -549,13 +594,108 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
 **Done when:** a batch can be created from a recipe version, pitched, have manual
 readings and events logged against it, and show a correct OG/FG/ABV and
 planned-vs-actual — with the Fermentrack curve already attached via `batch_stream`.
+**v2:** "the sensor curve", attached the same way — see Ve for how it gets bound.
+
+### Phase V — v2 transport: Raspberry Pi, MQTT, `brewd`
+Replaces Fermentrack as the path from sensor to `reading`. Shape:
+
+```text
+ESP32 (ESPHome) ─┐                      Raspberry Pi                    Desktop
+                 ├─ MQTT ─► Mosquitto ─► brewd ─► journals ─ HTTP Range ─► brew-app
+iSpindle ────────┘                        │                                (SQLite)
+                                          └─ setpoints, profiles, alerts (Phase 6)
+```
+
+The control loop runs on the ESP32. `brewd` runs what must happen while the
+laptop is shut. The desktop app does everything else.
+
+**Va. Rework from phases 1–3**
+- [ ] Migration runner gets a table-rebuild mode. `apply_upto` runs every migration
+      inside a transaction with `foreign_keys=ON`, and that pragma is a silent no-op
+      inside a transaction. Rebuilding a table other tables reference needs
+      `foreign_keys=OFF` *before* `BEGIN`, a `PRAGMA foreign_key_check` that must
+      return no rows before `COMMIT`, and `foreign_keys=ON` after. Mark such
+      migrations explicitly in `MIGRATIONS`; don't infer it from the SQL. Test with
+      a populated `stream` pointing at the rebuilt table
+- [ ] Migration `0007`: rebuild `source` without the `kind` CHECK. 0001 closed it
+      over the two Fermentrack kinds plus `manual` — the one closed-vocabulary column
+      that did not follow its own `metric` reasoning. `SourceKind` becomes the
+      enforcement, as `Metric` is. Add `brewd_journal`
+- [ ] Hoist the format-agnostic half of Phase 2 out of `fermentrack/` into a
+      shared module (proposal: `journal/` or `sync/offset`): `split_complete_lines`,
+      `MAX_PARTIAL_RECORD_BYTES`, the `Range` fetch and `FetchOutcome` classification,
+      the record-boundary resume check, and commit-offset-with-readings. `fermentrack/`
+      keeps only the `_full.csv` dialect. The existing tests move with the code and
+      must pass unchanged — that is the proof the hoist changed nothing
+- [ ] `sync_state` is reused as is. `remote_path` becomes the journal path on
+      `brewd`, and `header` the journal's header line. No schema change
+- [ ] `Metric` gains `tilt_deg`, `battery_v`, `rssi_dbm`. No migration — `metric`
+      has no CHECK, by 0001's design. `state` stays and goes unused unless the
+      firmware publishes heat/cool action
+- [ ] Config: a `brewd` section (`base_url`) beside `fermentrack`, and a
+      `gravity.ispindel_unit` (`sg` | `plato`) from the Phase 0 spike. MQTT broker
+      settings are `brewd`'s config, not the desktop app's
+- [ ] Tier 1 is no longer "cheap to throw away" in the old sense. Rebuild still
+      works, but only because `brewd`'s journals are the raw archive. Lose the Pi's
+      disk and Tier 1 is gone. Cross-cutting backup now covers the journals
+
+**Vb. Firmware and broker** (lands with the Phase 0 v2 spikes)
+- [ ] ESPHome config committed to the repo (proposal: `firmware/esp32-1.yaml`),
+      secrets in `secrets.yaml`, gitignored
+- [ ] Probes addressed by OneWire address, never by bus order: vessel probe →
+      `temp_c`, chamber probe → `fridge_temp_c`
+- [ ] `thermostat` climate with `min_cooling_off_time` / `min_cooling_run_time`.
+      BrewPi protected the compressor. Nothing does now unless this is set
+- [ ] The ESP32 keeps controlling to its last setpoint when the Pi or the broker
+      is down. Test it by stopping Mosquitto mid-run
+
+**Vc. `brewd` — new crate `crates/brewd`, binary, depends on `brewcore`, no `tauri`**
+- [ ] MQTT subscriber (`rumqttc`). **Timestamp at receipt**, UTC epoch seconds —
+      iSpindle and ESPHome payloads carry no time, and Mosquitto adds none
+- [ ] Group an iSpindle wake cycle into one timestamp. The stock firmware publishes
+      one topic per field in a burst, and stamping each field separately draws a
+      trend out of one reading. Same rule as 3e's `record_quick_entry`
+- [ ] Append-only journal per device, CSV with a header row, `\n`-terminated,
+      flushed per line. Keep the raw `tilt` beside `gravity`: gravity is a calibration
+      polynomial applied on the device, and tilt is what lets SG be recomputed after
+      a recalibration
+- [ ] HTTP: `GET /journals/` lists journals (the listing Fermentrack never had);
+      `GET /journals/<name>` honours `Range`. Read-only, LAN-only, no auth — same
+      trust model Fermentrack had
+- [ ] Runs under systemd, restarts on failure. Logs to journald
+- [ ] Cross-compiled for the Pi's target (`aarch64-unknown-linux-gnu` unless the
+      chosen model says otherwise), via `cargo xtask` or `cross`
+- [ ] No SQLite on the Pi. `brewery.db` stays on the desktop; `brewd` owns only
+      its journals and its config. Revisit only if a second machine needs to write
+
+**Vd. Journal ingest** — a `ReadingSource` impl beside `fermentrack::source`
+- [ ] Parser for the journal format. Rows map to metrics by header, like 2b
+- [ ] Fixture generator in `crates/fixtures`: iSpindle bursts, a probe that drops
+      out, a `brewd` restart mid-line, a journal rotated underneath a resume
+- [ ] The growing-file test from 2a, rerun against journals under both `RangeMode`s
+- [ ] Replace generated fixtures with the Phase 0 captures — same tests
+
+**Ve. Desktop wiring**
+- [ ] Sources pane: pick journals from `brewd`'s listing instead of pasting URLs
+- [ ] v2 streams belong to a physical sensor and outlive batches, which is the case
+      `batch_stream` was designed for. Add a vessel → default-streams mapping (Tier 2,
+      referencing `stream.id`, never a topic) so `record_pitch` binds the vessel's
+      sensors from pitch onward and a status move to `packaged` closes the window
+- [ ] Footer: `brewd` reachability as its own state, distinct from "no new data"
+
+**Done when:** the Pi logs both probes and the iSpindle with the laptop shut, and
+opening the app backfills a gap-free curve bound to the pitched batch.
 
 ### Phase 4 — Dashboard & curves
 - [ ] Batch detail view: the ARCHITECTURE.md status card (OG, current SG, est. ABV, pH, temp)
 - [ ] Fermentation curve chart, multi-axis (SG / temp / pH), event markers
 - [ ] Downsampling for long series so the chart stays interactive
+- [ ] Smoothing for iSpindle SG — tilt-derived gravity jitters by a few points,
+      and the stability detector must read the smoothed series, not the raw one
 - [ ] "Fermentation stable for Nh" detector
 - [ ] Home view: active batches, last reading age, stale-data warning
+- [ ] iSpindle health on the home view: battery voltage and RSSI. A dead battery
+      and a flat ferment look identical from the gravity series alone
 
 ### Phase 5 — Analytics
 - [ ] Batch-to-batch comparison (overlay curves, time-aligned from pitch)
@@ -565,14 +705,30 @@ planned-vs-actual — with the Fermentrack curve already attached via `batch_str
 - [ ] CSV export of any result set
 
 ### Phase 6 — Alerts & automation rules
-- [ ] Rule engine: condition on latest readings → action
-- [ ] Desktop notifications
+> **v2:** rules and profiles run in `brewd`, not the desktop app. An alert that
+> only fires while the laptop is open doesn't fire at 3 am, and a 09:00 ramp can't
+> depend on someone having the app open. The rule engine is `brewcore` code, so
+> the move is about where it runs, not a rewrite.
+
+- [ ] Rule engine: condition on latest readings → action. Lives in `brewcore`,
+      runs in `brewd`
+- [ ] ~~Desktop notifications~~ — **v2:** push notifications from `brewd`
+      (proposal: ntfy). The desktop app may mirror them but is not the channel
 - [ ] Rule: fermentation finished (SG slope flat for N hours)
-- [ ] Rule: temp out of band, sensor stale, no data
-- [ ] Optional write-path: `setBeer=`/`setFridge=`/`setActiveProfile=` over the
+- [ ] Rule: temp out of band, sensor stale, no data. "No data" includes the
+      iSpindle going silent — battery, or it sank
+- [ ] ~~Optional write-path: `setBeer=`/`setFridge=`/`setActiveProfile=` over the
       brewpi-script socket, behind a confirm; mirror it in our own records because
-      Fermentrack's DB won't see it
-- [ ] Rules evaluated on ingest, not on a UI timer
+      Fermentrack's DB won't see it~~ — **v2:** a `Controller` trait whose first
+      impl publishes the setpoint to the ESPHome climate's command topic. Behind a
+      confirm, and every setpoint change becomes a `temp_ramp` `batch_event`
+- [ ] Temperature profiles (Fermentrack had these; now they're ours): a schedule
+      of setpoints relative to pitch, executed by `brewd`. The desktop app edits
+      them and pushes the definition to `brewd` over HTTP. `brewd` keeps it in a
+      state file, since it has no database, and resumes it after a reboot. This is
+      `brewd`'s first write endpoint, so it is where "LAN-only, no auth" gets
+      revisited
+- [ ] Rules evaluated on ingest, not on a UI timer — in v2, on `brewd`'s ingest
 
 ### Phase 7 — Production records
 - [ ] Cleaning / sanitation log, per vessel
@@ -583,9 +739,12 @@ planned-vs-actual — with the Fermentrack curve already attached via `batch_str
 
 ### Cross-cutting
 - [ ] `brewery.db` backup command (file copy + integrity check)
+- [ ] Journal backup off the Pi. Under v2 the journals are the only raw copy of
+      every reading, and a Pi's disk is the likeliest part to fail
 - [ ] Schema migration test: old db → new version, no data loss
 - [ ] All timestamps stored UTC epoch seconds, formatted at the edge
-- [ ] Keep every Fermentrack call inside one `fermentrack` module — the seam for Option 2
+- [ ] Keep every Fermentrack call inside one `fermentrack` module — the seam for Option 2.
+      Still holds under v2: the module is dormant, not deleted, and nothing new imports it
 
 ---
 
@@ -607,6 +766,11 @@ planned-vs-actual — with the Fermentrack curve already attached via `batch_str
 | Frontend | Svelte 5 + TypeScript | small, no virtual-DOM overhead on live charts |
 | Charts | `uPlot` | handles 100k+ points; ECharts is heavier than this needs |
 | Test | `cargo test` + `wiremock` | deterministic ingest tests, no live Fermentrack |
+| Always-on host | Raspberry Pi (model TBD) | v2: logger of record and profile runner while the desktop is off |
+| Broker | Mosquitto | v2, on the Pi. Persistence off — `brewd`'s journal is the record |
+| MQTT client | `rumqttc` | v2, `brewd` only. The desktop app never links it |
+| Device firmware | ESPHome | v2: `dallas_temp` + `thermostat` + `mqtt`, control loop on the ESP32 |
+| Gravity | iSpindle, stock firmware | v2: publishes over MQTT natively |
 
 Frontend framework is the one genuinely swappable choice — React works if you
 prefer it. Everything else follows from ARCHITECTURE.md.
@@ -616,6 +780,8 @@ prefer it. Everything else follows from ARCHITECTURE.md.
 ```text
 brew-app/
 ├── crates/
+│   ├── brewd/             # v2: headless Pi daemon — MQTT in, journals out, profiles
+│   ├── fixtures/          # brewfixture: generated logs + wiremock harness
 │   └── brewcore/          # no tauri dependency — plain `cargo test`
 │       ├── src/
 │       │   ├── db/        # connection, migrations, queries
@@ -627,6 +793,7 @@ brew-app/
 │       └── migrations/    # 0001_tier1.sql, 0002_reference.sql, …
 ├── src-tauri/             # commands, app state, window setup. Thin.
 ├── src/                   # Svelte
+├── firmware/              # v2: ESPHome YAML per device
 └── xtask/                 # fixture generator, dev helpers
 ```
 
@@ -727,6 +894,9 @@ Doing this from day one stops error handling leaking `tauri::Error` into core.
 Two tiers, deliberately separated.
 
 **Tier 1 — derived from Fermentrack.** Cheap to throw away and re-sync.
+**v2:** derived from `brewd`'s journals, and re-syncable only while they exist.
+`source.kind` gains `brewd_journal` in Va's `0007`, which also drops the CHECK
+shown below.
 
 ```sql
 CREATE TABLE source (
@@ -916,7 +1086,9 @@ deliberate: a sync that skipped the bad record would leave a hole in `reading` t
 nothing downstream could ever detect.
 
 App closed for a week means step 2 fetches a week of bytes in one request. That is
-exactly why Fermentrack stays the logger of record.
+exactly why Fermentrack stays the logger of record. **v2:** the same reasoning is
+why `brewd` exists, and why its journals are append-only files served with
+`Range` rather than an API — so this loop applies to them nearly unchanged.
 
 ### Discovery
 
@@ -1073,6 +1245,11 @@ Make both thresholds config, not constants — the first ten batches will tell y
 the real numbers. Log every evaluation so you can tune against history instead of
 guessing.
 
+**v2:** with an iSpindle, the slope is computed over the smoothed series (Phase 4)
+— raw tilt-derived gravity jitters enough to fake a slope in either direction.
+The alerting copy of this detector runs in `brewd` (Phase 6); the dashboard copy
+runs in the app. Same `brewcore` function, two callers.
+
 ---
 
 ## Keeping the Option 2 door open
@@ -1101,6 +1278,22 @@ Worth knowing while planning: master's last commit is 2023-09-04 and Fermentrack
 is unreleased. The CSV format is therefore stable to depend on, and Option 2 is a
 question of when rather than if.
 
+### What actually happened (2026-09-25)
+
+The answer to "when" was "now". The four rules held: the `fermentrack` module is
+self-contained, `external_id` is opaque, no Tier 2 table names a Fermentrack id,
+and `ReadingSource` is the scheduler's only view of a source. The `Controller`
+trait was never built because Phase 6 hadn't started, so v2 builds it with MQTT as
+its first impl.
+
+What the plan above got wrong: it put the `ReadingSource` MQTT impl in the
+desktop app. MQTT has no history. A desktop app that is closed misses every
+message, and backfill on launch only worked because Fermentrack was an always-on
+logger. So v2 adds a Raspberry Pi running `brewd` in Fermentrack's place, and
+the desktop's new `ReadingSource` reads `brewd`'s journals over HTTP — much
+closer to the existing Fermentrack impl than to an MQTT subscriber. Phase V has
+the detail.
+
 ---
 
 ## Order of real work
@@ -1118,3 +1311,13 @@ the fixtures were honest — rather than a prerequisite at the start.
 
 Phases 3–5 are the value. Phases 6–7 are worth deferring until enough batches
 have run to know what you actually want alerted and recorded.
+
+**v2 order (from 2026-09-25):** Phase 0's v2 spikes (Pi, Mosquitto, ESPHome,
+iSpindle captures) → Va (migration runner, `0007`, the hoist — all testable with
+no hardware) → Vc–Vd (`brewd` and journal ingest, against generated fixtures
+until the captures exist) → Ve → the Phase 3 UI pass → Phase 4. Va comes first
+among the code work because Vd builds on the hoisted module. One exception to
+"defer Phase 6": setpoint control and profiles are no longer optional, since
+nothing else runs them without Fermentrack. The ESP32 holds the last setpoint on
+its own, so until Phase 6 lands, set it by hand with `mosquitto_pub` or
+ESPHome's `web_server`.

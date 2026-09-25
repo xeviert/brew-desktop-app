@@ -1,3 +1,6 @@
+> **2026-09-25: the project went straight to v2** — see
+> [Decision: straight to v2](#decision-straight-to-v2) at the end. Everything
+> before it is the original reasoning, kept because v2 reuses most of it.
 
 ### Option 1: Your software on top of Fermentrack — what I'd recommend initially
 
@@ -182,3 +185,68 @@ Then after 20 batches, you can actually query:
 That's where your software becomes substantially more valuable than a generic brewing dashboard.
 
 **So I would not build a Fermentrack replacement first. I'd build your brewery software as the layer above it, while keeping the interface between the two clean enough that you can replace Fermentrack later.**
+
+---
+
+## Decision: straight to v2
+
+*2026-09-25. Supersedes the recommendation above; the reasoning above is kept
+because v2 reuses most of it.*
+
+Phases 0–3 were built for Option 1. The fermentation hardware isn't all here yet,
+so there is time to build the controller, and Fermentrack never gets installed.
+The hardware v2 targets: the existing ESP32 with a second DS18B20, and an iSpindle
+for gravity.
+
+```text
+ESP32 (ESPHome) ─┐                    Raspberry Pi                         Desktop
+2× DS18B20       ├─ MQTT ─► Mosquitto ─► brewd ─► journals ── HTTP Range ─► Brew App
+iSpindle ────────┘                        │                                 SQLite
+                                          └─ setpoints · profiles · alerts
+```
+
+**What survives.** Everything above holds except the logger. The desktop app
+stays desktop, SQLite stays SQLite, Tier 1 and Tier 2 stay split, and the rest of
+your application really doesn't have to change. Phases 1–3 need a handful of
+targeted fixes, not a rewrite. They're listed in
+[docs/BUILDOUT.md](docs/BUILDOUT.md) under Phase V.
+
+**What breaks: "Fermentrack stays the logger of record."** The desktop decision
+depended on something always-on logging while the app is closed, so the app
+could backfill on launch. MQTT keeps no history. Mosquitto's queue for an
+offline client is capped (1000 messages by default), and iSpindle and ESPHome
+payloads carry no timestamp, so a queued message would be stamped with its
+delivery time, not its measurement time. Control has the same problem: a 09:00
+ramp or a 3 am temperature alarm can't depend on the laptop being open.
+
+**So something has to be always on: a Raspberry Pi** (model TBD). It takes over
+Fermentrack's role, and only that role:
+
+- **Mosquitto**, the broker the devices publish to.
+- **`brewd`**, a headless binary built from the same `brewcore` crate. It
+  subscribes, timestamps each message on receipt, and appends to one journal file
+  per device. It serves those journals over HTTP with `Range` exactly the way
+  Fermentrack served its CSVs, so the desktop's Phase 2 sync machinery works
+  against it with the dialect swapped. It also runs temperature profiles and
+  alert rules, because those must run while the app is closed.
+- **The control loop stays on the ESP32** (ESPHome's `thermostat`). If the Pi dies,
+  the fridge still holds its last setpoint. If the ESP32 dies, nothing else could
+  have saved it anyway.
+
+The Pi deliberately does **not** own `brewery.db`. That would turn the desktop
+app into a client of a server — the web-app shape this document rejected, with
+auth and deploys to follow. The journals are raw, append-only and dumb, and the
+desktop keeps everything that has meaning. Revisit if a second person needs to
+write.
+
+**The costs.** Tier 1 is no longer backed by a box someone else maintains. The
+journals are now the only raw copy of every reading, so they need a backup too.
+And BrewPi's compressor protection, profile runner and alerting are now this
+project's code or config.
+
+Updated picture:
+
+```text
+             NOW (v2)
+Your App → brewd (Pi) → MQTT → ESP32 / iSpindle
+```
