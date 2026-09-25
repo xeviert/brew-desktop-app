@@ -1,365 +1,67 @@
-//! Phase 2d. Where a byte offset moves to, and what a half-written line costs.
+//! Phase 2d's `_full.csv` side. The byte-offset machinery moved to
+//! [`crate::journal::ingest`](mod@crate::journal::ingest) in Va; what is left is what Fermentrack's bytes mean,
+//! as a [`Dialect`], and the Phase 2 names kept as aliases so no caller changed.
 //!
-//! Pure: bytes and a stored offset in, a decision out. No HTTP, no database, no clock —
-//! [`ingest`] is a function of its arguments and nothing else, which is why every rule
-//! below is tested against a `Vec<u8>` with no server and no `Db`. Phase 2e turns one
-//! [`SyncStep`] into one transaction.
-//!
-//! There is no remainder buffer, and its absence is the design. `byte_offset` only ever
-//! advances past a complete, terminated record, so the next `Range: bytes=<offset>-`
-//! re-requests the partial tail for free — at most one record, correct across a process
-//! restart, and with no schema column to hold it. What that costs is a rule with no
-//! exceptions: **split before you parse**, spelled out on
-//! [`split_complete_lines`](crate::fermentrack::split_complete_lines).
-//!
-//! Two arithmetic rules carry the rest of the weight:
-//!
-//! 1. **Every offset derives from `FetchOutcome::Fresh::offset`**, never from
-//!    `SyncState::byte_offset`, and `offset == 0` is the only discriminator between a
-//!    first fetch and a resume. After a [`Restart`] the caller fetches from 0 while the
-//!    stored offset is still stale, so a base taken from state would claim a range that
-//!    was never parsed.
-//! 2. **Never compute an offset from a buffer length.** Two truncations stack — the
-//!    split cuts the tail, `stopped_early` cuts inside the complete portion — and only
-//!    `ParseReport::bytes_consumed` survives both.
+//! The tests below stayed: they drive the shared machinery with real `_full.csv`
+//! bytes, and passing unchanged is the proof the hoist changed nothing.
 
 use crate::{
     Error, Result,
-    fermentrack::{
-        FetchOutcome, LogRow, ParseReport, csv_log::split_first_record, parse_with_header,
-        preview_bytes, split_complete_lines,
-    },
+    db::{Metric, tier1::AnnotationChannel},
+    fermentrack::{LogRow, ParsedChunk, parse_with_header},
+    journal::{self, Dialect},
     units::Timestamp,
 };
 
-/// The `sync_state` row.
-///
-/// [`ingest`] reads only `remote_path` (for error messages), `byte_offset` (advisory —
-/// see the module docs) and `header`. The rest is carried so that Phase 2e can load and
-/// store the row whole.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SyncState {
-    pub source_id: i64,
-    pub remote_path: String,
-    pub byte_offset: u64,
-    /// The header line as fetched, **without its terminator** — a CRLF that became an
-    /// LF somewhere in transit is not a column change.
-    pub header: Option<String>,
-    pub last_ts: Option<Timestamp>,
-    pub last_error: Option<String>,
-    pub synced_at: Timestamp,
-}
+pub use crate::journal::{
+    FetchOutcome, MAX_PARTIAL_RECORD_BYTES, Restart, RestartReason, SyncFault, SyncState,
+};
 
-/// An incomplete record larger than this is damage, not Fermentrack mid-`writerow`.
-///
-/// Without a cap, one stray `"` puts `split_complete_lines` inside a quoted field for
-/// the rest of the file: every poll finds no complete record, writes nothing, reports
-/// nothing, and the source stops **silently** — the one outcome 2d exists to prevent. A
-/// real record is 60–120 bytes, so this is roughly 500× headroom; at the default 30 s
-/// cadence a stuck offset crosses it in about four hours. The trade is deliberate: a
-/// cap set too low wedges a healthy source, while one set high only delays noticing a
-/// source that is already broken.
-pub const MAX_PARTIAL_RECORD_BYTES: usize = 64 * 1024;
+pub type SyncStep = journal::SyncStep<LogRow>;
+pub type Advance = journal::Advance<LogRow>;
 
-/// What one fetch means for persisted state.
-///
-/// One variant per distinct write, the same rule
-/// [`FetchOutcome`](crate::fermentrack::FetchOutcome) follows: a persisted-state change
-/// is a variant, and anything that leaves state alone except `last_error` is an `Err`.
-/// That is why restarting is a variant here rather than an error — an error would force
-/// every caller to special-case one error as "reset and retry".
-#[derive(Debug, Clone, PartialEq)]
-pub enum SyncStep {
-    /// Nothing to write but `synced_at`. The file did not grow, or it grew by less than
-    /// one complete record. `last_error` is left alone: if it was true before this poll
-    /// it is still true.
-    Nothing,
-    Advance(Advance),
-    Restart(Restart),
-}
+/// Fermentrack's `_full.csv`.
+pub struct FullCsv;
 
-/// Rows to write, and an offset to move to.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Advance {
-    /// `Fresh::offset + consumed`, never the length of what was fetched.
-    ///
-    /// **May equal the offset that was fetched.** A fault in the chunk's very first
-    /// record leaves nothing to move past, but the fault still has to reach
-    /// `last_error` — that is the difference between a source that wedges visibly and
-    /// one that silently stops. Do not collapse this case into [`SyncStep::Nothing`].
-    pub next_offset: u64,
-    pub rows: Vec<LogRow>,
-    /// `Some` only when this step read a header, i.e. when the fetch began at 0. `None`
-    /// means "leave `sync_state.header` alone", not "clear it".
-    pub header: Option<String>,
-    /// `true` when `header` differs from the one already stored. Informational only: a
-    /// header change can be *observed* solely at offset 0, and at offset 0 the offset is
-    /// already where a change would put it.
-    pub header_changed: bool,
-    /// The newest `ts` in this chunk, maxed against `SyncState::last_ts` — the newest
-    /// *seen*, not the last row in the buffer, because a clock step can put an older row
-    /// after a newer one. `None` means "leave it alone".
-    pub last_ts: Option<Timestamp>,
-    pub report: ParseReport,
-    /// Written to `last_error`. `None` **clears** it, so a resolved fault does not
-    /// outlive the condition in the status footer.
-    pub fault: Option<SyncFault>,
-}
+impl Dialect for FullCsv {
+    type Row = LogRow;
 
-/// Start the file again: offset 0, no header, no `last_ts`.
-///
-/// Clearing `last_ts` is not cosmetic. A recreated file is a different brew under the
-/// same name and its rows can predate everything we have; a stale `last_ts` would make
-/// every one of them look like evidence of a bad offset.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Restart {
-    pub reason: RestartReason,
-}
+    fn parse(name: &str, header: &str, body: &[u8]) -> Result<ParsedChunk> {
+        parse_with_header(name, header, body)
+    }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum RestartReason {
-    /// The remote file is shorter than our offset. Straight from [`FetchOutcome`].
-    Truncated { total: Option<u64> },
-    /// The resume chunk's first record is not a record, which proves `byte_offset` is
-    /// not where we think it is.
-    ///
-    /// This is also how a changed header gets noticed without spending a request on a
-    /// prefix probe. A log deleted and recreated is either shorter than our offset —
-    /// `Truncated` — or at least as long, in which case the resume lands mid-record and
-    /// arrives here. Both end at offset 0, where the header is read and compared.
-    NotOnARecordBoundary,
-    /// `byte_offset > 0` with no stored header: a torn write or a hand-edited database.
-    /// There is nothing to parse the continuation against.
-    NoStoredHeader,
-    /// Phase 2g's "Rebuild from scratch". The only reason here that is not a fault, and
-    /// the only one [`SyncStep::apply_to`] must *clear* `last_error` for: a button the
-    /// user pressed is not a condition to report, and 2g's scheduler backs off any
-    /// source whose `last_error` is set.
-    Requested,
-}
+    fn ts(row: &LogRow) -> Timestamp {
+        row.ts
+    }
 
-/// Something worth `last_error` that is not worth refusing the rows that did parse.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SyncFault {
-    /// `ParseReport::stopped_early`. The next poll refetches the faulty bytes and fails
-    /// identically, so the source stops with an error in the footer instead of skipping
-    /// rows nobody will notice are missing.
-    StoppedEarly { at_offset: u64 },
-    /// Every record in the chunk was skipped. Fermentrack's `column_headers` and
-    /// `data_point` both read `gravity_enabled` at write time, so toggling it on a live
-    /// `Beer` appends rows wider than the header the file was created with — 100 % row
-    /// loss with no error anywhere else.
-    EveryRecordSkipped { skipped: usize },
-    /// See [`MAX_PARTIAL_RECORD_BYTES`].
-    PartialRecordTooLong { bytes: usize },
-}
+    fn readings(row: &LogRow) -> impl Iterator<Item = (&str, Metric, f64)> {
+        // `Item` is invariant, so the `'static` column names are narrowed explicitly.
+        row.readings()
+            .map(|(column, metric, value)| (column as &str, metric, value))
+    }
 
-impl std::fmt::Display for RestartReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Truncated { total: Some(total) } => {
-                write!(f, "log truncated or recreated: it is now {total} bytes")
-            }
-            Self::Truncated { total: None } => write!(f, "log truncated or recreated"),
-            Self::NotOnARecordBoundary => {
-                write!(
-                    f,
-                    "resume did not begin on a record boundary; refetching whole"
-                )
-            }
-            Self::NoStoredHeader => write!(f, "no stored header to resume against"),
-            Self::Requested => write!(f, "rebuilding from the beginning"),
-        }
+    /// Free text a human typed into Fermentrack. `beer_ann` is about the liquid and
+    /// `fridge_ann` about the chamber around it.
+    fn annotations(row: &LogRow) -> impl Iterator<Item = (AnnotationChannel, &str)> {
+        let cells: [(AnnotationChannel, Option<&str>); 2] = [
+            (AnnotationChannel::Vessel, row.beer_ann.as_deref()),
+            (AnnotationChannel::Chamber, row.fridge_ann.as_deref()),
+        ];
+        cells
+            .into_iter()
+            .filter_map(|(channel, text)| text.map(|text| (channel, text)))
+    }
+
+    /// A `_full.csv` header is ASCII column names; anything else means the URL points
+    /// at a `_graph.csv`, a gravity log, or not a log at all.
+    fn not_a_log(detail: String) -> Error {
+        Error::NotAFermentrackLog { detail }
     }
 }
 
-impl std::fmt::Display for SyncFault {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::StoppedEarly { at_offset } => {
-                write!(
-                    f,
-                    "unreadable record at byte {at_offset}; sync stopped there"
-                )
-            }
-            Self::EveryRecordSkipped { skipped } => write!(
-                f,
-                "all {skipped} records in this chunk were skipped; the header may no longer \
-                 match the rows"
-            ),
-            Self::PartialRecordTooLong { bytes } => write!(
-                f,
-                "{bytes} bytes without a complete record; the log looks damaged"
-            ),
-        }
-    }
-}
-
-/// Decide what one fetch means.
-///
-/// Errors here are file-level only, and all mean the URL points at the wrong thing: a
-/// `_graph.csv`, a gravity log, or a header that is not a header. Everything that is
-/// merely *damaged* comes back as a [`SyncFault`] on an [`Advance`].
+/// [`journal::ingest()`] for a `_full.csv`.
 pub fn ingest(state: &SyncState, outcome: FetchOutcome) -> Result<SyncStep> {
-    let (bytes, offset) = match outcome {
-        FetchOutcome::Unchanged { .. } => return Ok(SyncStep::Nothing),
-        FetchOutcome::Truncated { total } => {
-            return Ok(SyncStep::Restart(Restart {
-                reason: RestartReason::Truncated { total },
-            }));
-        }
-        FetchOutcome::Fresh { bytes, offset, .. } => (bytes, offset),
-    };
-
-    let (complete, _tail) = split_complete_lines(&bytes);
-    if complete.is_empty() {
-        return Ok(partial_only(offset, bytes.len()));
-    }
-
-    // At offset 0 the header is in the chunk; on a resume it is in `sync_state`. Lifting
-    // it off here rather than calling `parse_full_log` means one parser covers both, so
-    // `bytes_consumed` needs no per-caller adjustment. The two lengths stay distinct:
-    // `header_bytes.len()` (terminator included) is arithmetic, `header_text`
-    // (terminator stripped) is storage.
-    let (header_bytes, body, header_text) = if offset == 0 {
-        let (header_bytes, body) = split_first_record(complete).expect("a boundary exists");
-        (
-            header_bytes,
-            body,
-            header_line(&state.remote_path, header_bytes)?,
-        )
-    } else {
-        match state.header.clone() {
-            Some(header) => (&[][..], complete, header),
-            None => {
-                return Ok(SyncStep::Restart(Restart {
-                    reason: RestartReason::NoStoredHeader,
-                }));
-            }
-        }
-    };
-
-    let chunk = parse_with_header(&state.remote_path, &header_text, body)?;
-
-    // Proof that the offset was where we thought. A mid-record resume usually fails on
-    // cell count rather than on `log_time`, so the predicate is "the first record did
-    // not become a row", for any reason at all. The cost of a false positive is one
-    // unnecessary full refetch, after which the same row sits mid-chunk, is skipped
-    // normally, and the source converges.
-    if offset > 0 && !first_record_is_a_row(&state.remote_path, &header_text, body) {
-        return Ok(SyncStep::Restart(Restart {
-            reason: RestartReason::NotOnARecordBoundary,
-        }));
-    }
-
-    let consumed = (header_bytes.len() + chunk.report.bytes_consumed) as u64;
-    let next_offset = offset + consumed;
-
-    let fault = if chunk.report.stopped_early {
-        Some(SyncFault::StoppedEarly {
-            at_offset: next_offset,
-        })
-    } else if chunk.report.rows_parsed == 0 && chunk.report.rows_skipped > 0 {
-        Some(SyncFault::EveryRecordSkipped {
-            skipped: chunk.report.rows_skipped,
-        })
-    } else {
-        None
-    };
-
-    let header_changed = state
-        .header
-        .as_deref()
-        .is_some_and(|stored| stored != header_text);
-    let last_ts = chunk
-        .rows
-        .iter()
-        .map(|row| row.ts)
-        .chain(state.last_ts)
-        .max();
-
-    Ok(SyncStep::Advance(Advance {
-        next_offset,
-        rows: chunk.rows,
-        header: (offset == 0).then_some(header_text),
-        header_changed,
-        last_ts,
-        report: chunk.report,
-        fault,
-    }))
-}
-
-/// A chunk holding no complete record at all. Normally Fermentrack caught mid-`writerow`
-/// and the only honest answer is to wait; past the cap it is damage, and saying so is
-/// what keeps the source from stalling in silence.
-fn partial_only(offset: u64, len: usize) -> SyncStep {
-    if len <= MAX_PARTIAL_RECORD_BYTES {
-        return SyncStep::Nothing;
-    }
-    SyncStep::Advance(Advance {
-        next_offset: offset,
-        rows: Vec::new(),
-        header: None,
-        header_changed: false,
-        last_ts: None,
-        report: ParseReport::default(),
-        fault: Some(SyncFault::PartialRecordTooLong { bytes: len }),
-    })
-}
-
-/// The header line as stored: valid UTF-8, terminator stripped.
-fn header_line(name: &str, header_bytes: &[u8]) -> Result<String> {
-    match std::str::from_utf8(header_bytes) {
-        Ok(text) => Ok(text.trim_end_matches(['\r', '\n']).to_string()),
-        // A `_full.csv` header is ASCII column names. Anything else is not one, and the
-        // preview is what tells the user which file they actually pointed at.
-        Err(_) => Err(Error::NotAFermentrackLog {
-            detail: format!("{name}: {}", preview_bytes(header_bytes)),
-        }),
-    }
-}
-
-fn first_record_is_a_row(name: &str, header: &str, body: &[u8]) -> bool {
-    let Some((first, _)) = split_first_record(body) else {
-        return false;
-    };
-    parse_with_header(name, header, first).is_ok_and(|chunk| chunk.report.rows_parsed == 1)
-}
-
-impl SyncStep {
-    /// Fold this step into the state Phase 2e is about to write.
-    ///
-    /// Pure, and the clock is an argument, so a test can compare whole [`SyncState`]s by
-    /// value.
-    pub fn apply_to(&self, state: &mut SyncState, at: Timestamp) {
-        state.synced_at = at;
-        match self {
-            Self::Nothing => {}
-            Self::Advance(advance) => {
-                state.byte_offset = advance.next_offset;
-                if let Some(header) = &advance.header {
-                    state.header = Some(header.clone());
-                }
-                if advance.last_ts.is_some() {
-                    state.last_ts = advance.last_ts;
-                }
-                state.last_error = advance.fault.as_ref().map(ToString::to_string);
-            }
-            Self::Restart(restart) => {
-                state.byte_offset = 0;
-                state.header = None;
-                state.last_ts = None;
-                // A requested rebuild clears the error instead of writing one. It is the
-                // escape hatch *from* a fault, so leaving the old text in place would
-                // keep 2g's scheduler backing the source off for a condition the user
-                // has just resolved.
-                state.last_error = match restart.reason {
-                    RestartReason::Requested => None,
-                    ref reason => Some(reason.to_string()),
-                };
-            }
-        }
-    }
+    journal::ingest::<FullCsv>(state, outcome)
 }
 
 #[cfg(test)]

@@ -219,7 +219,7 @@ payloads carry no timestamp, so a queued message would be stamped with its
 delivery time, not its measurement time. Control has the same problem: a 09:00
 ramp or a 3 am temperature alarm can't depend on the laptop being open.
 
-**So something has to be always on: a Raspberry Pi** (model TBD). It takes over
+**So something has to be always on: a Raspberry Pi Zero 2 W** (set up later). It takes over
 Fermentrack's role, and only that role:
 
 - **Mosquitto**, the broker the devices publish to.

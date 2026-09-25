@@ -2,8 +2,8 @@
 //!
 //! **No `fermentrack` import anywhere in this module** — the same ownership rule
 //! `db/tier1.rs` follows. The scheduler must never learn what a byte offset is: that is
-//! precisely the coupling that would make v2's MQTT source a rewrite instead of a new
-//! impl of [`ReadingSource`]. Everything Fermentrack-shaped lives behind that trait, in
+//! precisely the coupling that would make v2's `brewd` source a rewrite instead of a
+//! new impl of [`ReadingSource`]. Everything Fermentrack-shaped lives behind that trait, in
 //! `fermentrack::source`.
 //!
 //! The trait sits at the level of *readings*, not bytes, and it arrives now rather than
@@ -43,7 +43,9 @@ pub trait ReadingSource: Send + Sync {
     /// Throw away what we derived and derive it again from the beginning.
     ///
     /// The escape hatch for a parser bug that wrote bad rows. Only safe because Tier 1
-    /// is derived data; nothing here may ever touch Tier 2.
+    /// is derived data and the raw log it came from — Fermentrack's CSV, or `brewd`'s
+    /// journal under v2 — is still there to derive it from again. Nothing here may ever
+    /// touch Tier 2.
     async fn rebuild(&mut self) -> Result<PollReport>;
 }
 

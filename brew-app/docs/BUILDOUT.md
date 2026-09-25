@@ -53,9 +53,11 @@ client that ingests, and it also publishes setpoints (Phase 6).
       Phases 1–2 are fully buildable without Fermentrack ever running
 
 **v2 spikes** — these gate Phase V, and each ends in a committed capture, not a note
-- [ ] Pick the Raspberry Pi model (TBD) and record it in [HARDWARE.md](HARDWARE.md).
-      It needs an OS on an SSD or a high-endurance card: `brewd` appends a journal
-      line every few seconds, all year
+- [x] Pick the Raspberry Pi model: **Raspberry Pi Zero 2 W**, recorded in
+      [HARDWARE.md](HARDWARE.md)
+- [ ] Set up the Pi Zero 2 W (later): 64-bit Raspberry Pi OS Lite on a high-endurance
+      microSD — `brewd` appends a journal line every few seconds, all year, and the
+      Zero has no practical SSD boot. Wi-Fi (2.4 GHz only), SSH
 - [ ] Mosquitto on the Pi: one listener on the LAN, one user for devices and one
       for `brewd`, and persistence off. `brewd`'s journal is the record, not the broker
 - [ ] Reflash ESP32 #1 from BrewPi-ESP32 to ESPHome: `dallas_temp` for both probes
@@ -611,32 +613,33 @@ The control loop runs on the ESP32. `brewd` runs what must happen while the
 laptop is shut. The desktop app does everything else.
 
 **Va. Rework from phases 1–3**
-- [ ] Migration runner gets a table-rebuild mode. `apply_upto` runs every migration
+- [x] Migration runner gets a table-rebuild mode. `apply_upto` runs every migration
       inside a transaction with `foreign_keys=ON`, and that pragma is a silent no-op
       inside a transaction. Rebuilding a table other tables reference needs
       `foreign_keys=OFF` *before* `BEGIN`, a `PRAGMA foreign_key_check` that must
       return no rows before `COMMIT`, and `foreign_keys=ON` after. Mark such
       migrations explicitly in `MIGRATIONS`; don't infer it from the SQL. Test with
       a populated `stream` pointing at the rebuilt table
-- [ ] Migration `0007`: rebuild `source` without the `kind` CHECK. 0001 closed it
+- [x] Migration `0007`: rebuild `source` without the `kind` CHECK. 0001 closed it
       over the two Fermentrack kinds plus `manual` — the one closed-vocabulary column
       that did not follow its own `metric` reasoning. `SourceKind` becomes the
       enforcement, as `Metric` is. Add `brewd_journal`
-- [ ] Hoist the format-agnostic half of Phase 2 out of `fermentrack/` into a
-      shared module (proposal: `journal/` or `sync/offset`): `split_complete_lines`,
+- [x] Hoist the format-agnostic half of Phase 2 out of `fermentrack/` into a
+      shared module (`journal/`): `split_complete_lines`,
       `MAX_PARTIAL_RECORD_BYTES`, the `Range` fetch and `FetchOutcome` classification,
       the record-boundary resume check, and commit-offset-with-readings. `fermentrack/`
       keeps only the `_full.csv` dialect. The existing tests move with the code and
-      must pass unchanged — that is the proof the hoist changed nothing
-- [ ] `sync_state` is reused as is. `remote_path` becomes the journal path on
+      must pass unchanged — that is the proof the hoist changed nothing. The seam is
+      one `journal::Dialect` trait; `fermentrack::sync::FullCsv` is the first impl
+- [x] `sync_state` is reused as is. `remote_path` becomes the journal path on
       `brewd`, and `header` the journal's header line. No schema change
-- [ ] `Metric` gains `tilt_deg`, `battery_v`, `rssi_dbm`. No migration — `metric`
+- [x] `Metric` gains `tilt_deg`, `battery_v`, `rssi_dbm`. No migration — `metric`
       has no CHECK, by 0001's design. `state` stays and goes unused unless the
       firmware publishes heat/cool action
-- [ ] Config: a `brewd` section (`base_url`) beside `fermentrack`, and a
+- [x] Config: a `brewd` section (`base_url`) beside `fermentrack`, and a
       `gravity.ispindel_unit` (`sg` | `plato`) from the Phase 0 spike. MQTT broker
       settings are `brewd`'s config, not the desktop app's
-- [ ] Tier 1 is no longer "cheap to throw away" in the old sense. Rebuild still
+- [x] Tier 1 is no longer "cheap to throw away" in the old sense. Rebuild still
       works, but only because `brewd`'s journals are the raw archive. Lose the Pi's
       disk and Tier 1 is gone. Cross-cutting backup now covers the journals
 
@@ -665,8 +668,9 @@ laptop is shut. The desktop app does everything else.
       `GET /journals/<name>` honours `Range`. Read-only, LAN-only, no auth — same
       trust model Fermentrack had
 - [ ] Runs under systemd, restarts on failure. Logs to journald
-- [ ] Cross-compiled for the Pi's target (`aarch64-unknown-linux-gnu` unless the
-      chosen model says otherwise), via `cargo xtask` or `cross`
+- [ ] Cross-compiled for the Pi Zero 2 W's `aarch64-unknown-linux-gnu` (64-bit OS),
+      via `cargo xtask` or `cross`. Never built on the device: 512 MB RAM does not
+      link a Rust binary of this size
 - [ ] No SQLite on the Pi. `brewery.db` stays on the desktop; `brewd` owns only
       its journals and its config. Revisit only if a second machine needs to write
 
@@ -772,7 +776,7 @@ opening the app backfills a gap-free curve bound to the pitched batch.
 | Frontend | Svelte 5 + TypeScript | small, no virtual-DOM overhead on live charts |
 | Charts | `uPlot` | handles 100k+ points; ECharts is heavier than this needs |
 | Test | `cargo test` + `wiremock` | deterministic ingest tests, no live Fermentrack |
-| Always-on host | Raspberry Pi (model TBD) | v2: logger of record and profile runner while the desktop is off |
+| Always-on host | Raspberry Pi Zero 2 W | v2: logger of record and profile runner while the desktop is off |
 | Broker | Mosquitto | v2, on the Pi. Persistence off — `brewd`'s journal is the record |
 | MQTT client | `rumqttc` | v2, `brewd` only. The desktop app never links it |
 | Device firmware | ESPHome | v2: `dallas_temp` + `thermostat` + `mqtt`, control loop on the ESP32 |
@@ -791,7 +795,8 @@ brew-app/
 │   └── brewcore/          # no tauri dependency — plain `cargo test`
 │       ├── src/
 │       │   ├── db/        # connection, migrations, queries
-│       │   ├── fermentrack/  # client.rs, csv_log.rs, sync.rs, types.rs
+│       │   ├── fermentrack/  # the `_full.csv` dialect: csv_log.rs, discovery.rs, sync.rs
+│       │   ├── journal/   # format-agnostic sync: Range client, record split, offset + commit
 │       │   ├── calc/      # ABV, attenuation, stability
 │       │   ├── units/           # temperature, gravity, quantity, money, time
 │       │   ├── config.rs
@@ -1331,4 +1336,4 @@ than steering it.
 
 No hardware needed for Va, Vc, Vd (on generated fixtures), the Phase 3 UI pass,
 or Phase 4 — the app can be built through all of them before the iSpindle
-(~2026-10-09) or the Pi arrive.
+(~2026-10-09) arrives or the Pi Zero 2 W is set up.

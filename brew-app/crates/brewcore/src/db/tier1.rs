@@ -2,10 +2,14 @@
 //!
 //! **Nothing here imports `fermentrack`.** That is the Option 2 door, stated the same
 //! way `db::metric` states it: the vocabulary is ours, not Fermentrack's. Phase 3e's
-//! manual measurements and v2's MQTT `ReadingSource` write readings through these same
-//! functions, and neither goes anywhere near a CSV. What *is* Fermentrack-shaped — the
+//! manual measurements and v2's `brewd` journals write readings through these same
+//! functions, and neither goes anywhere near a `_full.csv`. What is log-shaped — the
 //! byte offset, the header, the `SyncState` row — lives in
-//! [`fermentrack::store`](crate::fermentrack::store), which calls into here.
+//! [`journal::store`](crate::journal::store), which calls into here.
+//!
+//! Tier 1 is derived, but no longer from a box someone else maintains. Under v2 the
+//! raw archive is `brewd`'s journals on the Pi: a rebuild re-derives everything from
+//! them, and losing the Pi's disk loses every reading that was never synced here.
 //!
 //! Every function takes a borrowed connection or transaction and never opens its own.
 //! The transaction boundary belongs to the caller, because the whole point of 2e is
@@ -39,69 +43,24 @@ db_enum!(
     (Chamber, "chamber"),
 );
 
-/// The `source.kind` vocabulary, mirroring the `CHECK` in `0001_tier1.sql`.
-///
-/// An enum rather than a `&str` so that a typo is a compile error instead of a
-/// `SQLITE_CONSTRAINT` at the first sync of the day.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SourceKind {
-    FermentrackBeerLog,
-    FermentrackGravityLog,
-    /// Phase 3e. Manual measurements go to their own source so that they are visibly
-    /// not Fermentrack's.
-    Manual,
-}
-
-impl SourceKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::FermentrackBeerLog => "fermentrack_beer_log",
-            Self::FermentrackGravityLog => "fermentrack_gravity_log",
-            Self::Manual => "manual",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        [
-            Self::FermentrackBeerLog,
-            Self::FermentrackGravityLog,
-            Self::Manual,
-        ]
-        .into_iter()
-        .find(|kind| kind.as_str() == s)
-    }
-}
-
-impl std::fmt::Display for SourceKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// The stored string, not a derived variant name — the UI and the database must
-/// agree, and `as_str` is the one place that decides what the string is.
-impl serde::Serialize for SourceKind {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl rusqlite::ToSql for SourceKind {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        Ok(self.as_str().into())
-    }
-}
-
-impl rusqlite::types::FromSql for SourceKind {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        let text = value.as_str()?;
-        Self::parse(text).ok_or_else(|| {
-            rusqlite::types::FromSqlError::Other(Box::new(crate::Error::UnknownSourceKind(
-                text.to_owned(),
-            )))
-        })
-    }
-}
+db_enum!(
+    /// The `source.kind` vocabulary.
+    ///
+    /// `0007_source_kind.sql` dropped the `CHECK` 0001 put on this column, for the
+    /// reason 0001 gave `stream.metric`: SQLite cannot widen one without rebuilding the
+    /// table. This enum is the enforcement, at the only write path, as `Metric` is — a
+    /// typo is a compile error, and an unknown string read back is an error rather
+    /// than a panic.
+    SourceKind,
+    UnknownSourceKind,
+    (FermentrackBeerLog, "fermentrack_beer_log"),
+    (FermentrackGravityLog, "fermentrack_gravity_log"),
+    // Phase 3e. Manual measurements go to their own source so that they are visibly
+    // not a sensor's.
+    (Manual, "manual"),
+    // Phase V. One `brewd` journal on the Pi, synced over HTTP `Range`.
+    (BrewdJournal, "brewd_journal"),
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SourceRow {
@@ -287,18 +246,47 @@ mod tests {
     }
 
     #[test]
-    fn the_source_kinds_match_the_schema_check() {
+    fn every_source_kind_round_trips_through_the_database() {
         let conn = db();
-        for kind in [
-            SourceKind::FermentrackBeerLog,
-            SourceKind::FermentrackGravityLog,
-            SourceKind::Manual,
-        ] {
+        for &kind in SourceKind::ALL {
             create_source(&conn, kind, "s", None)
                 .unwrap_or_else(|e| panic!("{kind} was refused: {e}"));
         }
-        assert_eq!(list_sources(&conn).unwrap().len(), 3);
+        let kinds: Vec<SourceKind> = list_sources(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.kind)
+            .collect();
+        assert_eq!(kinds, SourceKind::ALL);
         assert_eq!(SourceKind::parse("beer"), None);
+    }
+
+    /// These strings are in the database. Same rule as `Metric`'s pinned strings.
+    #[test]
+    fn the_stored_source_kinds_are_pinned() {
+        let names: Vec<&str> = SourceKind::ALL.iter().map(|k| k.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "fermentrack_beer_log",
+                "fermentrack_gravity_log",
+                "manual",
+                "brewd_journal",
+            ]
+        );
+    }
+
+    /// With no `CHECK` left, a row written by a newer build (or by hand) reaches
+    /// the reader, and must come back as an error rather than a panic.
+    #[test]
+    fn an_unknown_source_kind_in_the_database_is_an_error_not_a_panic() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO source (kind, name) VALUES ('from_the_future', 's')",
+            [],
+        )
+        .unwrap();
+        assert!(list_sources(&conn).is_err());
     }
 
     #[test]

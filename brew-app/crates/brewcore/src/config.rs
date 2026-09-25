@@ -70,9 +70,11 @@ pub fn resolve_config_path(default_dir: &Path) -> PathBuf {
 #[serde(default)]
 pub struct Config {
     pub fermentrack: Fermentrack,
+    pub brewd: Brewd,
     pub sync: SyncConfig,
     pub ui: Ui,
     pub measurement: Measurement,
+    pub gravity: Gravity,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +86,17 @@ pub struct Fermentrack {
     /// Phase 2f supersedes rather than replaces this: each `source.config` carries
     /// its own URL, and this becomes the first-run default. Nothing may assume there
     /// is exactly one Fermentrack.
+    pub base_url: String,
+}
+
+/// Phase V. The `brewd` daemon on the Pi, whose journals this app syncs over HTTP.
+///
+/// Only where to reach it. The MQTT broker is `brewd`'s business and its config lives
+/// on the Pi: the desktop app never links an MQTT client.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Brewd {
+    /// Empty until the Pi is set up, which is a state and not an error.
     pub base_url: String,
 }
 
@@ -134,6 +147,25 @@ impl Default for Measurement {
     }
 }
 
+/// Phase V. What the iSpindle's calibration polynomial outputs.
+///
+/// No payload says: the iSpindle publishes a bare `gravity` number, and whether it is
+/// SG or °P is whatever polynomial was typed into its config page. So there is no
+/// default — a wrong guess stores 12.0 as a specific gravity, or 1.048 as °P, and
+/// both would pass for a reading at a glance. Unset until the user records it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Gravity {
+    pub ispindel_unit: Option<IspindelUnit>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IspindelUnit {
+    Sg,
+    Plato,
+}
+
 /// `f64::clamp` propagates NaN, and TOML has `nan` and `inf` literals — so a
 /// hand-edited file can hand us a value that survives clamping and then poisons every
 /// reading it touches. A non-finite value is not out of range, it is absent, so it goes
@@ -155,10 +187,15 @@ impl Config {
     pub fn normalize(&mut self) -> Vec<String> {
         let mut notes = Vec::new();
 
-        let trimmed = normalize_base_url(&self.fermentrack.base_url);
-        if trimmed != self.fermentrack.base_url {
-            notes.push(format!("fermentrack.base_url normalised to '{trimmed}'"));
-            self.fermentrack.base_url = trimmed;
+        for (field, url) in [
+            ("fermentrack.base_url", &mut self.fermentrack.base_url),
+            ("brewd.base_url", &mut self.brewd.base_url),
+        ] {
+            let trimmed = normalize_base_url(url);
+            if trimmed != *url {
+                notes.push(format!("{field} normalised to '{trimmed}'"));
+                *url = trimmed;
+            }
         }
 
         let clamped = self
@@ -249,50 +286,57 @@ impl Config {
             }
         }
 
-        // Empty means "not configured yet" and is always legal.
-        let url = self.fermentrack.base_url.trim();
-        if !url.is_empty() {
-            let Some(host) = url
-                .strip_prefix("http://")
-                .or_else(|| url.strip_prefix("https://"))
-            else {
-                return Err(Error::ConfigInvalid {
-                    field: "fermentrack.base_url",
-                    reason: "must start with http:// or https://".to_owned(),
-                });
-            };
-            // A scheme with nothing after it is not a URL, and accepting one is how
-            // `normalize` and `validate` end up disagreeing about the same string.
-            // Trailing slashes are stripped here too, because `normalize` strips them
-            // and "http:///" must not validate before it and fail after.
-            if host.trim_end_matches('/').is_empty() {
-                return Err(Error::ConfigInvalid {
-                    field: "fermentrack.base_url",
-                    reason: "must include a host, e.g. http://fermentrack.local".to_owned(),
-                });
-            }
-            if url.split_whitespace().count() != 1 {
-                return Err(Error::ConfigInvalid {
-                    field: "fermentrack.base_url",
-                    reason: "must not contain whitespace".to_owned(),
-                });
-            }
-            // Phase 2c. The last gate, not a replacement for the three above: they
-            // catch things `Url::parse` happily accepts (`ftp://host`), and this
-            // catches things they miss (a port that does not fit in a u16). It is here
-            // at all because `fermentrack::client` parses the same string later, and a
-            // base_url that saves but cannot be fetched from would have the settings
-            // pane blaming no field.
-            if let Err(err) = reqwest::Url::parse(url) {
-                return Err(Error::ConfigInvalid {
-                    field: "fermentrack.base_url",
-                    reason: err.to_string(),
-                });
-            }
-        }
+        validate_base_url("fermentrack.base_url", &self.fermentrack.base_url)?;
+        validate_base_url("brewd.base_url", &self.brewd.base_url)?;
 
         Ok(())
     }
+}
+
+/// Empty means "not configured yet" and is always legal.
+fn validate_base_url(field: &'static str, url: &str) -> Result<()> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Ok(());
+    }
+    let Some(host) = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+    else {
+        return Err(Error::ConfigInvalid {
+            field,
+            reason: "must start with http:// or https://".to_owned(),
+        });
+    };
+    // A scheme with nothing after it is not a URL, and accepting one is how
+    // `normalize` and `validate` end up disagreeing about the same string.
+    // Trailing slashes are stripped here too, because `normalize` strips them
+    // and "http:///" must not validate before it and fail after.
+    if host.trim_end_matches('/').is_empty() {
+        return Err(Error::ConfigInvalid {
+            field,
+            reason: "must include a host, e.g. http://fermentrack.local".to_owned(),
+        });
+    }
+    if url.split_whitespace().count() != 1 {
+        return Err(Error::ConfigInvalid {
+            field,
+            reason: "must not contain whitespace".to_owned(),
+        });
+    }
+    // Phase 2c. The last gate, not a replacement for the three above: they
+    // catch things `Url::parse` happily accepts (`ftp://host`), and this
+    // catches things they miss (a port that does not fit in a u16). It is here
+    // at all because the HTTP client parses the same string later, and a
+    // base_url that saves but cannot be fetched from would have the settings
+    // pane blaming no field.
+    if let Err(err) = reqwest::Url::parse(url) {
+        return Err(Error::ConfigInvalid {
+            field,
+            reason: err.to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Trim surrounding whitespace and trailing slashes, but never the scheme's own.
@@ -700,6 +744,28 @@ mod tests {
                 .contains("measurement.refractometer_wort_correction"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn the_brewd_url_is_normalised_and_validated_like_fermentracks() {
+        let mut config = Config {
+            brewd: Brewd {
+                base_url: "  http://brewd.local:8080/  ".to_owned(),
+            },
+            ..Config::default()
+        };
+        assert_eq!(config.normalize().len(), 1);
+        assert_eq!(config.brewd.base_url, "http://brewd.local:8080");
+        assert!(config.validate().is_ok());
+
+        config.brewd.base_url = "brewd.local".to_owned();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("brewd.base_url"), "{err}");
+    }
+
+    #[test]
+    fn the_ispindel_unit_is_unset_until_the_user_says() {
+        assert_eq!(Config::default().gravity.ispindel_unit, None);
     }
 
     #[test]

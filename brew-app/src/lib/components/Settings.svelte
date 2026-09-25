@@ -96,6 +96,12 @@
   </label>
 
   <label>
+    <span>brewd URL</span>
+    <input type="text" bind:value={draft.brewd.base_url} placeholder="http://brewd.local:8080" />
+    <small>the Pi — leave empty until it is set up</small>
+  </label>
+
+  <label>
     <span>Poll interval</span>
     <input type="number" min="5" max="86400" step="5" bind:value={draft.sync.poll_interval_secs} />
     {#if intervalMissing}
@@ -120,6 +126,17 @@
       <option value="plato">Plato</option>
       <option value="brix">Brix</option>
     </select>
+  </label>
+
+  <label>
+    <span>iSpindle outputs</span>
+    <!-- No default: the device publishes a bare number, and SG and °P both look plausible. -->
+    <select bind:value={draft.gravity.ispindel_unit}>
+      <option value={null}>Not set</option>
+      <option value="sg">Specific gravity</option>
+      <option value="plato">Plato</option>
+    </select>
+    <small>whatever its calibration polynomial was written in</small>
   </label>
 
   <div class="actions">

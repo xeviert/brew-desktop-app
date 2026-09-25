@@ -55,7 +55,7 @@ fn empty_database_migrates_to_head() {
 /// the loop exists so migration 0002 is covered the day it lands.
 #[test]
 fn every_version_migrates_to_head() {
-    for &(version, _) in migrations::MIGRATIONS {
+    for version in migrations::MIGRATIONS.iter().map(|m| m.version) {
         let (_dir, path) = scratch();
         let mut conn = Connection::open(&path).unwrap();
         migrations::apply_upto(&mut conn, version).unwrap();
@@ -138,28 +138,120 @@ fn foreign_keys_are_enforced_on_writes() {
     );
 }
 
+/// 0001 closed `source.kind` with a `CHECK`; 0007 removed it. The vocabulary is
+/// `SourceKind`'s to enforce now, and the database takes any text.
 #[test]
-fn source_kind_is_a_closed_set() {
+fn source_kind_is_no_longer_checked_by_the_schema() {
     let (_dir, path) = scratch();
     let db = Db::open(&path).unwrap();
 
     db.write(|conn| {
         conn.execute(
-            "INSERT INTO source (kind, name) VALUES ('manual', 'Bench readings')",
+            "INSERT INTO source (kind, name) VALUES ('brewd_journal', 'ESP32 #1')",
             [],
         )?;
-        Ok(())
-    })
-    .expect("'manual' is valid");
-
-    db.write(|conn| {
         conn.execute(
-            "INSERT INTO source (kind, name) VALUES ('beer', 'nope')",
+            "INSERT INTO source (kind, name) VALUES ('not_a_kind', 'nope')",
             [],
         )?;
         Ok(())
     })
-    .expect_err("unknown kind must be rejected");
+    .expect("the schema no longer refuses a kind");
+
+    assert_eq!(brewcore::db::SourceKind::parse("not_a_kind"), None);
+}
+
+/// The rebuild path, against a file with rows on both sides of every foreign key
+/// that points at `source`. The rows must survive, the keys must still be enforced
+/// afterwards, and the connection must get its `foreign_keys` setting back.
+#[test]
+fn rebuilding_source_keeps_every_row_that_references_it() {
+    let (_dir, path) = scratch();
+    let mut conn = Connection::open(&path).unwrap();
+    conn.pragma_update(None, "foreign_keys", true).unwrap();
+    migrations::apply_upto(&mut conn, 6).unwrap();
+
+    conn.execute_batch(
+        "INSERT INTO source (id, kind, name, config)            VALUES (1, 'fermentrack_beer_log', 'Fermenter 1', '{\"base_url\":\"http://x\"}'),                   (2, 'manual', 'Bench', NULL);          INSERT INTO stream (id, source_id, external_id, metric)            VALUES (10, 1, 'beer_temp', 'temp_c'), (20, 2, 'manual/1/sg', 'sg');          INSERT INTO reading (stream_id, ts, value) VALUES (10, 100, 18.5), (20, 100, 1.040);          INSERT INTO sync_state (source_id, remote_path, byte_offset, header, synced_at)            VALUES (1, 'data/log_full.csv', 4096, 'log_time,beer_temp', 100);          INSERT INTO annotation (source_id, ts, channel, text)            VALUES (1, 100, 'vessel', 'dry hop');",
+    )
+    .unwrap();
+
+    migrations::migrate(&mut conn).unwrap();
+    assert_eq!(
+        migrations::current_version(&conn).unwrap(),
+        migrations::head()
+    );
+
+    let enforced: bool = conn
+        .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+        .unwrap();
+    assert!(enforced, "the runner must restore foreign_keys");
+
+    let count = |table: &str| -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(count("source"), 2);
+    assert_eq!(count("stream"), 2);
+    assert_eq!(count("reading"), 2);
+    assert_eq!(count("sync_state"), 1);
+    assert_eq!(count("annotation"), 1);
+
+    let (kind, config): (String, Option<String>) = conn
+        .query_row("SELECT kind, config FROM source WHERE id = 1", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(kind, "fermentrack_beer_log");
+    assert_eq!(config.as_deref(), Some("{\"base_url\":\"http://x\"}"));
+
+    let dangling: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(dangling, 0);
+
+    // The references now bind to the rebuilt table, and are still enforced.
+    let err = conn
+        .execute(
+            "INSERT INTO stream (source_id, external_id, metric) VALUES (404, 'x', 'temp_c')",
+            [],
+        )
+        .expect_err("dangling source_id must still be rejected");
+    assert!(err.to_string().contains("FOREIGN KEY"), "{err}");
+}
+
+/// A rebuild that would commit a dangling reference is refused and rolled back,
+/// leaving the file at the version before it.
+#[test]
+fn a_rebuild_that_orphans_rows_is_rolled_back() {
+    let (_dir, path) = scratch();
+    let mut conn = Connection::open(&path).unwrap();
+    migrations::apply_upto(&mut conn, 6).unwrap();
+
+    // An orphan that predates the migration, written with keys off as a hand-edited
+    // or pre-pragma file could have. The rebuild must not bless it. (Explicitly off:
+    // the bundled SQLite defaults it on.)
+    conn.pragma_update(None, "foreign_keys", false).unwrap();
+    conn.execute(
+        "INSERT INTO stream (source_id, external_id, metric) VALUES (404, 'x', 'temp_c')",
+        [],
+    )
+    .unwrap();
+
+    let err = migrations::migrate(&mut conn).expect_err("orphan must fail the check");
+    assert_eq!(err.code(), "db.migration_foreign_keys");
+    assert_eq!(migrations::current_version(&conn).unwrap(), 6);
+
+    let kept_check: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'source'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(kept_check.contains("CHECK"), "rolled back to 0001's table");
 }
 
 /// `reading` is WITHOUT ROWID with a composite PK; Phase 2's ingest leans on the

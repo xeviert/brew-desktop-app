@@ -3,8 +3,8 @@
 
 use brewcore::{
     config::{
-        self, Config, Fermentrack, MAX_POLL_INTERVAL_SECS, MIN_POLL_INTERVAL_SECS, Measurement,
-        SyncConfig, Ui,
+        self, Brewd, Config, Fermentrack, Gravity, IspindelUnit, MAX_POLL_INTERVAL_SECS,
+        MIN_POLL_INTERVAL_SECS, Measurement, SyncConfig, Ui,
     },
     units::{GravityDisplay, TempDisplay},
 };
@@ -37,6 +37,8 @@ fn a_missing_file_yields_defaults_and_creates_nothing() {
 fn the_documented_defaults_are_the_actual_defaults() {
     let config = Config::default();
     assert_eq!(config.fermentrack.base_url, "");
+    assert_eq!(config.brewd.base_url, "");
+    assert_eq!(config.gravity.ispindel_unit, None);
     assert_eq!(config.sync.poll_interval_secs, 60);
     assert_eq!(config.ui.temp_display, TempDisplay::C);
     assert_eq!(config.ui.gravity_display, GravityDisplay::Sg);
@@ -65,7 +67,10 @@ fn an_empty_table_is_all_defaults() {
     // Catches `#[serde(default)]` missing from an inner struct, which is the failure
     // a root-only attribute produces.
     let tmp = tempfile::tempdir().unwrap();
-    let path = write(tmp.path(), "[sync]\n[ui]\n[fermentrack]\n");
+    let path = write(
+        tmp.path(),
+        "[sync]\n[ui]\n[fermentrack]\n[brewd]\n[gravity]\n",
+    );
     assert_eq!(config::load(&path).unwrap(), Config::default());
 }
 
@@ -104,6 +109,9 @@ fn save_then_load_round_trips() {
         fermentrack: Fermentrack {
             base_url: "http://fermentrack.local".to_owned(),
         },
+        brewd: Brewd {
+            base_url: "http://brewd.local:8080".to_owned(),
+        },
         sync: SyncConfig {
             poll_interval_secs: 300,
         },
@@ -114,6 +122,9 @@ fn save_then_load_round_trips() {
         measurement: Measurement {
             hydrometer_calibration_c: 15.5,
             refractometer_wort_correction: 1.0,
+        },
+        gravity: Gravity {
+            ispindel_unit: Some(IspindelUnit::Plato),
         },
     };
 
@@ -144,6 +155,21 @@ fn every_display_variant_round_trips() {
             config::save(&path, &written).unwrap();
             assert_eq!(config::load(&path).unwrap(), written);
         }
+    }
+}
+
+#[test]
+fn the_ispindel_unit_is_stored_lowercase() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (unit, text) in [(IspindelUnit::Sg, "sg"), (IspindelUnit::Plato, "plato")] {
+        let path = write(
+            tmp.path(),
+            &format!("[gravity]\nispindel_unit = \"{text}\"\n"),
+        );
+        assert_eq!(
+            config::load(&path).unwrap().gravity.ispindel_unit,
+            Some(unit)
+        );
     }
 }
 

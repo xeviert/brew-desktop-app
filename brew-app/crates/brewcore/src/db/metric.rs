@@ -1,12 +1,13 @@
 //! The closed vocabulary of `stream.metric`.
 //!
 //! `0001_tier1.sql` deliberately leaves `metric` without a `CHECK`: SQLite cannot
-//! widen one without rebuilding the table, and Phase 3 adds manual metrics (`ph`,
-//! `ta`) to this set. This enum is the enforcement instead, at the only write path.
+//! widen one without rebuilding the table. Phase 3 added manual metrics (`ph`, `ta`)
+//! to this set, and Phase V the iSpindle's (`tilt_deg`, `battery_v`, `rssi_dbm`).
+//! This enum is the enforcement instead, at the only write path.
 //!
 //! It lives in `db/` rather than in `fermentrack/` because the vocabulary is ours,
-//! not Fermentrack's: Phase 3's manual measurements and v2's MQTT streams write the
-//! same `metric` strings without going anywhere near a Fermentrack module. The
+//! not Fermentrack's: Phase 3's manual measurements and v2's `brewd` journals write
+//! the same `metric` strings without going anywhere near a Fermentrack module. The
 //! *mapping* from a CSV column to a `Metric` is `fermentrack`'s, and lives in
 //! `fermentrack::csv_log`.
 
@@ -35,12 +36,21 @@ pub enum Metric {
     /// Titratable acidity, **g/L as tartaric acid** — see [`crate::units::GramsPerLitre`],
     /// which fixes the reference acid. Phase 3e, manual entry only.
     Ta,
+    /// Phase V. The iSpindle's raw tilt, degrees from vertical. Kept beside `sg`
+    /// because `sg` is a calibration polynomial applied on the device, and tilt is
+    /// what lets gravity be recomputed after a recalibration.
+    TiltDeg,
+    /// Phase V. A battery-powered sensor's supply voltage. A dead battery and a flat
+    /// ferment look identical from the gravity series alone.
+    BatteryV,
+    /// Phase V. Wi-Fi signal strength as the device reports it, dBm.
+    RssiDbm,
 }
 
 impl Metric {
     /// Append only. The literal in `the_stored_strings_are_pinned` mirrors this order,
     /// and reordering it is churn that means nothing.
-    pub const ALL: [Metric; 10] = [
+    pub const ALL: [Metric; 13] = [
         Metric::TempC,
         Metric::SetpointC,
         Metric::FridgeTempC,
@@ -51,6 +61,9 @@ impl Metric {
         Metric::State,
         Metric::Ph,
         Metric::Ta,
+        Metric::TiltDeg,
+        Metric::BatteryV,
+        Metric::RssiDbm,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -65,6 +78,9 @@ impl Metric {
             Metric::State => "state",
             Metric::Ph => "ph",
             Metric::Ta => "ta",
+            Metric::TiltDeg => "tilt_deg",
+            Metric::BatteryV => "battery_v",
+            Metric::RssiDbm => "rssi_dbm",
         }
     }
 
@@ -147,6 +163,9 @@ mod tests {
                 "state",
                 "ph",
                 "ta",
+                "tilt_deg",
+                "battery_v",
+                "rssi_dbm",
             ]
         );
     }

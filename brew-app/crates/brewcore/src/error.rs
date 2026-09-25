@@ -61,6 +61,14 @@ pub enum Error {
     )]
     SchemaAhead { found: i32, head: i32 },
 
+    /// A table-rebuild migration left rows pointing at nothing. It was run with
+    /// `foreign_keys=OFF`, so SQLite itself checked nothing; `foreign_key_check` is the
+    /// only thing standing between a bad rebuild and a committed dangling reference.
+    #[error(
+        "migration {version} would leave {violations} dangling foreign key(s);          rolled back, the database is still at the previous version"
+    )]
+    MigrationForeignKeys { version: i32, violations: usize },
+
     // Phase 2b. File-level problems only: a single bad row is warned about and
     // skipped (see `fermentrack::ParseReport`), because one malformed line must not
     // cost a week of backfill. A bad *file* is fatal, because half-ingesting one
@@ -376,6 +384,7 @@ impl Error {
             Error::ConfigInvalid { .. } => "config.invalid",
             Error::JournalMode { .. } => "db.journal_mode",
             Error::SchemaAhead { .. } => "db.schema_ahead",
+            Error::MigrationForeignKeys { .. } => "db.migration_foreign_keys",
             Error::NotAFermentrackLog { .. } => "fermentrack.not_a_log",
             Error::GraphLogRefused { .. } => "fermentrack.graph_log",
             Error::GravityLogUnsupported { .. } => "fermentrack.gravity_log",

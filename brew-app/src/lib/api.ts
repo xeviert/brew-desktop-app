@@ -16,9 +16,15 @@ export interface ApiError {
 /** Mirrors `brewcore::config::Config`. Field names are serde's, so snake_case. */
 export interface Config {
 	fermentrack: { base_url: string };
+	brewd: { base_url: string };
 	sync: { poll_interval_secs: number };
 	ui: { temp_display: TempDisplay; gravity_display: GravityDisplay };
+	measurement: { hydrometer_calibration_c: number; refractometer_wort_correction: number };
+	gravity: { ispindel_unit: IspindelUnit | null };
 }
+
+/** Mirrors `brewcore::config::IspindelUnit`. `null` in `Config` means not recorded yet. */
+export type IspindelUnit = "sg" | "plato";
 
 /** Mirrors `brewcore::db::DbStatus`. */
 export interface DbStatus {
