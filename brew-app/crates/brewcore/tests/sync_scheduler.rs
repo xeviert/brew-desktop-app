@@ -39,6 +39,8 @@ enum Answer {
     Fault,
     /// The request itself failed.
     Failed,
+    /// The host did not answer at all.
+    Unreachable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +111,11 @@ impl Script {
             }),
             Answer::Failed => Err(Error::LogMissing {
                 url: "http://fermentrack.local/data/gone_full.csv".to_owned(),
+            }),
+            Answer::Unreachable => Err(Error::Timeout {
+                url: "http://brewd.local:8080/journals".to_owned(),
+                // Any `reqwest::Error` will do: `Timeout` is unreachable by variant.
+                source: reqwest::Client::new().get("::").build().unwrap_err(),
             }),
         }
     }
@@ -325,6 +332,45 @@ async fn one_clean_poll_returns_a_failing_source_to_the_normal_cadence() {
     assert_eq!(status.last_error_code, None);
     assert_eq!(status.rows_added, 5);
     assert!(status.last_success.is_some());
+}
+
+/// "The Pi is off" is its own phase so the footer does not blame the source, but it is
+/// still a failure: it backs off, and one clean poll clears it like any other.
+#[tokio::test(start_paused = true)]
+async fn an_unreachable_host_is_its_own_phase_and_backs_off_like_an_error() {
+    let rig = Rig::start(Answer::Unreachable);
+    rig.run_for(10 * 60).await;
+    let status = rig.status();
+
+    let gaps = rig.script.gaps();
+    assert!(
+        gaps.len() >= 2 && gaps[1] > gaps[0],
+        "did not back off: {gaps:?}"
+    );
+    assert_eq!(status.phase, SyncPhase::Unreachable);
+    assert_eq!(
+        status.last_error_code.as_deref(),
+        Some("fermentrack.timeout")
+    );
+    assert!(status.consecutive_failures >= 2);
+
+    rig.script.set(Answer::Failed);
+    rig.manager.resync(SOURCE_ID).expect("resync");
+    rig.settle().await;
+    assert_eq!(
+        rig.status().phase,
+        SyncPhase::Error,
+        "a host that answers with an error is reachable"
+    );
+
+    rig.script.set(Answer::Stored(1));
+    rig.manager.resync(SOURCE_ID).expect("resync");
+    rig.settle().await;
+    let status = rig.status();
+    rig.manager.shutdown().await;
+    assert_eq!(status.phase, SyncPhase::Idle);
+    assert_eq!(status.last_error_code, None);
+    assert_eq!(status.consecutive_failures, 0);
 }
 
 // ---------------------------------------------------------------------------

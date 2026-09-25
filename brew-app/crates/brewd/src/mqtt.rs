@@ -269,4 +269,89 @@ mod tests {
         );
         assert_eq!(read("esp32-1.csv"), "time,vessel_temp\n1790000000,18.4\n");
     }
+
+    /// `run` against a broker nobody is listening on: the pump retries in the
+    /// background, and every write comes from bursts opened before `run` started.
+    fn run_with_open_burst(dir: &std::path::Path, window: Duration) -> RunningIngest {
+        let config: Config = toml::from_str(&format!(
+            "journal_dir = {dir:?}
+burst_window_ms = {}
+[mqtt]
+host = \"127.0.0.1\"
+port = 1
+             [[device]]
+name = \"ispindel-1\"
+columns = [             {{ topic = \"ispindel/i1/tilt\", column = \"tilt\" }},              {{ topic = \"ispindel/i1/gravity\", column = \"gravity\" }}]",
+            window.as_millis()
+        ))
+        .unwrap();
+        let columns = ["tilt", "gravity"];
+        let journal = Journal::open(dir, "ispindel-1", &columns, T0).unwrap();
+        let mut ingest = Ingest::new(&config.devices, vec![journal], config.burst_window());
+        ingest.on_message(message("ispindel/i1/gravity", "1.012", Instant::now()));
+
+        let (shutdown, rx) = watch::channel(false);
+        let task = tokio::spawn(async move { run(&config, ingest, rx).await });
+        RunningIngest { shutdown, task }
+    }
+
+    struct RunningIngest {
+        shutdown: watch::Sender<bool>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl RunningIngest {
+        async fn stop(self) {
+            self.shutdown.send(true).unwrap();
+            tokio::time::timeout(Duration::from_secs(5), self.task)
+                .await
+                .expect("run returns on shutdown")
+                .unwrap();
+        }
+    }
+
+    const PARTIAL: &str = "time,tilt,gravity
+1790000000,,1.012
+";
+
+    fn journal(dir: &std::path::Path) -> String {
+        std::fs::read_to_string(dir.join("ispindel-1.csv")).unwrap()
+    }
+
+    /// A wake cycle that loses a field is still a reading, written once its window
+    /// runs out rather than waiting for a message that will never come.
+    #[tokio::test]
+    async fn run_writes_an_incomplete_burst_when_its_window_runs_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = run_with_open_burst(dir.path(), Duration::from_millis(100));
+
+        let written = async {
+            while journal(dir.path()) != PARTIAL {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), written)
+            .await
+            .expect("the expired burst was never written");
+        running.stop().await;
+        assert_eq!(
+            journal(dir.path()),
+            PARTIAL,
+            "written once, not again on drain"
+        );
+    }
+
+    #[tokio::test]
+    async fn shutting_down_writes_the_bursts_still_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let running = run_with_open_burst(dir.path(), Duration::from_secs(60));
+        assert_eq!(
+            journal(dir.path()),
+            "time,tilt,gravity
+"
+        );
+
+        running.stop().await;
+        assert_eq!(journal(dir.path()), PARTIAL);
+    }
 }

@@ -1,0 +1,268 @@
+//! The command surface, invoked the way the webview invokes it.
+//!
+//! Tauri renames every snake_case command argument to camelCase, and a misspelt
+//! `Option` argument does not fail — it arrives as `None` and the command quietly
+//! falls back to the saved value. So these send the argument names `src/lib/api.ts`
+//! sends, and each test is shaped so the wrong name would give a different answer.
+//!
+//! Nothing here reaches the network: every URL is empty or invalid.
+
+use std::sync::Arc;
+
+use brewcore::{
+    config::ConfigStore,
+    db::{Db, Metric, SourceKind, migrations, tier1},
+    fermentrack::Client,
+    sync::{NoStatus, SyncManager},
+};
+use serde_json::{Value, json};
+use tauri::{
+    WebviewWindow, WebviewWindowBuilder,
+    ipc::{CallbackFn, InvokeBody},
+    test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder, mock_context, noop_assets},
+    webview::InvokeRequest,
+};
+
+struct Harness {
+    webview: WebviewWindow<MockRuntime>,
+    db: Db,
+    _app: tauri::App<MockRuntime>,
+    _dir: tempfile::TempDir,
+}
+
+impl Harness {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ConfigStore::open_or_default(dir.path().join("config.toml"));
+        let db = Db::open(dir.path().join("brewery.db")).unwrap();
+        let manager = SyncManager::new(config.clone(), Arc::new(NoStatus));
+
+        let app = mock_builder()
+            .manage(config)
+            .manage(db.clone())
+            .manage(Client::new().unwrap())
+            .manage(manager)
+            .invoke_handler(super::handler())
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        Self {
+            webview,
+            db,
+            _app: app,
+            _dir: dir,
+        }
+    }
+
+    fn invoke(&self, cmd: &str, args: Value) -> Result<Value, Value> {
+        get_ipc_response(
+            &self.webview,
+            InvokeRequest {
+                cmd: cmd.into(),
+                callback: CallbackFn(0),
+                error: CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: InvokeBody::Json(args),
+                headers: Default::default(),
+                invoke_key: INVOKE_KEY.into(),
+            },
+        )
+        .map(|body| body.deserialize().unwrap())
+    }
+
+    /// An error from our code, which the frontend reads `.code` off.
+    fn api_error(&self, cmd: &str, args: Value) -> Value {
+        let err = self.invoke(cmd, args).expect_err(cmd);
+        assert!(err["code"].is_string(), "{cmd}: not an ApiError: {err}");
+        err
+    }
+}
+
+/// Every name `api.ts` calls is registered. An unregistered one fails with Tauri's own
+/// message, which the first assertion pins so the check cannot pass vacuously.
+#[test]
+fn every_command_the_frontend_calls_is_registered() {
+    let app = Harness::new();
+    let unknown = app.invoke("no_such_command", json!({})).unwrap_err();
+    assert!(unknown.to_string().contains("not found"), "{unknown}");
+
+    let api = include_str!("../../src/lib/api.ts");
+    let commands: Vec<&str> = api
+        .split("call(\"")
+        .skip(1)
+        .map(|rest| &rest[..rest.find('"').unwrap()])
+        .collect();
+    assert!(commands.len() >= 17, "found only {commands:?}");
+
+    for cmd in commands {
+        // `baseUrl` keeps the two URL commands off the network; every other command
+        // either ignores it or fails on a missing required argument first.
+        if let Err(err) = app.invoke(cmd, json!({ "baseUrl": "not a url" })) {
+            assert!(!err.to_string().contains("not found"), "{cmd}: {err}");
+        }
+    }
+}
+
+/// `toApiError` exists because of this: Tauri rejects bad arguments with a plain
+/// string, before any of our code runs.
+#[test]
+fn a_missing_argument_is_rejected_by_tauri_as_a_string() {
+    let app = Harness::new();
+    let err = app.invoke("resync", json!({})).unwrap_err();
+    assert!(err.is_string(), "{err}");
+}
+
+#[test]
+fn config_round_trips_and_returns_the_stored_value() {
+    let app = Harness::new();
+    let mut config = app.invoke("get_config", json!({})).unwrap();
+    config["sync"]["poll_interval_secs"] = json!(120);
+    config["brewd"]["base_url"] = json!("  http://brewd.local:8080/  ");
+
+    let stored = app
+        .invoke("set_config", json!({ "config": config }))
+        .unwrap();
+    assert_eq!(stored["sync"]["poll_interval_secs"], 120);
+    assert_ne!(
+        stored["brewd"]["base_url"], config["brewd"]["base_url"],
+        "set_config normalises, and returns what it stored"
+    );
+    assert_eq!(app.invoke("get_config", json!({})).unwrap(), stored);
+}
+
+#[test]
+fn db_status_reports_the_schema_version() {
+    let app = Harness::new();
+    let status = app.invoke("db_status", json!({})).unwrap();
+    assert_eq!(status["schema_version"], migrations::head());
+    assert!(status["row_counts"]["reading"].is_number());
+}
+
+/// Both URL commands take an optional `baseUrl` that must win over the saved one. Sent
+/// under the wrong name it would be `None`, and the error would name the saved (empty)
+/// URL instead of this one.
+#[test]
+fn an_unsaved_base_url_is_the_one_tested() {
+    let app = Harness::new();
+
+    let err = app.api_error("check_fermentrack", json!({ "baseUrl": "arg-received" }));
+    assert_eq!(err["code"], "fermentrack.url");
+    assert!(
+        err["message"].as_str().unwrap().contains("arg-received"),
+        "{err}"
+    );
+
+    let err = app.api_error("list_journals", json!({ "baseUrl": "arg-received" }));
+    assert_eq!(err["code"], "fermentrack.url");
+    assert!(
+        err["message"].as_str().unwrap().contains("arg-received"),
+        "{err}"
+    );
+
+    let err = app.api_error("list_journals", json!({ "baseUrl": null }));
+    assert_eq!(err["code"], "brewd.unconfigured");
+}
+
+#[test]
+fn resync_and_rebuild_address_the_source_by_id() {
+    let app = Harness::new();
+    for cmd in ["resync", "rebuild"] {
+        let err = app.api_error(cmd, json!({ "sourceId": 42 }));
+        assert_eq!(err["code"], "sync.not_scheduled", "{cmd}");
+    }
+    assert_eq!(app.invoke("sync_status", json!({})).unwrap(), json!([]));
+}
+
+#[test]
+fn a_vessel_is_created_and_given_default_streams() {
+    let app = Harness::new();
+    let stream = app
+        .db
+        .write(|conn| {
+            let tx = conn.transaction()?;
+            let source = tier1::create_source(&tx, SourceKind::BrewdJournal, "esp32-1", None)?;
+            let stream = tier1::create_stream(&tx, source, "vessel_temp", Metric::TempC)?;
+            tx.commit()?;
+            Ok(stream)
+        })
+        .unwrap();
+
+    let id = app
+        .invoke(
+            "create_vessel",
+            json!({ "name": "  FV1 ", "kind": "fermenter", "capacityL": 30.0 }),
+        )
+        .unwrap();
+
+    let streams = app.invoke("list_streams", json!({})).unwrap();
+    assert_eq!(streams[0]["id"], stream);
+    assert_eq!(streams[0]["metric"], "temp_c");
+
+    app.invoke(
+        "set_vessel_streams",
+        json!({ "vesselId": id, "streamIds": [stream] }),
+    )
+    .unwrap();
+
+    let vessels = app.invoke("list_vessels", json!({})).unwrap();
+    assert_eq!(
+        vessels,
+        json!([{
+            "id": id,
+            "name": "FV1",
+            "kind": "fermenter",
+            "capacity_l": 30.0,
+            "notes": null,
+            "archived_at": null,
+            "default_streams": [stream],
+        }])
+    );
+}
+
+/// The name is trimmed before the UNIQUE check, so padding does not make a second FV1.
+#[test]
+fn a_refused_vessel_write_comes_back_with_a_code() {
+    let app = Harness::new();
+    let id = app
+        .invoke(
+            "create_vessel",
+            json!({ "name": "FV1", "kind": "fermenter", "capacityL": null }),
+        )
+        .unwrap();
+
+    let err = app.api_error(
+        "create_vessel",
+        json!({ "name": " FV1 ", "kind": "keg", "capacityL": null }),
+    );
+    assert_eq!(err["code"], "db.sqlite");
+
+    let err = app.api_error(
+        "set_vessel_streams",
+        json!({ "vesselId": id, "streamIds": [999] }),
+    );
+    assert_eq!(err["code"], "db.sqlite");
+
+    let vessels = app.invoke("list_vessels", json!({})).unwrap();
+    assert_eq!(vessels.as_array().unwrap().len(), 1);
+    assert_eq!(vessels[0]["default_streams"], json!([]));
+}
+
+#[test]
+fn only_kinds_with_a_poller_are_scheduled() {
+    let app = Harness::new();
+    let dir = tempfile::tempdir().unwrap();
+    let config = ConfigStore::open_or_default(dir.path().join("config.toml"));
+    let client = Client::new().unwrap();
+
+    for kind in [SourceKind::Manual, SourceKind::FermentrackGravityLog] {
+        let built = super::commands::build_source(&app.db, &client, &config, 1, kind).unwrap();
+        assert!(built.is_none(), "{kind:?}");
+    }
+    for kind in [SourceKind::FermentrackBeerLog, SourceKind::BrewdJournal] {
+        let built = super::commands::build_source(&app.db, &client, &config, 999, kind);
+        assert!(built.is_err(), "{kind:?}: a missing source must not build");
+    }
+}

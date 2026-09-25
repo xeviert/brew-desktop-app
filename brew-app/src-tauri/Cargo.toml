@@ -24,3 +24,9 @@ tauri = { version = "2.11.3", features = [] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
+
+[dev-dependencies]
+# `test` for `tauri::test::mock_builder`: `ipc_tests` invokes commands over the same
+# IPC path the webview uses, with the argument names `src/lib/api.ts` sends.
+tauri = { version = "2.11.3", features = ["test"] }
+tempfile.workspace = true

@@ -46,6 +46,8 @@ jobs:
       # Cheapest signal first — no Rust toolchain needed to fail on a type error.
       - run: npm run check
 
+      - run: npm test
+
       # Must precede every cargo step. `tauri::generate_context!` reads
       # `tauri.conf.json` and fails at compile time if `frontendDist` (../dist)
       # is missing, and `dist/` is gitignored.

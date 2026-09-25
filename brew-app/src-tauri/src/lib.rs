@@ -3,13 +3,16 @@ mod error;
 mod logging;
 mod sync_events;
 
+#[cfg(test)]
+mod ipc_tests;
+
 use brewcore::{
     config::{ConfigStore, resolve_config_path},
     db::{Db, resolve_db_path},
     fermentrack::{Client, discovery},
     sync::SyncManager,
 };
-use tauri::{Manager, RunEvent};
+use tauri::{Manager, RunEvent, Runtime, ipc::Invoke};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -55,25 +58,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::get_config,
-            commands::set_config,
-            commands::db_status,
-            commands::probe_log,
-            commands::add_source,
-            commands::list_sources,
-            commands::check_fermentrack,
-            commands::list_journals,
-            commands::probe_journal,
-            commands::add_journal_source,
-            commands::list_vessels,
-            commands::create_vessel,
-            commands::list_streams,
-            commands::set_vessel_streams,
-            commands::resync,
-            commands::rebuild,
-            commands::sync_status,
-        ])
+        .invoke_handler(handler())
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
@@ -87,6 +72,30 @@ pub fn run() {
             tracing::info!("polling stopped; exiting");
         }
     });
+}
+
+/// Every command the frontend can call. A function rather than inline in [`run`] so
+/// `ipc_tests` can register the same list on a mock runtime.
+fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
+    tauri::generate_handler![
+        commands::get_config,
+        commands::set_config,
+        commands::db_status,
+        commands::probe_log,
+        commands::add_source,
+        commands::list_sources,
+        commands::check_fermentrack,
+        commands::list_journals,
+        commands::probe_journal,
+        commands::add_journal_source,
+        commands::list_vessels,
+        commands::create_vessel,
+        commands::list_streams,
+        commands::set_vessel_streams,
+        commands::resync,
+        commands::rebuild,
+        commands::sync_status,
+    ]
 }
 
 /// Start a polling task for every source already in the database.
