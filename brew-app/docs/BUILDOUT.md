@@ -734,22 +734,230 @@ laptop is shut. The desktop app does everything else.
 opening the app backfills a gap-free curve bound to the pitched batch.
 
 ### Phase 4 — Dashboard & curves
-- [ ] Batch detail view: the ARCHITECTURE.md status card (OG, current SG, est. ABV, pH, temp)
-- [ ] Fermentation curve chart, multi-axis (SG / temp / pH), event markers
-- [ ] Downsampling for long series so the chart stays interactive
-- [ ] Smoothing for iSpindle SG — tilt-derived gravity jitters by a few points,
-      and the stability detector must read the smoothed series, not the raw one
-- [ ] "Fermentation stable for Nh" detector
-- [ ] Home view: active batches, last reading age, stale-data warning
-- [ ] iSpindle health on the home view: battery voltage and RSSI. A dead battery
-      and a flat ferment look identical from the gravity series alone
+> Starts after the Phase 3 UI pass: the batch screen, recipe screen, timeline and
+> quick-entry form deferred from 3b/3d/3e. Phase 4 adds curves and live state to
+> that batch screen; it does not build a second one. No hardware needed — every
+> item here runs on Vd's generated journal fixtures.
+
+**4a. Series query** — `db/series.rs`, no Tauri
+- [ ] `batch_series(conn, batch_id, metrics, range, max_points)`: readings for every
+      stream bound through `batch_stream`, clipped to each binding's half-open
+      `[starts_at, ends_at)`. A reading outside every window is not the batch's,
+      even from the same stream — that is what lets batch 17 and 18 share a
+      fermenter. `range` defaults to `[pitched_at, now)`; a planned batch with no
+      pitch has no t=0, so its default is its bindings' span
+- [ ] One series per **stream**, not per metric. An iSpindle `sg` and a manual
+      hydrometer `sg` on one batch are two series on one axis — merging them
+      hides the drift between the two instruments that the chart exists to show.
+      Each series carries `stream_id`, `metric`, `source.kind` and a label
+- [ ] Downsample in SQL: `GROUP BY ts / bucket` returning `MIN`, `MAX`, `AVG` and
+      the bucket's first `ts`, where `bucket = span / max_points`. It rides
+      `reading`'s clustered `(stream_id, ts)` scan, and the IPC payload is what
+      costs, not uPlot. **Min/max per bucket, not LTTB**: LTTB picks points that
+      look right and can drop the one spike that says a probe fell out of the
+      thermowell. Below `max_points` raw rows, return them unbucketed
+- [ ] Gaps survive downsampling. An empty bucket is a `null`, never skipped, so
+      uPlot breaks the line instead of drawing a straight ramp across a week the Pi
+      was off. A gap is "no reading for > 3× the stream's median interval", the
+      same rule 4f's staleness uses
+- [ ] Manual streams are never bucketed — a dozen points over a month is the whole
+      record, and averaging two pH readings invents a third
+- [ ] Tests: extremes survive bucketing, point count ≤ `max_points`, a gap stays a
+      gap, a reading one second past `ends_at` is excluded, two bindings of one
+      stream to one batch (3d's unplugged-and-reconnected case) read as one series
+      with a gap
+
+**4b. Smoothing** — `calc/smooth.rs`, pure, `&[(Timestamp, f64)]` in and out
+- [ ] Rolling **median** over a time window (proposal: 2 h), then nothing else.
+      A median drops a single wild tilt (the iSpindle bumped, a CO₂ bubble on the
+      hull) that a mean or EMA would smear across the window. Time-based, not
+      count-based: the iSpindle's interval is a device setting and changes
+- [ ] Computed on read, never stored. Tier 1 stays the raw journal, so a better
+      filter later reapplies to every past batch for free
+- [ ] Applied to `sg` from an iSpindle stream only. Temperature from a DS18B20
+      doesn't jitter, and smoothing manual readings is 4a's invented-point problem
+- [ ] The chart draws smoothed as the line and raw as faint points behind it —
+      hiding raw makes a smoothing bug invisible
+- [ ] Tests: a ±0.002 jitter on a flat line comes out flat within 0.0005; a single
+      outlier is removed; a real step (a dry-hop, a dilution) survives after one
+      window; edges with less than half a window are marked, not extrapolated
+
+**4c. Stability detector** — `calc/stability.rs`, the function Phase 6's alert calls
+- [ ] Implements *Fermentation-finished detection* below: slope of a least-squares
+      fit over a trailing window of the **smoothed** series, below a threshold,
+      **and** SG within a band of expected FG. Returns `Active`, `Stable { since }`,
+      `Stalled { since }` (flat but above the band) or `Insufficient { reason }`
+- [ ] Expected FG, in order: `recipe_version.target_fg`, else `batch.og` and the
+      yeast strain's `attenuation_min`/`attenuation_max`, else none. None is
+      `Stable` with `fg_unchecked` set, shown as such — a batch with no recipe
+      still finishes, it just can't be told apart from a stall
+- [ ] `Insufficient` when the window is under-filled: proposal ≥ 6 points **and**
+      spanning ≥ 75 % of the window. A fit through three points after a gap is
+      noise with a slope
+- [ ] "Stable for N h" is the time since the slope last crossed the threshold,
+      found by walking the history — not the time since the app noticed
+- [ ] Config: `stability.window_hours` (24), `stability.slope_sg_per_day` (0.0005),
+      `stability.fg_band` (0.003), validated like 3e's `measurement` section
+- [ ] "Log every evaluation" becomes **replay**: the detector is pure over history,
+      so `stability_history(series, config)` evaluates it at every point and the
+      chart shades the stable spans. Retuning a threshold shows at once where it
+      would have fired on every past batch, which a log of past evaluations can't
+- [ ] Tests on generated curves: lag → active → plateau reads `Stable` at the right
+      hour; a plateau 10 points above expected FG reads `Stalled`; a jittered
+      plateau never flips to `Active`; the lag phase before attenuation starts is
+      not `Stable`, which is the case a slope-only detector gets wrong
+
+**4d. Chart** — `src/lib/components/Curve.svelte`
+- [ ] Add `uPlot`, pinned like every other dependency. No install script, so no
+      `allowScripts` entry
+- [ ] Axes: gravity left, temperature right, pH a third axis shown only when the
+      batch has pH readings. Temp covers `temp_c`, `fridge_temp_c`, `room_temp_c`,
+      `gravity_temp_c` and `setpoint_c` — one scale, since they're compared against
+      each other. `battery_v`, `rssi_dbm`, `tilt_deg`, `state` stay off this chart
+- [ ] Gravity display unit: SG → °P / Brix is a `calc` fit, and `units.ts`
+      deliberately has no copy. `batch_series` converts server-side per
+      `ui.gravity_display` and labels the axis. Temperature converts in
+      `formatTemp` as it does today
+- [ ] Event markers: every `batch_event` as a vertical line with its kind; pitch
+      drawn as t=0. Hover shows the note
+- [ ] X axis toggles absolute time ↔ hours since pitch. The second is Phase 5's
+      overlay axis, built here so the two agree
+- [ ] Zoom refetches at the new range with the same `max_points` — the bucket
+      shrinks, detail appears, the payload doesn't grow
+- [ ] Live: listen on `sync://status` and refetch when `rows_added > 0` for a
+      source bound to this batch. No UI timer — sync already is the timer
+
+**4e. Status card and batch dashboard**
+- [ ] `batch_dashboard(batch_id)` in `brewcore`, one command, one struct: the
+      ARCHITECTURE.md card. Computed in Rust so Phase 6's `brewd` alert and the
+      screen read the same numbers
+- [ ] OG from `batch.og`. Missing → "no OG", with 3e's "use this as the OG" button
+      next to the earliest gravity. Never inferred from the first iSpindle point:
+      the lag phase and a stuck-on-the-wall iSpindle both read as OG
+- [ ] Current SG: latest smoothed iSpindle value, else latest manual. Labelled with
+      its instrument and age — a hydrometer from yesterday and an iSpindle from
+      two minutes ago are different claims
+- [ ] Est. ABV and apparent attenuation from OG and current SG, via
+      `calc::abv::alternate` and labelled "alternate" (3f's rule: no unlabelled
+      ABV). Refused below OG − 0.002 so the lag phase doesn't show 0.1 %
+- [ ] pH and temp: latest reading of each, with age. pH is manual and days old is
+      normal; temp older than the staleness rule is shown struck through
+- [ ] Stability from 4c, with `since` and the expected-FG source
+- [ ] Tests: each field against a fixture batch, including a batch with no OG, no
+      recipe, no bindings, and one with only manual readings
+
+**4f. Home view**
+- [ ] Route: the app has one screen. Hash routing (`#/`, `#/batch/17`,
+      `#/settings`) in a few lines, no router dependency, unless the Phase 3 UI
+      pass already added one
+- [ ] `home_summary()`: one card per batch that is `fermenting` or `conditioning`
+      and not archived — code, vessel, current SG, temp, stability, newest reading
+      age. Click through to the batch
+- [ ] Stale per **stream**: no reading for > 3× its median interval over the last
+      day, floor 10 min. Derived, not configured — a 30 s ESP32 and a 15 min
+      iSpindle can't share a threshold, and the interval is a device setting
+- [ ] Stale is not unreachable. Ve's `SyncPhase::Unreachable` says the Pi is down;
+      a stale stream with `brewd` reachable says the *sensor* is silent. The card
+      says which, from `last_error_code`, not from text
+- [ ] Device health per journal source, not per batch — an iSpindle is a device:
+      battery voltage with a warning threshold (proposal 3.6 V, config), RSSI
+      (proposal warn below −80 dBm) and a 7-day battery sparkline. Shown on the
+      batch card too when the device is bound to it
+- [ ] A silent iSpindle with a last battery near the threshold says "battery
+      likely"; one with healthy battery and falling RSSI says "signal". Two cheap
+      heuristics, labelled as guesses — the gravity series alone can't tell a dead
+      device from a finished ferment
+
+**Done when:** opening the app shows every active batch with current SG, temp and
+stability; clicking one shows a responsive multi-axis curve over the full ferment
+with events marked; and a 60-day, 30 s journal stays interactive when zoomed.
 
 ### Phase 5 — Analytics
-- [ ] Batch-to-batch comparison (overlay curves, time-aligned from pitch)
-- [ ] Saved queries: "all batches, yeast X, OG 1.035–1.040, ferm temp 18°C"
-- [ ] Derived per-batch metrics table (lag time, peak rate, days to terminal)
-- [ ] Yeast/strain performance rollup
-- [ ] CSV export of any result set
+> Every metric here is computed from 4a–4c on read, not stored. With tens of
+> batches a full recompute is milliseconds, and a changed definition (what counts
+> as lag) then applies to every past batch at once instead of leaving a table of
+> numbers computed under an old rule. A `batch_metrics` cache is the fallback if
+> that stops being true, not the plan.
+
+**5a. Per-batch metrics** — `calc/batch_metrics.rs` (pure) + `db/analytics.rs` (joins)
+- [ ] Lag time: pitch → first time the smoothed SG is 0.002 below OG. Needs OG and
+      pitch; `None` with a reason otherwise
+- [ ] Peak rate: steepest least-squares slope over any 6 h window, SG/day, and the
+      hour it happened
+- [ ] Days to terminal: pitch → the `since` of 4c's first `Stable`. A batch never
+      stable has `None`, not "still running" — archived batches are compared too
+- [ ] Apparent attenuation and ABV from `batch.og`/`batch.fg` (not the live SG), so
+      finished batches compare on their recorded numbers
+- [ ] Fermentation temp: **median** `temp_c` over `[pitch, terminal)`, plus min and
+      max. Median so the cold crash at the end doesn't drag it; the range shows a
+      controller that swung
+- [ ] Nutrient total (YAN mg/L from `batch_ingredient`), cost per litre from 3f's
+      `batch_cost`, yeast strain from **actuals** (`batch_ingredient` → lot →
+      `ingredient.yeast_strain_id`), not the recipe — a substituted yeast is the
+      exact case the analysis is for
+- [ ] Every metric is `Option` plus a reason: "manual readings only" (too sparse
+      for lag or peak rate), "no pitch", "no OG". A table that prints 0 for
+      "couldn't compute" poisons every average in 5d
+- [ ] Tests: each metric against a generated curve with a known lag, peak and
+      plateau; a manual-only batch returns reasons, not numbers
+
+**5b. Batch comparison overlay**
+- [ ] Pick 2–8 batches; x = hours since pitch, from 4d. Unpitched batches are
+      listed as excluded with the reason rather than silently missing
+- [ ] Y mode: raw SG, or **fraction of apparent attenuation** `(OG − SG)/(OG − 1)`.
+      Raw SG is unreadable across a 1.030 and a 1.050 wash; the fraction puts both
+      on 0 → ~1. Needs OG; batches without it drop to raw with a note
+- [ ] Optional temp overlay on the right axis, same batches
+- [ ] Reuses `batch_series` per batch with the same `max_points`, and 4b's
+      smoothing. Nothing new server-side except the alignment
+- [ ] Entry points: from the batch screen ("compare with…") and from any 5c result
+
+**5c. Saved queries** — `0009_saved_query.sql`, Tier 2
+- [ ] A structured `BatchFilter`, **not SQL text**: beverage type, recipe, recipe
+      version, yeast strain (actuals), ingredient lot, OG range, FG range, ferm
+      temp range (5a's median), pitched between, status, include archived. Stored
+      SQL would couple saved queries to the schema and break on the next migration
+- [ ] `saved_query (id, name, filter JSON, created_at, archived_at)`. The JSON
+      carries `"v": 1`. An unknown or retired field on load is an error — silently
+      dropping one criterion *widens* the result, and a wider result looks right
+- [ ] Filtering runs in Rust over 5a's computed metrics, after a SQL prefilter on
+      the columns that exist (type, status, dates, OG). The ARCHITECTURE.md
+      example — "EC-1118, OG 1.035–1.040, 18 °C" — is the acceptance test
+- [ ] Result is the 5a table, sortable, with "overlay these" (5b) and "export" (5e)
+- [ ] Lot filter answers "which batches used that suspect yeast lot" — 3a's
+      traceability question, finally a screen
+
+**5d. Yeast / strain rollup**
+- [ ] Group 5a's metrics by actual strain: n, median and range of attenuation,
+      lag, days to terminal, ferm temp. Median, not mean — at n = 4 one stuck
+      batch owns the mean
+- [ ] Measured attenuation beside the strain's own `attenuation_min`/`max` band,
+      flagged when the median falls outside it — either the strain record is
+      wrong or the process is
+- [ ] A batch with two strains goes to a "mixed" row, never counted twice
+- [ ] n < 3 is shown greyed out, not hidden
+- [ ] Filterable by the same `BatchFilter` as 5c, so "EC-1118 on seltzer only" is
+      the same code path
+
+**5e. CSV export** — Rust side, `csv` crate, one writer
+- [ ] Export is the **same query** as the screen plus a writer, never a scrape of
+      the rendered table: metrics table, rollup, overlay series, and a batch's raw
+      readings (4a with `max_points` unbounded)
+- [ ] Values in canonical units with the unit in the header (`temp_c`, `sg`), both
+      `ts` (epoch) and `time_utc` (ISO 8601) columns. Display units are for eyes;
+      a file gets re-imported
+- [ ] Dialect: RFC 4180 by default, and an `excel_fr` option — `;` separator, `,`
+      decimal, UTF-8 BOM — since French Excel opens a comma CSV as one column.
+      Proposal: `export.dialect` in config
+- [ ] Save dialog via `tauri-plugin-dialog`; the path goes to a command that
+      writes it. The frontend never touches the filesystem
+- [ ] Tests: round-trip through the `csv` reader for each dialect; a note with a
+      `;`, a `,` and a quote survives both
+
+**Done when:** "all EC-1118 seltzers, OG 1.035–1.040, fermented at 18 °C" is a
+saved query that returns the right batches with lag, peak rate and days to
+terminal, overlays them aligned on pitch, and exports to a CSV that opens
+correctly in French Excel.
 
 ### Phase 6 — Alerts & automation rules
 > **v2:** rules and profiles run in `brewd`, not the desktop app. An alert that
