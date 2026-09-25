@@ -1,0 +1,28 @@
+[package]
+name = "brewd"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The Pi daemon: MQTT in, journals out. Never depends on `tauri` —
+# `tests/no_tauri.rs` enforces it, as brewcore's does.
+[dependencies]
+brewcore.workspace = true
+rumqttc.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio = { workspace = true, features = ["net", "fs", "signal"] }
+csv.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true

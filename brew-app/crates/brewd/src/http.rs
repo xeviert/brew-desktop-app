@@ -1,0 +1,214 @@
+//! Read-only journal access for the desktop app. LAN-only, no auth — the trust model
+//! Fermentrack's `/data/` had. Phase 6's first write endpoint is where that gets
+//! revisited, not here.
+//!
+//! `GET /journals/` lists every journal, rotated ones included: the listing
+//! Fermentrack never had. `GET /journals/<name>` serves one through `tower-http`'s
+//! `ServeFile`, which answers `Range` with `206` + `Content-Range`, or `416` past the
+//! end — the two shapes `brewcore::journal::Client` resumes from.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::UNIX_EPOCH;
+
+use axum::Json;
+use axum::Router;
+use axum::body::Body;
+use axum::extract::{Path, Request, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use brewcore::journal::{JournalEntry, is_journal_name};
+use brewcore::units::Timestamp;
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
+
+type Dir = Arc<PathBuf>;
+
+pub fn router(journal_dir: PathBuf) -> Router {
+    Router::new()
+        .route("/journals", get(list))
+        .route("/journals/", get(list))
+        .route("/journals/{name}", get(journal))
+        .with_state(Arc::new(journal_dir))
+}
+
+async fn list(State(dir): State<Dir>) -> Result<Json<Vec<JournalEntry>>, StatusCode> {
+    let internal = |e: std::io::Error| {
+        tracing::error!(dir = %dir.display(), error = %e, "cannot list journals");
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+
+    let mut entries = Vec::new();
+    let mut read = tokio::fs::read_dir(&*dir).await.map_err(internal)?;
+    while let Some(entry) = read.next_entry().await.map_err(internal)? {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if !is_journal_name(&name) {
+            continue;
+        }
+        let meta = entry.metadata().await.map_err(internal)?;
+        if !meta.is_file() {
+            continue;
+        }
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs() as i64);
+        entries.push(JournalEntry {
+            name,
+            bytes: meta.len(),
+            modified: Timestamp::from_secs(modified),
+        });
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Json(entries))
+}
+
+async fn journal(State(dir): State<Dir>, Path(name): Path<String>, request: Request) -> Response {
+    // `Path` has already percent-decoded, so `..%2F` arrives as `../` and fails here.
+    if !is_journal_name(&name) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match ServeFile::new(dir.join(&name)).oneshot(request).await {
+        Ok(response) => response.map(Body::new),
+        Err(never) => match never {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::journal::Journal;
+    use brewcore::journal::{Client, FetchOutcome};
+    use reqwest::header::{CONTENT_RANGE, RANGE};
+    use std::net::SocketAddr;
+
+    const T0: Timestamp = Timestamp::from_secs(1_790_000_000);
+
+    async fn serve(dir: PathBuf) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router(dir)).await.unwrap() });
+        addr
+    }
+
+    fn some(values: &[&str]) -> Vec<Option<String>> {
+        values.iter().map(|v| Some((*v).to_owned())).collect()
+    }
+
+    #[tokio::test]
+    async fn the_listing_shows_journals_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("b.csv"), "time,x\n").unwrap();
+        std::fs::write(dir.path().join("a.1790000000.csv"), "time\n").unwrap();
+        std::fs::write(dir.path().join("brewd.toml"), "").unwrap();
+        std::fs::write(dir.path().join(".hidden.csv"), "").unwrap();
+        std::fs::create_dir(dir.path().join("sub.csv")).unwrap();
+        let addr = serve(dir.path().to_owned()).await;
+
+        for path in ["/journals/", "/journals"] {
+            let body = reqwest::get(format!("http://{addr}{path}"))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let entries: Vec<JournalEntry> = serde_json::from_slice(&body).unwrap();
+            let names: Vec<_> = entries.iter().map(|e| (e.name.as_str(), e.bytes)).collect();
+            assert_eq!(names, [("a.1790000000.csv", 5), ("b.csv", 7)], "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_range_request_gets_a_206_and_past_the_end_a_416() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("d.csv"), "time,a\n1790000000,1\n").unwrap();
+        let addr = serve(dir.path().to_owned()).await;
+        let url = format!("http://{addr}/journals/d.csv");
+        let http = reqwest::Client::new();
+
+        let partial = http
+            .get(&url)
+            .header(RANGE, "bytes=7-")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(partial.status(), 206);
+        assert_eq!(partial.headers()[CONTENT_RANGE], "bytes 7-19/20");
+        assert_eq!(partial.text().await.unwrap(), "1790000000,1\n");
+
+        let past = http
+            .get(&url)
+            .header(RANGE, "bytes=20-")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(past.status(), 416);
+        assert_eq!(past.headers()[CONTENT_RANGE], "bytes */20");
+    }
+
+    #[tokio::test]
+    async fn anything_but_a_journal_name_is_a_404() {
+        let dir = tempfile::tempdir().unwrap();
+        let journals = dir.path().join("journals");
+        std::fs::create_dir(&journals).unwrap();
+        std::fs::write(dir.path().join("secret.csv"), "no").unwrap();
+        std::fs::write(journals.join("notes.txt"), "no").unwrap();
+        let addr = serve(journals).await;
+
+        for path in [
+            "/journals/..%2Fsecret.csv",
+            "/journals/..%5Csecret.csv",
+            "/journals/notes.txt",
+            "/journals/missing.csv",
+        ] {
+            let status = reqwest::get(format!("http://{addr}{path}"))
+                .await
+                .unwrap()
+                .status();
+            assert_eq!(status, 404, "{path}");
+        }
+    }
+
+    /// The consumer this exists for: the desktop's own client, resuming by offset
+    /// against a journal that is growing underneath it.
+    #[tokio::test]
+    async fn the_desktop_client_backfills_then_resumes_a_growing_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut journal =
+            Journal::open(dir.path(), "ispindel-1", &["tilt", "gravity"], T0).unwrap();
+        journal.append(T0, &some(&["45.2", "1.012"])).unwrap();
+        let addr = serve(dir.path().to_owned()).await;
+        let url = format!("http://{addr}/journals/ispindel-1.csv");
+        let client = Client::new().unwrap();
+
+        let FetchOutcome::Fresh {
+            bytes, offset: 0, ..
+        } = client.fetch(&url, 0).await.unwrap()
+        else {
+            panic!("expected the whole journal");
+        };
+        assert_eq!(bytes, b"time,tilt,gravity\n1790000000,45.2,1.012\n");
+        let offset = bytes.len() as u64;
+
+        assert!(matches!(
+            client.fetch(&url, offset).await.unwrap(),
+            FetchOutcome::Unchanged { total } if total == offset
+        ));
+
+        journal
+            .append(T0.saturating_add_secs(900), &some(&["44.9", "1.011"]))
+            .unwrap();
+        let FetchOutcome::Fresh {
+            bytes, offset: at, ..
+        } = client.fetch(&url, offset).await.unwrap()
+        else {
+            panic!("expected the appended record");
+        };
+        assert_eq!(at, offset);
+        assert_eq!(bytes, b"1790000900,44.9,1.011\n");
+    }
+}

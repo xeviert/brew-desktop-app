@@ -1,0 +1,45 @@
+# brewd config. Install as /etc/brewd/brewd.toml, readable by the `brewd` user only:
+# it holds the broker password.
+#
+# Topics below are placeholders until the Phase 0 captures exist. Take the real ones
+# from `mosquitto_sub -v -t '#'`, not from this file.
+
+# systemd's StateDirectory=brewd creates this.
+journal_dir = "/var/lib/brewd/journals"
+
+# A device's messages within this long of its first one are one reading, stamped
+# once. The iSpindle publishes a wake cycle as a burst of one topic per field.
+burst_window_ms = 2000
+
+[http]
+# LAN-only, read-only, no auth.
+listen = "0.0.0.0:8080"
+
+[mqtt]
+host = "localhost"
+port = 1883
+client_id = "brewd"
+username = "brewd"
+password = "change-me"
+
+# One journal per device: <journal_dir>/<name>.csv. Column order is header order.
+# Values are journalled as published — no unit conversion. Whether `gravity` is SG
+# or °P is the desktop app's `gravity.ispindel_unit`.
+[[device]]
+name = "ispindel-1"
+columns = [
+    { topic = "ispindel/iSpindel000/tilt", column = "tilt" },
+    { topic = "ispindel/iSpindel000/gravity", column = "gravity" },
+    { topic = "ispindel/iSpindel000/temperature", column = "temperature" },
+    { topic = "ispindel/iSpindel000/battery", column = "battery" },
+    { topic = "ispindel/iSpindel000/RSSI", column = "rssi" },
+    { topic = "ispindel/iSpindel000/interval", column = "interval" },
+]
+
+# ESPHome's default state topic is <node>/sensor/<sensor>/state.
+[[device]]
+name = "esp32-1"
+columns = [
+    { topic = "esp32-1/sensor/vessel_temp/state", column = "vessel_temp" },
+    { topic = "esp32-1/sensor/chamber_temp/state", column = "chamber_temp" },
+]

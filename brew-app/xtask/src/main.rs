@@ -1,5 +1,6 @@
 //! Dev helpers. `gen-fixture` emits byte-accurate Fermentrack `_full.csv` files so
-//! ingest can be built and tested without a Fermentrack.
+//! ingest can be built and tested without a Fermentrack. `build-pi` cross-compiles
+//! `brewd` for the Pi Zero 2 W.
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,7 @@ fn main() {
     match args.next().as_deref() {
         Some("db-status") => db_status(args.next().map(PathBuf::from)),
         Some("gen-fixture") => gen_fixture(args.collect()),
+        Some("build-pi") => build_pi(),
         Some(other) => {
             eprintln!("unknown task: {other}");
             usage();
@@ -23,7 +25,8 @@ fn usage() {
     eprintln!(
         "usage: cargo xtask <task>\n\n  \
          db-status [path]   open a database and print its status\n  \
-         gen-fixture [...]  write Fermentrack log fixtures\n\n\
+         gen-fixture [...]  write Fermentrack log fixtures\n  \
+         build-pi           cross-compile brewd for the Pi (needs `cross` and Docker)\n\n\
          gen-fixture options:\n  \
          --out DIR          default target/fixtures\n  \
          --scenario NAME    nominal | gravity | ugly | v1 | all (default all)\n  \
@@ -53,6 +56,26 @@ fn db_status(path: Option<PathBuf>) {
             std::process::exit(1);
         }
     }
+}
+
+/// The Pi Zero 2 W has 512 MB of RAM and cannot link `brewd`, so it is never built
+/// on the device. `cross` rather than a bare `--target`: rusqlite's bundled SQLite
+/// reaches `brewd` through `brewcore`, and that is C needing an aarch64 toolchain.
+fn build_pi() {
+    const TARGET: &str = "aarch64-unknown-linux-gnu";
+    let status = std::process::Command::new("cross")
+        .args(["build", "--package", "brewd", "--release", "--target", TARGET])
+        .status()
+        .unwrap_or_else(|err| {
+            eprintln!(
+                "could not run `cross` ({err}). Install it with `cargo install cross`; it needs Docker."
+            );
+            std::process::exit(1);
+        });
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    println!("target/{TARGET}/release/brewd");
 }
 
 /// Write one `_full.csv` and one `_graph.csv` per scenario, under the filenames

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/brewcore", "crates/fixtures", "xtask"]
+members = ["src-tauri", "crates/brewcore", "crates/brewd", "crates/fixtures", "xtask"]
 
 [workspace.package]
 edition = "2024"
@@ -42,6 +42,16 @@ wiremock = "0.6"
 async-trait = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "charset"] }
+
+# Phase Vc, `brewd` only — the desktop app never links an MQTT client or an HTTP
+# server. `rumqttc` without TLS: the broker is on the LAN, and `rustls`' default
+# crypto provider is C and assembly the Pi cross-build does not need. `tower-http`'s
+# `ServeFile` is what answers `Range` with the 206/416 semantics `journal::Client`
+# already handles; 0.6 is the line Tauri already locks.
+rumqttc = { version = "0.25", default-features = false }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "tracing"] }
+tower-http = { version = "0.6", features = ["fs"] }
+tower = { version = "0.5", features = ["util"] }
 
 [profile.dev]
 # rusqlite's bundled SQLite is C; building it unoptimised makes every test slow.

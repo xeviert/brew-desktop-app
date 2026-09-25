@@ -1,0 +1,30 @@
+# /etc/systemd/system/brewd.service
+#
+#   sudo useradd --system --no-create-home brewd
+#   sudo install -m 755 brewd /usr/local/bin/brewd
+#   sudo install -d /etc/brewd
+#   sudo install -m 640 -g brewd brewd.example.toml /etc/brewd/brewd.toml
+#   sudo systemctl enable --now brewd
+#   journalctl -u brewd -f
+
+[Unit]
+Description=brewd - MQTT to journal logger
+Wants=network-online.target mosquitto.service
+After=network-online.target mosquitto.service
+
+[Service]
+ExecStart=/usr/local/bin/brewd /etc/brewd/brewd.toml
+Restart=on-failure
+RestartSec=5
+User=brewd
+Group=brewd
+# /var/lib/brewd, owned by brewd, kept across restarts. journal_dir lives under it.
+StateDirectory=brewd
+# stdout and stderr go to journald by default.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

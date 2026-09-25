@@ -655,24 +655,37 @@ laptop is shut. The desktop app does everything else.
       setpoint when the Pi or the broker is down. Test it by stopping Mosquitto mid-run
 
 **Vc. `brewd` — new crate `crates/brewd`, binary, depends on `brewcore`, no `tauri`**
-- [ ] MQTT subscriber (`rumqttc`). **Timestamp at receipt**, UTC epoch seconds —
-      iSpindle and ESPHome payloads carry no time, and Mosquitto adds none
-- [ ] Group an iSpindle wake cycle into one timestamp. The stock firmware publishes
+- [x] MQTT subscriber (`rumqttc`, no TLS). **Timestamp at receipt**, UTC epoch seconds —
+      iSpindle and ESPHome payloads carry no time, and Mosquitto adds none. Retained
+      messages are skipped: ESPHome retains state by default, and a replay on
+      subscribe would journal a stale value as fresh. Topics are exact, no wildcards —
+      each maps to one `(device, column)` in `brewd.toml`
+- [x] Group an iSpindle wake cycle into one timestamp. The stock firmware publishes
       one topic per field in a burst, and stamping each field separately draws a
-      trend out of one reading. Same rule as 3e's `record_quick_entry`
-- [ ] Append-only journal per device, CSV with a header row, `\n`-terminated,
+      trend out of one reading. Same rule as 3e's `record_quick_entry`. `burst.rs`:
+      a device's first message opens a burst and fixes its time; it closes when
+      every column has arrived, a column repeats, or `burst_window_ms` (2 s) runs out.
+      One rule for the iSpindle and ESPHome's two probes
+- [x] Append-only journal per device, CSV with a header row, `\n`-terminated,
       flushed per line. Keep the raw `tilt` beside `gravity`: gravity is a calibration
       polynomial applied on the device, and tilt is what lets SG be recomputed after
-      a recalibration
-- [ ] HTTP: `GET /journals/` lists journals (the listing Fermentrack never had);
+      a recalibration. Header is `time,<columns…>`; values are the raw payloads, no
+      unit conversion — `gravity.ispindel_unit` is the desktop's to apply. On start, a
+      half-written last line is trimmed; a changed header rotates the old journal to
+      `<device>.<epoch>.csv`. `brewcore::journal::format` holds what both sides share
+- [x] HTTP: `GET /journals/` lists journals (the listing Fermentrack never had);
       `GET /journals/<name>` honours `Range`. Read-only, LAN-only, no auth — same
-      trust model Fermentrack had
-- [ ] Runs under systemd, restarts on failure. Logs to journald
+      trust model Fermentrack had. `tower-http`'s `ServeFile`; tested end to end
+      against `journal::Client`
+- [ ] Runs under systemd, restarts on failure. Logs to journald —
+      `crates/brewd/deploy/brewd.service` written, not yet run on a Pi
 - [ ] Cross-compiled for the Pi Zero 2 W's `aarch64-unknown-linux-gnu` (64-bit OS),
       via `cargo xtask` or `cross`. Never built on the device: 512 MB RAM does not
-      link a Rust binary of this size
-- [ ] No SQLite on the Pi. `brewery.db` stays on the desktop; `brewd` owns only
-      its journals and its config. Revisit only if a second machine needs to write
+      link a Rust binary of this size — `cargo xtask build-pi` wraps `cross`, not yet
+      run
+- [x] No SQLite on the Pi. `brewery.db` stays on the desktop; `brewd` owns only
+      its journals and its config. Revisit only if a second machine needs to write.
+      (`brewd` still links rusqlite through `brewcore`; it opens no database)
 
 **Vd. Journal ingest** — a `ReadingSource` impl beside `fermentrack::source`
 - [ ] Parser for the journal format. Rows map to metrics by header, like 2b

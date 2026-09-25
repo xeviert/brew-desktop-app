@@ -14,11 +14,13 @@
 //! [`split_complete_lines`].
 
 pub mod client;
+pub mod format;
 pub mod ingest;
 pub mod lines;
 pub mod store;
 
 pub use client::{Client, ClientSettings, FetchOutcome, RetryPolicy, log_url};
+pub use format::{JOURNAL_EXTENSION, JournalEntry, TIME_COLUMN, is_journal_name};
 pub use ingest::{
     Advance, Dialect, MAX_PARTIAL_RECORD_BYTES, ParseReport, ParsedChunk, Restart, RestartReason,
     SyncFault, SyncState, SyncStep, ingest,
