@@ -100,6 +100,8 @@ fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
         commands::batch_series,
         commands::list_batch_events,
         commands::batch_stability,
+        commands::batch_dashboard,
+        commands::set_batch_og,
     ]
 }
 

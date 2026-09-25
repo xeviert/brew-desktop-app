@@ -10,7 +10,10 @@
 //! the two agree to under a tenth of a degree, which is why the literature is casual
 //! about the distinction and why this module is not.
 
-use crate::{Error, Result, units::Sg};
+use crate::{
+    Error, Result,
+    units::{GravityDisplay, Sg},
+};
 
 /// Apparent extract in °Plato, from apparent specific gravity at 20 °C/20 °C.
 ///
@@ -43,6 +46,15 @@ pub fn sg_to_plato(sg: Sg) -> f64 {
 pub fn sg_to_brix(sg: Sg) -> f64 {
     let s = sg.get();
     143.254 * s * s * s - 648.670 * s * s + 1125.805 * s - 620.389
+}
+
+/// `sg` in the `ui.gravity_display` scale, unchanged for SG.
+pub fn sg_to_display(sg: Sg, display: GravityDisplay) -> f64 {
+    match display {
+        GravityDisplay::Sg => sg.get(),
+        GravityDisplay::Plato => sg_to_plato(sg),
+        GravityDisplay::Brix => sg_to_brix(sg),
+    }
 }
 
 /// The inverse of [`sg_to_plato`], by bisection over [`Sg::PLAUSIBLE`].

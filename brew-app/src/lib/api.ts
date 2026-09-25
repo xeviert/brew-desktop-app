@@ -366,11 +366,18 @@ export interface FlatSpan {
 	state: "stable" | "stalled";
 }
 
+/** Mirrors `brewcore::calc::stability::ExpectedFg`. SG. */
+export interface ExpectedFg {
+	lo: number;
+	hi: number;
+	source: "recipe" | "strain";
+}
+
 /** Mirrors `src-tauri`'s `StabilityView`. */
 export interface StabilityView {
 	stream_id: number | null;
 	current: Stability;
-	expected_fg: { lo: number; hi: number; source: "recipe" | "strain" } | null;
+	expected_fg: ExpectedFg | null;
 	spans: FlatSpan[];
 }
 
@@ -395,3 +402,64 @@ export const listBatchEvents = (batchId: number): Promise<BatchEvent[]> =>
 
 export const batchStability = (batchId: number): Promise<StabilityView> =>
 	call("batch_stability", { batchId });
+
+// ---------------------------------------------------------------------------
+// Phase 4e: the status card
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::dashboard::Gravity`. `sg` is SG whatever the display unit. */
+export interface DashboardGravity {
+	ts: number;
+	sg: number;
+	/** 4b's rolling median rather than a reading. */
+	smoothed: boolean;
+	source_kind: string;
+	label: string;
+	/** Manual readings only: `hydrometer`, `refractometer`. */
+	instrument: string | null;
+}
+
+/** Mirrors `brewcore::db::dashboard::Reading`. Temperature is °C. */
+export interface DashboardReading {
+	metric: string;
+	ts: number;
+	value: number;
+	source_kind: string;
+	label: string;
+	stale: boolean;
+}
+
+/** Mirrors `brewcore::db::dashboard::Estimate`. Fractions, not percent. */
+export type Estimate =
+	| { state: "estimated"; abv_alternate: number; apparent_attenuation: number }
+	| { state: "no_og" | "no_gravity" | "not_started" | "og_too_low" };
+
+/** Mirrors `src-tauri`'s `DashboardView`: SG fields, plus `display` in `gravity_unit`. */
+export interface Dashboard {
+	batch_id: number;
+	og: number | null;
+	/** The earliest gravity, offered while `og` is null. */
+	og_candidate: DashboardGravity | null;
+	gravity: DashboardGravity | null;
+	estimate: Estimate;
+	ph: DashboardReading | null;
+	temp: DashboardReading | null;
+	stability: Stability;
+	expected_fg: ExpectedFg | null;
+	source_ids: number[];
+	display: {
+		og: number | null;
+		og_candidate: number | null;
+		gravity: number | null;
+		expected_fg_lo: number | null;
+		expected_fg_hi: number | null;
+	};
+	gravity_unit: string;
+}
+
+export const batchDashboard = (batchId: number): Promise<Dashboard> =>
+	call("batch_dashboard", { batchId });
+
+/** `og` in SG: send back `og_candidate.sg`, not the display value. */
+export const setBatchOg = (batchId: number, og: number): Promise<void> =>
+	call("set_batch_og", { batchId, og });

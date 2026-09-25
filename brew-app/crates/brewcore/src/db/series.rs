@@ -25,7 +25,7 @@
 //!
 //! Same contract as the rest of `db`: a borrowed connection, no transaction of its own.
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{Metric, batch::get_batch, tier1::SourceKind};
 use crate::{
@@ -182,6 +182,74 @@ pub fn median_interval(
     }
     diffs.sort_unstable();
     Ok(Some(diffs[diffs.len() / 2]))
+}
+
+/// The least [`stale_after`] returns: a 30 s probe that misses a few readings is not
+/// news.
+pub const STALE_FLOOR_SECS: i64 = 600;
+
+/// How long a stream may go quiet before it is stale: 3× its median interval over the
+/// day up to `newest`, at least [`STALE_FLOOR_SECS`]. Up to its newest reading rather
+/// than now, so a device that has gone silent still has an interval to be late by.
+pub fn stale_after(conn: &Connection, stream_id: i64, newest: Timestamp) -> Result<i64> {
+    let day = SeriesRange {
+        start: newest.saturating_add_secs(-86_400),
+        end: newest.saturating_add_secs(1),
+    };
+    Ok(median_interval(conn, stream_id, day)?
+        .map_or(STALE_FLOOR_SECS, |m| (m * 3).max(STALE_FLOOR_SECS)))
+}
+
+/// A bound stream's newest reading inside the batch's windows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Latest {
+    pub stream_id: i64,
+    pub metric: Metric,
+    pub source_kind: SourceKind,
+    pub label: String,
+    pub ts: Timestamp,
+    pub value: f64,
+}
+
+/// The newest reading of every stream bound to the batch whose metric is in `metrics`,
+/// scoped like [`batch_series`]: a shared fermenter's reading after this batch's
+/// binding ended is the next batch's. Streams with nothing in their windows are left
+/// out.
+pub fn latest_readings(
+    conn: &Connection,
+    batch_id: i64,
+    metrics: &[Metric],
+    now: Timestamp,
+) -> Result<Vec<Latest>> {
+    let mut stmt = conn.prepare(
+        "SELECT ts, value FROM reading WHERE stream_id = ? AND ts >= ? AND ts < ? \
+         ORDER BY ts DESC LIMIT 1",
+    )?;
+    let mut out = Vec::new();
+    for s in bound_streams(conn, batch_id, now)? {
+        if !metrics.contains(&s.metric) {
+            continue;
+        }
+        for w in s.windows.iter().rev() {
+            let newest = stmt
+                .query_row(params![s.stream_id, w.start, w.end], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .optional()?;
+            if let Some((ts, value)) = newest {
+                out.push(Latest {
+                    stream_id: s.stream_id,
+                    metric: s.metric,
+                    source_kind: s.source_kind,
+                    label: s.label,
+                    ts,
+                    value,
+                });
+                break;
+            }
+        }
+    }
+    Ok(out)
 }
 
 // ------------------------------------------------------------- bindings
@@ -688,6 +756,25 @@ mod tests {
 
     fn values(s: &Series) -> Vec<f64> {
         s.avg.iter().map(|v| v.unwrap()).collect()
+    }
+
+    #[test]
+    fn stale_after_is_three_intervals_with_a_floor() {
+        let mut conn = db();
+        let probe = stream(&mut conn, SourceKind::BrewdJournal, "probe", Metric::TempC);
+        readings(&mut conn, probe, flat(0, DAY, 30, 18.0));
+        assert_eq!(
+            stale_after(&conn, probe, at(DAY - 30)).unwrap(),
+            STALE_FLOOR_SECS
+        );
+
+        let ispindel = stream(&mut conn, SourceKind::BrewdJournal, "ispindel", Metric::Sg);
+        readings(&mut conn, ispindel, flat(0, DAY, 900, 1.040));
+        assert_eq!(stale_after(&conn, ispindel, at(DAY - 900)).unwrap(), 2_700);
+
+        let once = stream(&mut conn, SourceKind::Manual, "once", Metric::Ph);
+        readings(&mut conn, once, [(0, 3.4)]);
+        assert_eq!(stale_after(&conn, once, at(0)).unwrap(), STALE_FLOOR_SECS);
     }
 
     #[test]

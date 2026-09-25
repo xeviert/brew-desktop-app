@@ -9,7 +9,7 @@ use super::{
     Metric,
     batch::{BatchRow, get_batch},
     recipe::get_recipe_version,
-    series::batch_series,
+    series::{Series, batch_series},
     tier1::SourceKind,
 };
 use crate::{
@@ -105,25 +105,36 @@ pub fn batch_stability(
     batch_id: i64,
     params: &StabilityParams,
 ) -> Result<BatchStability> {
-    let batch = get_batch(conn, batch_id)?;
-    let expected_fg = expected_fg_for(conn, &batch)?;
+    Ok(judge(conn, &get_batch(conn, batch_id)?, params)?.0)
+}
+
+/// [`batch_stability`], and the sensor series it judged. 4e's current SG is that
+/// series' newest smoothed value, so the card and the detector cannot pick different
+/// streams.
+pub(crate) fn judge(
+    conn: &Connection,
+    batch: &BatchRow,
+    params: &StabilityParams,
+) -> Result<(BatchStability, Option<Series>)> {
+    let expected_fg = expected_fg_for(conn, batch)?;
     // Unbounded, so every stream comes back raw: the fit wants every reading, and
     // sensor gravity is always smoothed before it is returned.
-    let series = batch_series(conn, batch_id, &[Metric::Sg], None, usize::MAX)?;
+    let series = batch_series(conn, batch.id, &[Metric::Sg], None, usize::MAX)?;
     let Some(sensor) = series
         .series
-        .iter()
+        .into_iter()
         .filter(|s| s.source_kind != SourceKind::Manual && !s.ts.is_empty())
         .max_by_key(|s| s.ts.last().copied())
     else {
-        return Ok(BatchStability {
+        let empty = BatchStability {
             stream_id: None,
             current: Stability::Insufficient {
                 reason: Insufficient::Empty,
             },
             expected_fg,
             history: Vec::new(),
-        });
+        };
+        return Ok((empty, None));
     };
 
     let points: Vec<_> = sensor
@@ -133,7 +144,7 @@ pub fn batch_stability(
         .filter_map(|(&ts, value)| Some((ts, (*value)?)))
         .collect();
     let history = stability_history(&points, batch.og, expected_fg.as_ref(), params)?;
-    Ok(BatchStability {
+    let judged = BatchStability {
         stream_id: Some(sensor.stream_id),
         current: history.last().map_or(
             Stability::Insufficient {
@@ -143,7 +154,8 @@ pub fn batch_stability(
         ),
         expected_fg,
         history,
-    })
+    };
+    Ok((judged, Some(sensor)))
 }
 
 #[cfg(test)]

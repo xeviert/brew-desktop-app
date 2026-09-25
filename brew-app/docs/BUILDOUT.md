@@ -894,23 +894,37 @@ opening the app backfills a gap-free curve bound to the pitched batch.
       cold crash, manual SG/pH, events — for `BREWAPP_DB=<path> npm run tauri dev`
 
 **4e. Status card and batch dashboard**
-- [ ] `batch_dashboard(batch_id)` in `brewcore`, one command, one struct: the
+- [x] `batch_dashboard(batch_id)` in `brewcore`, one command, one struct: the
       ARCHITECTURE.md card. Computed in Rust so Phase 6's `brewd` alert and the
-      screen read the same numbers
-- [ ] OG from `batch.og`. Missing → "no OG", with 3e's "use this as the OG" button
+      screen read the same numbers. **Refined:** `db::stability::judge` returns the
+      judged sensor series too, so stability and current SG come from one fetch and
+      can't disagree. `Sg` fields stay SG; `gravity_in(display)` gives a separate
+      `display` object, since the "use as OG" write-back needs the SG
+- [x] OG from `batch.og`. Missing → "no OG", with 3e's "use this as the OG" button
       next to the earliest gravity. Never inferred from the first iSpindle point:
-      the lag phase and a stuck-on-the-wall iSpindle both read as OG
-- [ ] Current SG: latest smoothed iSpindle value, else latest manual. Labelled with
+      the lag phase and a stuck-on-the-wall iSpindle both read as OG. **Refined:**
+      the candidate is the first manual gravity, else the first raw sensor reading,
+      labelled so the user sees what they accept. **Added:** `set_batch_og` command
+- [x] Current SG: latest smoothed iSpindle value, else latest manual. Labelled with
       its instrument and age — a hydrometer from yesterday and an iSpindle from
       two minutes ago are different claims
-- [ ] Est. ABV and apparent attenuation from OG and current SG, via
+- [x] Est. ABV and apparent attenuation from OG and current SG, via
       `calc::abv::alternate` and labelled "alternate" (3f's rule: no unlabelled
-      ABV). Refused below OG − 0.002 so the lag phase doesn't show 0.1 %
-- [ ] pH and temp: latest reading of each, with age. pH is manual and days old is
-      normal; temp older than the staleness rule is shown struck through
-- [ ] Stability from 4c, with `since` and the expected-FG source
-- [ ] Tests: each field against a fixture batch, including a batch with no OG, no
-      recipe, no bindings, and one with only manual readings
+      ABV). Refused below OG − 0.002 so the lag phase doesn't show 0.1 %.
+      **Refined:** an `Estimate` enum — `estimated` or why not (`no_og`,
+      `no_gravity`, `not_started`, `og_too_low`) — so the card always says which
+- [x] pH and temp: latest reading of each, with age. pH is manual and days old is
+      normal; temp older than the staleness rule is shown struck through.
+      **Refined:** temp prefers a `temp_c` sensor, then `gravity_temp_c`, then
+      manual. **Added:** `series::stale_after`, `latest_readings` and
+      `STALE_FLOOR_SECS` for 4f to reuse. The card refetches on every
+      `sync://status` for its sources, not only `rows_added > 0`: a poll that adds
+      nothing is when temp goes stale
+- [x] Stability from 4c, with `since` and the expected-FG source
+- [x] Tests: each field against a fixture batch, including a batch with no OG, no
+      recipe, no bindings, and one with only manual readings. **Added:**
+      `StatusCard.svelte` above the curve in `BatchView`; wording in
+      `lib/dashboard.ts` with vitest
 
 **4f. Home view**
 - [ ] Route: the app has one screen. Hash routing (`#/`, `#/batch/17`,

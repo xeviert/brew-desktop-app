@@ -1,10 +1,12 @@
 use brewcore::{
+    Error,
     brewd::{self, JournalProbe},
     calc::stability::{ExpectedFg, FlatSpan, Stability, flat_spans},
     config::{Config, ConfigStore},
     db::{
         Db, DbStatus, Metric, SourceKind,
         batch::{self, BatchRow},
+        dashboard::{self, BatchDashboard, DisplayGravity},
         reference::{self, VesselKind, VesselRow},
         series::{self, BatchSeries, SeriesRange},
         stability,
@@ -14,7 +16,7 @@ use brewcore::{
     fermentrack::{self, Client, LogProbe, SourceSummary, discovery},
     journal::JournalEntry,
     sync::{ReadingSource, SourceStatus, SyncManager},
-    units::Litres,
+    units::{Litres, Sg},
 };
 
 use crate::error::{ApiError, ApiResult};
@@ -389,4 +391,48 @@ pub async fn batch_stability(
         expected_fg: s.expected_fg,
         spans: flat_spans(&s.history),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4e: the status card
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Serialize)]
+pub struct DashboardView {
+    #[serde(flatten)]
+    pub dashboard: BatchDashboard,
+    /// The card's gravities in `ui.gravity_display`; the SG ones stay beside them.
+    pub display: DisplayGravity,
+    pub gravity_unit: &'static str,
+}
+
+#[tauri::command]
+pub async fn batch_dashboard(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_id: i64,
+) -> ApiResult<DashboardView> {
+    let config = config.get();
+    let params = config.stability.params();
+    let dashboard = db.read(|conn| dashboard::batch_dashboard(conn, batch_id, &params))?;
+    Ok(DashboardView {
+        display: dashboard.gravity_in(config.ui.gravity_display),
+        dashboard,
+        gravity_unit: config.ui.gravity_display.unit(),
+    })
+}
+
+/// 3e's "use this as the OG". SG, not the display unit: the card sends back the
+/// candidate's canonical value.
+#[tauri::command]
+pub async fn set_batch_og(db: tauri::State<'_, Db>, batch_id: i64, og: f64) -> ApiResult<()> {
+    let og = Sg::new(og)?;
+    if !og.is_plausible() {
+        return Err(Error::MeasurementImplausible {
+            metric: Metric::Sg,
+            value: og.get(),
+        }
+        .into());
+    }
+    Ok(db.write(|conn| batch::set_batch_measurements(conn, batch_id, None, Some(og), None))?)
 }

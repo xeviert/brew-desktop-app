@@ -2,6 +2,7 @@
 
 pub mod batch;
 mod connection;
+pub mod dashboard;
 mod enums;
 pub mod measurement;
 mod metric;

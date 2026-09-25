@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Curve from "$lib/components/Curve.svelte";
+  import StatusCard from "$lib/components/StatusCard.svelte";
   import { listBatches, toApiError, type ApiError, type Batch, type Config } from "$lib/api";
 
-  // A stand-in host until the Phase 3 batch screen exists: a picker and the curve.
+  // A stand-in host until the Phase 3 batch screen exists: a picker, the card and the curve.
   let { config }: { config: Config } = $props();
 
   let batches = $state<Batch[]>([]);
@@ -41,6 +42,7 @@
     {#if batch}
       <!-- Keyed: a curve's zoom and cached data belong to one batch. -->
       {#key batch.id}
+        <StatusCard batchId={batch.id} code={batch.code} ui={config.ui} />
         <Curve batchId={batch.id} pitchedAt={batch.pitched_at} ui={config.ui} />
       {/key}
     {/if}

@@ -402,3 +402,34 @@ fn a_refused_curve_comes_back_with_a_code() {
     );
     assert_eq!(err["code"], "db.no_such_batch");
 }
+
+#[test]
+fn the_card_offers_an_og_and_takes_it() {
+    let app = Harness::new();
+    let batch_id = pitched_batch(&app);
+    let args = json!({ "batchId": batch_id });
+
+    let card = app.invoke("batch_dashboard", args.clone()).unwrap();
+    assert_eq!(card["og"], Value::Null);
+    assert_eq!(card["estimate"]["state"], "no_og");
+    assert_eq!(card["gravity_unit"], "SG");
+    let candidate = card["og_candidate"]["sg"].as_f64().unwrap();
+    assert_eq!(candidate, 1.040);
+    assert_eq!(card["display"]["og_candidate"], candidate);
+
+    app.invoke(
+        "set_batch_og",
+        json!({ "batchId": batch_id, "og": candidate }),
+    )
+    .unwrap();
+    let card = app.invoke("batch_dashboard", args).unwrap();
+    assert_eq!(card["og"], 1.040);
+    assert_eq!(card["og_candidate"], Value::Null);
+    assert_eq!(card["estimate"]["state"], "estimated");
+    assert!(card["estimate"]["abv_alternate"].is_number(), "{card}");
+
+    let err = app.api_error("set_batch_og", json!({ "batchId": batch_id, "og": 4.0 }));
+    assert_eq!(err["code"], "db.measurement_implausible");
+    let err = app.api_error("batch_dashboard", json!({ "batchId": 404 }));
+    assert_eq!(err["code"], "db.no_such_batch");
+}
