@@ -109,6 +109,28 @@ pub fn archive_vessel(conn: &Connection, id: i64, at: Timestamp) -> Result<bool>
     Ok(changed == 1)
 }
 
+/// Replace the streams a pitch into this vessel binds by default. Replaces rather than
+/// adds, so the Vessels pane's checkboxes are the whole state and not a diff.
+///
+/// Touches no existing binding: a batch already in the vessel keeps what it was
+/// pitched with. See `0008_vessel_stream.sql`.
+pub fn set_vessel_streams(conn: &Connection, vessel_id: i64, stream_ids: &[i64]) -> Result<()> {
+    conn.execute("DELETE FROM vessel_stream WHERE vessel_id = ?", [vessel_id])?;
+    let mut insert =
+        conn.prepare("INSERT OR IGNORE INTO vessel_stream (vessel_id, stream_id) VALUES (?, ?)")?;
+    for stream_id in stream_ids {
+        insert.execute([vessel_id, *stream_id])?;
+    }
+    Ok(())
+}
+
+pub fn list_vessel_streams(conn: &Connection, vessel_id: i64) -> Result<Vec<i64>> {
+    let mut stmt =
+        conn.prepare("SELECT stream_id FROM vessel_stream WHERE vessel_id = ? ORDER BY stream_id")?;
+    let rows = stmt.query_map([vessel_id], |row| row.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 // ---------------------------------------------------------- yeast_strain
 
 /// Attenuation and tolerance are fractions, not percents. The schema's `CHECK`
@@ -745,6 +767,36 @@ mod tests {
         let all = list_vessels(&conn, true).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].archived_at, Some(at));
+    }
+
+    #[test]
+    fn a_vessels_default_streams_are_replaced_not_appended() {
+        let mut conn = db();
+        let vessel = create_vessel(&conn, "FV1", VesselKind::Fermenter, None, None).unwrap();
+        let source = crate::db::tier1::create_source(
+            &conn,
+            crate::db::SourceKind::BrewdJournal,
+            "esp32-1",
+            None,
+        )
+        .unwrap();
+        let tx = conn.transaction().unwrap();
+        let a =
+            crate::db::tier1::create_stream(&tx, source, "vessel_temp", crate::db::Metric::TempC)
+                .unwrap();
+        let b = crate::db::tier1::create_stream(
+            &tx,
+            source,
+            "chamber_temp",
+            crate::db::Metric::FridgeTempC,
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        set_vessel_streams(&conn, vessel, &[a, b, a]).unwrap();
+        assert_eq!(list_vessel_streams(&conn, vessel).unwrap(), [a, b]);
+        set_vessel_streams(&conn, vessel, &[b]).unwrap();
+        assert_eq!(list_vessel_streams(&conn, vessel).unwrap(), [b]);
     }
 
     #[test]

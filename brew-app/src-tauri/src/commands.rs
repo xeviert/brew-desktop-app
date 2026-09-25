@@ -1,8 +1,15 @@
 use brewcore::{
+    brewd::{self, JournalProbe},
     config::{Config, ConfigStore},
-    db::{Db, DbStatus},
+    db::{
+        Db, DbStatus, SourceKind,
+        reference::{self, VesselKind, VesselRow},
+        tier1::{self, StreamRow},
+    },
     fermentrack::{self, Client, LogProbe, SourceSummary, discovery},
-    sync::{SourceStatus, SyncManager},
+    journal::JournalEntry,
+    sync::{ReadingSource, SourceStatus, SyncManager},
+    units::Litres,
 };
 
 use crate::error::{ApiError, ApiResult};
@@ -88,11 +95,32 @@ pub async fn add_source(
     // produces a row and no readings until the app is restarted, which reads as
     // "adding a source does nothing".
     manager.spawn(Box::new(fermentrack::build_source(&db, &client, id)?));
+    summary(&db, id)
+}
 
-    discovery::source_summary(&db, id)?.ok_or_else(|| ApiError {
+fn summary(db: &Db, id: i64) -> ApiResult<SourceSummary> {
+    discovery::source_summary(db, id)?.ok_or_else(|| ApiError {
         code: "sync.missing_state".to_owned(),
         message: format!("source {id} vanished immediately after being created"),
         detail: None,
+    })
+}
+
+/// The poller for a source, by kind. `None` for a kind nothing polls: manual entry,
+/// and Fermentrack gravity logs, which nothing reads yet.
+pub(crate) fn build_source(
+    db: &Db,
+    client: &Client,
+    config: &ConfigStore,
+    id: i64,
+    kind: SourceKind,
+) -> brewcore::Result<Option<Box<dyn ReadingSource>>> {
+    Ok(match kind {
+        SourceKind::FermentrackBeerLog => {
+            Some(Box::new(fermentrack::build_source(db, client, id)?))
+        }
+        SourceKind::BrewdJournal => Some(Box::new(brewd::build_source(db, client, config, id)?)),
+        SourceKind::FermentrackGravityLog | SourceKind::Manual => None,
     })
 }
 
@@ -117,6 +145,61 @@ pub async fn check_fermentrack(
         .filter(|url| !url.is_empty())
         .unwrap_or_else(|| config.get().fermentrack.base_url);
     Ok(discovery::check_fermentrack(&client, &base_url).await?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase Ve: brewd journals
+// ---------------------------------------------------------------------------
+
+/// Every journal `brewd` has. Doubles as the settings pane's "Test connection": only
+/// `brewd` answers `/journals/` with a journal list.
+#[tauri::command]
+pub async fn list_journals(
+    client: tauri::State<'_, Client>,
+    config: tauri::State<'_, ConfigStore>,
+    base_url: Option<String>,
+) -> ApiResult<Vec<JournalEntry>> {
+    // As `check_fermentrack`: the unsaved field wins, so "Test" tests what is on screen.
+    let base_url = base_url
+        .map(|url| url.trim().to_owned())
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| config.get().brewd.base_url);
+    let base_url = brewd::discovery::base_url(&base_url)?;
+    Ok(brewd::list_journals(&client, base_url).await?)
+}
+
+#[tauri::command]
+pub async fn probe_journal(
+    client: tauri::State<'_, Client>,
+    config: tauri::State<'_, ConfigStore>,
+    journal: String,
+) -> ApiResult<JournalProbe> {
+    let base_url = config.get().brewd.base_url;
+    let base_url = brewd::discovery::base_url(&base_url)?;
+    Ok(brewd::probe_journal(&client, base_url, &journal).await?)
+}
+
+/// Probe, create, start polling. Re-probes for the reason [`add_source`] does.
+#[tauri::command]
+pub async fn add_journal_source(
+    db: tauri::State<'_, Db>,
+    client: tauri::State<'_, Client>,
+    config: tauri::State<'_, ConfigStore>,
+    manager: tauri::State<'_, SyncManager>,
+    journal: String,
+    name: Option<String>,
+) -> ApiResult<SourceSummary> {
+    let base_url = config.get().brewd.base_url;
+    let base_url = brewd::discovery::base_url(&base_url)?;
+    let probe = brewd::probe_journal(&client, base_url, &journal).await?;
+
+    let name = name
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| probe.suggested_name.clone());
+    let id = brewd::add_source(&db, &probe, &name)?;
+    manager.spawn(Box::new(brewd::build_source(&db, &client, &config, id)?));
+    summary(&db, id)
 }
 
 // ---------------------------------------------------------------------------
@@ -150,4 +233,64 @@ pub async fn rebuild(manager: tauri::State<'_, SyncManager>, source_id: i64) -> 
 #[tauri::command]
 pub async fn sync_status(manager: tauri::State<'_, SyncManager>) -> ApiResult<Vec<SourceStatus>> {
     Ok(manager.statuses())
+}
+
+// ---------------------------------------------------------------------------
+// Phase Ve: vessels and their default streams
+// ---------------------------------------------------------------------------
+
+/// A vessel with the streams a pitch into it binds.
+#[derive(Debug, serde::Serialize)]
+pub struct VesselView {
+    #[serde(flatten)]
+    pub vessel: VesselRow,
+    pub default_streams: Vec<i64>,
+}
+
+#[tauri::command]
+pub async fn list_vessels(db: tauri::State<'_, Db>) -> ApiResult<Vec<VesselView>> {
+    Ok(db.read(|conn| {
+        reference::list_vessels(conn, false)?
+            .into_iter()
+            .map(|vessel| {
+                let default_streams = reference::list_vessel_streams(conn, vessel.id)?;
+                Ok(VesselView {
+                    vessel,
+                    default_streams,
+                })
+            })
+            .collect()
+    })?)
+}
+
+#[tauri::command]
+pub async fn create_vessel(
+    db: tauri::State<'_, Db>,
+    name: String,
+    kind: VesselKind,
+    capacity_l: Option<f64>,
+) -> ApiResult<i64> {
+    let capacity_l = capacity_l.map(Litres::new).transpose()?;
+    Ok(db.write(|conn| reference::create_vessel(conn, name.trim(), kind, capacity_l, None))?)
+}
+
+#[tauri::command]
+pub async fn list_streams(db: tauri::State<'_, Db>) -> ApiResult<Vec<StreamRow>> {
+    Ok(db.read(tier1::list_streams)?)
+}
+
+/// Replace a vessel's default streams. Existing bindings are untouched; the next pitch
+/// is what changes.
+#[tauri::command]
+pub async fn set_vessel_streams(
+    db: tauri::State<'_, Db>,
+    vessel_id: i64,
+    stream_ids: Vec<i64>,
+) -> ApiResult<()> {
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        reference::set_vessel_streams(&tx, vessel_id, &stream_ids)?;
+        tx.commit()?;
+        Ok(())
+    })?)
 }

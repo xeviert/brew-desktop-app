@@ -1,17 +1,22 @@
 <script lang="ts">
   import {
+    addJournalSource,
     addSource,
+    listJournals,
     listSources,
+    probeJournal,
     probeLog,
     rebuild,
     resync,
     toApiError,
     type ApiError,
+    type JournalEntry,
+    type JournalProbe,
     type LogProbe,
     type SourceStatus,
     type SourceSummary,
   } from "$lib/api";
-  import { age, until } from "$lib/format";
+  import { age, bytes, until } from "$lib/format";
 
   let {
     sources,
@@ -46,6 +51,10 @@
     "fermentrack.not_a_log": "Check the URL points at a file under /data/.",
     "fermentrack.log_missing": "Renaming a beer in Fermentrack renames its log file.",
     "fermentrack.not_fermentrack": "The host answered, but not as a Fermentrack.",
+    "brewd.unconfigured": "Set the brewd URL in Settings first.",
+    "brewd.not_brewd": "Check the brewd URL in Settings — that host is something else.",
+    "brewd.not_a_journal": "brewd serves it, but it does not start with a time column.",
+    "brewd.ispindel_unit_unset": "Set “iSpindle outputs” in Settings; nothing is skipped meanwhile.",
   };
 
   async function validate() {
@@ -78,6 +87,65 @@
     }
   }
 
+  // brewd lists its journals, so unlike Fermentrack there is something to pick from.
+  let journals = $state<JournalEntry[] | null>(null);
+  let journalProbe = $state<JournalProbe | null>(null);
+  let journalName = $state("");
+  let journalBusy = $state(false);
+
+  // Already-added journals are hidden rather than greyed: adding one twice would give
+  // two sources storing the same readings.
+  const added = $derived(new Set(sources.map((s) => s.remote_path)));
+  const offered = $derived(
+    (journals ?? []).filter((j) => !added.has(`/journals/${j.name}`)),
+  );
+
+  /** `<device>.<epoch>.csv` is a journal brewd rotated away when its header changed. */
+  const isRotated = (name: string) => /\.\d+\.csv$/.test(name);
+
+  async function loadJournals() {
+    journalBusy = true;
+    error = null;
+    journalProbe = null;
+    try {
+      journals = await listJournals();
+    } catch (e) {
+      error = toApiError(e);
+    } finally {
+      journalBusy = false;
+    }
+  }
+
+  async function pickJournal(journal: string) {
+    journalBusy = true;
+    error = null;
+    journalProbe = null;
+    try {
+      journalProbe = await probeJournal(journal);
+      journalName = journalProbe.suggested_name;
+    } catch (e) {
+      error = toApiError(e);
+    } finally {
+      journalBusy = false;
+    }
+  }
+
+  async function addJournal() {
+    if (!journalProbe) return;
+    journalBusy = true;
+    error = null;
+    try {
+      const source = await addJournalSource(journalProbe.journal, journalName.trim());
+      onchanged([...sources, source]);
+      journalProbe = null;
+      journalName = "";
+    } catch (e) {
+      error = toApiError(e);
+    } finally {
+      journalBusy = false;
+    }
+  }
+
   /**
    * Live state beats the stored row. A `SourceSummary` is a snapshot from whenever the
    * list was last fetched; a `SourceStatus` is the task as it is right now, and the two
@@ -96,6 +164,7 @@
     idle: "idle",
     syncing: "syncing…",
     error: "failing",
+    unreachable: "unreachable",
   };
 
   async function doResync(id: number) {
@@ -177,7 +246,69 @@
     </ul>
   {/if}
 
-  <h3>Add a log</h3>
+  <h3>Add from brewd</h3>
+  <div class="actions">
+    <button onclick={loadJournals} disabled={journalBusy}>
+      {journalBusy && !journals ? "Loading…" : journals ? "Reload journals" : "Load journals"}
+    </button>
+  </div>
+
+  {#if journals}
+    {#if offered.length === 0}
+      <p class="empty">
+        {journals.length === 0 ? "brewd has no journals yet." : "Every journal is already added."}
+      </p>
+    {:else}
+      <table>
+        <tbody>
+          {#each offered as journal (journal.name)}
+            <tr class:picked={journalProbe?.journal === journal.name}>
+              <td>
+                {journal.name}
+                {#if isRotated(journal.name)}<span class="tag">rotated</span>{/if}
+              </td>
+              <td class="num">{bytes(journal.bytes)}</td>
+              <td class="num">{age(journal.modified)}</td>
+              <td>
+                <button class="minor" onclick={() => pickJournal(journal.name)} disabled={journalBusy}>
+                  Pick
+                </button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {/if}
+  {/if}
+
+  {#if journalProbe}
+    <dl>
+      <dt>Journal</dt>
+      <dd>{journalProbe.journal}{journalProbe.rotated ? " · rotated, will not grow" : ""}</dd>
+      <dt>Stores</dt>
+      <dd>
+        {journalProbe.header.mapped.map((c) => `${c.column} → ${c.metric}`).join(", ") || "nothing"}
+      </dd>
+      {#if journalProbe.header.unknown_columns.length > 0}
+        <dt>Unknown columns</dt>
+        <dd class="warn">{journalProbe.header.unknown_columns.join(", ")}</dd>
+      {/if}
+      {#if journalProbe.header.needs_ispindel_unit}
+        <dt>Gravity</dt>
+        <dd class="warn">waits for “iSpindle outputs” in Settings</dd>
+      {/if}
+    </dl>
+
+    <label>
+      <span>Name</span>
+      <input type="text" bind:value={journalName} />
+    </label>
+    <div class="actions">
+      <button onclick={addJournal} disabled={journalBusy}>Add</button>
+    </div>
+  {/if}
+
+  <h3>Add a Fermentrack log</h3>
   <!-- No API lists the beers, and the log id and beer name are both in the filename,
        so there is nothing to pick from: the URL is pasted once, here. -->
   <label>
@@ -272,6 +403,10 @@
     background: #e06c5f;
   }
 
+  .dot.unreachable {
+    background: #e0a35f;
+  }
+
   .next {
     color: #6f757d;
     font-variant-numeric: tabular-nums;
@@ -314,6 +449,36 @@
 
   .empty {
     color: #6f757d;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+  }
+
+  td {
+    padding: 0.3rem 0.5rem 0.3rem 0;
+    border-bottom: 1px solid #2a2e36;
+  }
+
+  td.num {
+    color: #9aa0a6;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  tr.picked td {
+    color: #7ba7d4;
+  }
+
+  .tag {
+    margin-left: 0.4rem;
+    padding: 0 0.3rem;
+    border: 1px solid #333842;
+    border-radius: 3px;
+    color: #9aa0a6;
+    font-size: 0.8em;
   }
 
   label {

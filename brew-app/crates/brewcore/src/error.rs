@@ -156,6 +156,22 @@ pub enum Error {
     #[error("{url} does not look like a Fermentrack: {detail}")]
     NotFermentrack { url: String, detail: String },
 
+    // Phase Vd. `brewd`'s journals. File-level refusals only, as with Fermentrack's.
+    #[error("this does not look like a brewd journal: {detail}")]
+    NotABrewdJournal { detail: String },
+
+    // Nothing in an iSpindle payload says whether `gravity` is SG or °P. Refused rather
+    // than guessed, and before anything is consumed, so recording the unit later
+    // ingests every row the refusal held back.
+    #[error("{journal} has a gravity column, but whether the iSpindle reports SG or °P is not set")]
+    IspindelUnitUnset { journal: String },
+
+    #[error("{url} does not look like brewd: {detail}")]
+    NotBrewd { url: String, detail: String },
+
+    #[error("no brewd address is set")]
+    BrewdUnconfigured,
+
     #[error("unknown metric '{0}' in the database")]
     UnknownMetric(String),
 
@@ -367,6 +383,16 @@ pub enum Error {
 }
 
 impl Error {
+    /// The host did not answer: refused, unroutable, or too slow. Not the host
+    /// answering badly, which is every other transport error.
+    pub fn is_unreachable(&self) -> bool {
+        match self {
+            Error::Timeout { .. } => true,
+            Error::Http { source, .. } => source.is_connect() || source.is_timeout(),
+            _ => false,
+        }
+    }
+
     /// A stable identifier the frontend can branch on. Messages are for humans and
     /// may change; these must not.
     pub fn code(&self) -> &'static str {
@@ -397,6 +423,10 @@ impl Error {
             Error::RangeMismatch { .. } => "fermentrack.range",
             Error::InvalidUrl { .. } => "fermentrack.url",
             Error::NotFermentrack { .. } => "fermentrack.not_fermentrack",
+            Error::NotABrewdJournal { .. } => "brewd.not_a_journal",
+            Error::IspindelUnitUnset { .. } => "brewd.ispindel_unit_unset",
+            Error::NotBrewd { .. } => "brewd.not_brewd",
+            Error::BrewdUnconfigured => "brewd.unconfigured",
             Error::UnknownMetric(_) => "db.unknown_metric",
             Error::UnknownSourceKind(_) => "db.unknown_source_kind",
             Error::UnknownVesselKind(_) => "db.unknown_vessel_kind",

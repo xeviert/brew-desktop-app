@@ -1,15 +1,17 @@
 <script lang="ts">
-  import type { ApiError, DbStatus, SourceStatus, SyncPhase } from "$lib/api";
+  import type { ApiError, DbStatus, SourceStatus, SourceSummary, SyncPhase } from "$lib/api";
   import { age } from "$lib/format";
 
   let {
     status,
     error,
     syncs,
+    sources,
   }: {
     status: DbStatus | null;
     error: ApiError | null;
     syncs: Record<number, SourceStatus>;
+    sources: SourceSummary[];
   } = $props();
 
   const rows = $derived(
@@ -19,21 +21,32 @@
   const all = $derived(Object.values(syncs));
 
   // The worst state wins. A footer that reported "syncing" while another source had
-  // been failing for an hour would be technically true and useless.
+  // been failing for an hour would be technically true and useless. Unreachable ranks
+  // below a failure: a host being off is expected, a source breaking is not.
   const phase = $derived<SyncPhase | null>(
     all.length === 0
       ? null
       : all.some((s) => s.phase === "error")
         ? "error"
-        : all.some((s) => s.phase === "syncing")
-          ? "syncing"
-          : "idle",
+        : all.some((s) => s.phase === "unreachable")
+          ? "unreachable"
+          : all.some((s) => s.phase === "syncing")
+            ? "syncing"
+            : "idle",
   );
+
+  // Named when every unreachable source is a journal: then it is one Pi, not a guess.
+  const brewdDown = $derived.by(() => {
+    const down = all.filter((s) => s.phase === "unreachable");
+    const kinds = new Map(sources.map((s) => [s.id, s.kind]));
+    return down.length > 0 && down.every((s) => kinds.get(s.source_id) === "brewd_journal");
+  });
 
   const labels: Record<SyncPhase, string> = {
     idle: "synced",
     syncing: "syncing…",
     error: "sync failing",
+    unreachable: "source unreachable",
   };
 
   /** Newest reading across every source: the one number that answers "is data coming in". */
@@ -55,7 +68,7 @@
     <span>{rows} rows</span>
     <span>{(status.size_bytes / 1024).toFixed(1)} KiB</span>
     {#if phase}
-      <span class="sync {phase}">{labels[phase]}</span>
+      <span class="sync {phase}">{phase === "unreachable" && brewdDown ? "brewd unreachable" : labels[phase]}</span>
       <span>{all.length} source{all.length === 1 ? "" : "s"}</span>
       <span title="age of the newest reading">data {age(newest)}</span>
     {/if}
@@ -101,5 +114,9 @@
 
   .sync.error {
     color: #e06c5f;
+  }
+
+  .sync.unreachable {
+    color: #e0a35f;
   }
 </style>

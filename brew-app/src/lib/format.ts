@@ -23,3 +23,10 @@ export function until(ts: number | null | undefined): string {
 	if (secs < 90) return `in ${secs} s`;
 	return `in ${Math.round(secs / 60)} min`;
 }
+
+/** Bytes → "812 B" / "14.2 KiB" / "3.1 MiB". */
+export function bytes(n: number): string {
+	if (n < 1024) return `${n} B`;
+	if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+	return `${(n / 1024 / 1024).toFixed(1)} MiB`;
+}

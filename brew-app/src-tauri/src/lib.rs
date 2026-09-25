@@ -6,7 +6,7 @@ mod sync_events;
 use brewcore::{
     config::{ConfigStore, resolve_config_path},
     db::{Db, resolve_db_path},
-    fermentrack::{self, Client, discovery},
+    fermentrack::{Client, discovery},
     sync::SyncManager,
 };
 use tauri::{Manager, RunEvent};
@@ -63,6 +63,13 @@ pub fn run() {
             commands::add_source,
             commands::list_sources,
             commands::check_fermentrack,
+            commands::list_journals,
+            commands::probe_journal,
+            commands::add_journal_source,
+            commands::list_vessels,
+            commands::create_vessel,
+            commands::list_streams,
+            commands::set_vessel_streams,
             commands::resync,
             commands::rebuild,
             commands::sync_status,
@@ -100,9 +107,11 @@ fn start_polling(app: &tauri::AppHandle) {
         }
     };
 
+    let config = app.state::<ConfigStore>();
     for summary in &sources {
-        match fermentrack::build_source(&db, &client, summary.id) {
-            Ok(source) => manager.spawn(Box::new(source)),
+        match commands::build_source(&db, &client, &config, summary.id, summary.kind) {
+            Ok(Some(source)) => manager.spawn(source),
+            Ok(None) => {}
             Err(err) => tracing::error!(
                 source_id = summary.id,
                 name = %summary.name,

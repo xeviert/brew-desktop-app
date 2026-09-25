@@ -23,6 +23,7 @@
 
 mod csv_writer;
 mod curve;
+pub mod journal;
 mod time;
 
 #[cfg(feature = "serve")]
@@ -32,6 +33,7 @@ mod serve;
 pub use serve::{Fault, FixtureServer, RangeMode};
 
 pub use csv_writer::py_float;
+pub use journal::{Device, JournalQuirks, JournalScenario, JournalSpec};
 pub use time::format_log_time;
 
 use csv_writer::{Field, round_to, write_row};

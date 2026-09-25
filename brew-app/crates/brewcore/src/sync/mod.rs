@@ -23,7 +23,7 @@ pub use scheduler::SyncManager;
 
 use std::sync::{Mutex, PoisonError};
 
-use crate::{Result, units::Timestamp};
+use crate::{Error, Result, units::Timestamp};
 
 /// Anything that can be asked for new readings.
 ///
@@ -84,6 +84,10 @@ pub enum SyncPhase {
     /// The last poll failed, by either definition. The source is still scheduled — it
     /// is simply being asked less often.
     Error,
+    /// The last poll could not reach the host at all. A failure like [`Error`](Self::Error)
+    /// and backed off the same way, but split out because "the Pi is off" is not a
+    /// problem with the source, and the footer says so.
+    Unreachable,
 }
 
 /// One source's live state, emitted on every transition.
@@ -97,6 +101,10 @@ pub struct SourceStatus {
     /// The last poll that finished with no fault. Not the last poll that *ran*.
     pub last_success: Option<Timestamp>,
     pub last_error: Option<String>,
+    /// [`Error::code`](crate::Error::code) of the last failed poll, so the UI branches on
+    /// a code rather than on message text. `None` for a fault that was committed to
+    /// `last_error` rather than returned, and after a clean poll.
+    pub last_error_code: Option<String>,
     /// Rows stored by the most recent poll.
     pub rows_added: usize,
     pub newest_reading: Option<Timestamp>,
@@ -114,6 +122,7 @@ impl SourceStatus {
             phase: SyncPhase::Idle,
             last_success: None,
             last_error: None,
+            last_error_code: None,
             rows_added: 0,
             newest_reading: None,
             consecutive_failures: 0,
@@ -168,5 +177,23 @@ impl StatusSink for RecordingSink {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(status.clone());
+    }
+}
+
+/// `spawn_blocking`, with a panic turned into an error.
+///
+/// A panicking commit must back the source off like any other failure. Left as a
+/// `JoinError` it would be unwrapped into a panic inside the scheduler's task, and the
+/// source would stop being polled with nothing said about it.
+pub(crate) async fn blocking<T, F>(f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(result) => result,
+        Err(err) => Err(Error::BackgroundTask {
+            detail: err.to_string(),
+        }),
     }
 }

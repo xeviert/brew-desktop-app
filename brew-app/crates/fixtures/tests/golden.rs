@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use brewfixture::{Kind, LogSpec, Scenario};
+use brewfixture::{JournalScenario, JournalSpec, Kind, LogSpec, Scenario};
 
 const ROWS: usize = 5;
 const SEED: u64 = 1;
@@ -95,5 +95,36 @@ fn every_row_has_as_many_cells_as_the_header() {
                 assert_eq!(cells, expected, "line {i} of {}", spec.file_name(kind));
             }
         }
+    }
+}
+
+/// Phase Vd. The same guard over the `brewd` journal fixtures, which live in their own
+/// directory and are LF rather than CRLF.
+///
+/// Regenerate with `cargo xtask gen-fixture --format journal --rows 5 --seed 1 --out
+/// crates/fixtures/tests/fixtures/journal`.
+#[test]
+fn the_committed_journals_are_byte_for_byte_what_the_generator_emits() {
+    for scenario in JournalScenario::ALL {
+        let spec = JournalSpec {
+            rows: ROWS,
+            seed: SEED,
+            ..scenario.spec()
+        };
+        let path = fixtures_dir().join("journal").join(spec.file_name());
+        let committed = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!(
+                "{}: {e}\nrun: cargo xtask gen-fixture --format journal --rows {ROWS} --seed {SEED} --out crates/fixtures/tests/fixtures/journal",
+                path.display()
+            )
+        });
+
+        assert!(!committed.contains(&b'\r'), "{} is not LF", path.display());
+        assert_eq!(
+            String::from_utf8(committed).expect("fixtures are UTF-8"),
+            spec.csv(),
+            "{} is stale",
+            path.display()
+        );
     }
 }

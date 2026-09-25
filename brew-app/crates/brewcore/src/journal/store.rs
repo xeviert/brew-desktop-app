@@ -18,7 +18,8 @@
 //!    exist, which is rule 1 defeated from the other side.
 //! 3. **A restart deletes the source's readings before refetching.** Otherwise
 //!    `ON CONFLICT DO NOTHING` keeps whatever is already there, and a rebuild — the
-//!    escape hatch for a parser bug — re-reads bytes it then ignores.
+//!    escape hatch for a parser bug — re-reads bytes it then ignores. A dialect may
+//!    narrow this with [`Dialect::deletes_on_restart`], never widen it.
 //!
 //! The reading primitives themselves are in [`db::tier1`](crate::db::tier1) and know
 //! nothing about logs. This module is the log-shaped half: byte offsets, header lines,
@@ -138,13 +139,14 @@ pub fn commit<D: Dialect>(
 
         match step {
             SyncStep::Nothing => {}
-            SyncStep::Restart(_) => {
+            SyncStep::Restart(restart) if D::deletes_on_restart(&restart.reason) => {
                 report.readings_deleted = tier1::delete_readings_for_source(&tx, state.source_id)?;
                 // Annotations are derived from the same bytes. A rebuild that
                 // re-derived one and not the other would leave 3d's suggestions
                 // quoting a file the readings no longer agree with.
                 tier1::delete_annotations_for_source(&tx, state.source_id)?;
             }
+            SyncStep::Restart(_) => {}
             SyncStep::Advance(advance) => {
                 let (rows, streams_created) = fan_out::<D>(&tx, state.source_id, &advance.rows)?;
                 report.streams_created = streams_created;

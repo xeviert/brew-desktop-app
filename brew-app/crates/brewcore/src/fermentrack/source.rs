@@ -30,7 +30,7 @@ use crate::{
         Client, Restart, RestartReason, SyncState, SyncStep, discovery::SourceConfig, ingest,
         log_url, store,
     },
-    sync::{PollReport, ReadingSource},
+    sync::{PollReport, ReadingSource, blocking},
     units::Timestamp,
 };
 
@@ -144,23 +144,5 @@ impl ReadingSource for FermentrackSource {
         // from the refetch that follows it — otherwise a rebuild always reports zero
         // rows and the status footer says it did nothing.
         self.poll().await
-    }
-}
-
-/// `spawn_blocking`, with a panic turned into an error.
-///
-/// A panicking commit must back the source off like any other failure. Left as a
-/// `JoinError` it would be unwrapped into a panic inside the scheduler's task, and the
-/// source would stop being polled with nothing said about it.
-async fn blocking<T, F>(f: F) -> Result<T>
-where
-    F: FnOnce() -> Result<T> + Send + 'static,
-    T: Send + 'static,
-{
-    match tokio::task::spawn_blocking(f).await {
-        Ok(result) => result,
-        Err(err) => Err(Error::BackgroundTask {
-            detail: err.to_string(),
-        }),
     }
 }

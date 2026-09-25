@@ -43,7 +43,7 @@ pub fn write_row(out: &mut String, fields: &[Field]) {
 /// `QUOTE_MINIMAL`: quote only when the cell contains the delimiter, the quotechar,
 /// or a line terminator character. A leading or trailing space does *not* trigger
 /// quoting in Python, and must not here either.
-fn quote(value: &str) -> String {
+pub(crate) fn quote(value: &str) -> String {
     if value.contains([',', '"', '\r', '\n']) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {

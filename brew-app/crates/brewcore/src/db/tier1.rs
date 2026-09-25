@@ -112,6 +112,36 @@ pub fn stream_ids_for(conn: &Connection, source_id: i64) -> Result<HashMap<Metri
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// A stream with the source it comes from, for the pickers that bind one to a vessel.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StreamRow {
+    pub id: i64,
+    pub source_id: i64,
+    pub source_name: String,
+    pub source_kind: SourceKind,
+    pub external_id: String,
+    pub metric: Metric,
+}
+
+/// Every stream, grouped by source. Streams only exist once a source has synced a
+/// value for them, so a journal added a minute ago may not have any yet.
+pub fn list_streams(conn: &Connection) -> Result<Vec<StreamRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.source_id, src.name, src.kind, s.external_id, s.metric            FROM stream s JOIN source src ON src.id = s.source_id           ORDER BY src.name, s.source_id, s.metric",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(StreamRow {
+            id: row.get(0)?,
+            source_id: row.get(1)?,
+            source_name: row.get(2)?,
+            source_kind: row.get(3)?,
+            external_id: row.get(4)?,
+            metric: row.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// Get or create the stream for `(source_id, external_id, metric)`.
 ///
 /// `DO NOTHING` then read the id back, rather than `INSERT` and catch the error: the

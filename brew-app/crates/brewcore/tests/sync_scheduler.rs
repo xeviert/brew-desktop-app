@@ -262,6 +262,10 @@ async fn a_failing_source_is_asked_less_and_less_often() {
         "a delay ran past the ceiling: {gaps:?}"
     );
     assert_eq!(status.phase, SyncPhase::Error);
+    assert_eq!(
+        status.last_error_code.as_deref(),
+        Some("fermentrack.log_missing")
+    );
 }
 
 /// **The rule this phase turns on.** A restart loop against a Range-ignoring proxy in
@@ -318,6 +322,7 @@ async fn one_clean_poll_returns_a_failing_source_to_the_normal_cadence() {
     assert_eq!(status.phase, SyncPhase::Idle);
     assert_eq!(status.consecutive_failures, 0);
     assert_eq!(status.last_error, None);
+    assert_eq!(status.last_error_code, None);
     assert_eq!(status.rows_added, 5);
     assert!(status.last_success.is_some());
 }

@@ -3,6 +3,7 @@
   import Settings from "$lib/components/Settings.svelte";
   import Sources from "$lib/components/Sources.svelte";
   import StatusFooter from "$lib/components/StatusFooter.svelte";
+  import Vessels from "$lib/components/Vessels.svelte";
   import {
     dbStatus,
     getConfig,
@@ -79,6 +80,7 @@
   {#if config}
     <Settings {config} onsaved={(c) => (config = c)} />
     <Sources {sources} {syncs} onchanged={(s) => (sources = s)} />
+    <Vessels />
   {:else if error}
     <!-- Without this, a failed `get_config` renders an empty page under the heading
          and one red line in the footer. -->
@@ -88,4 +90,4 @@
   {/if}
 </main>
 
-<StatusFooter {status} {error} {syncs} />
+<StatusFooter {status} {error} {syncs} {sources} />

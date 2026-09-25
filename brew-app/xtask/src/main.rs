@@ -1,10 +1,10 @@
-//! Dev helpers. `gen-fixture` emits byte-accurate Fermentrack `_full.csv` files so
-//! ingest can be built and tested without a Fermentrack. `build-pi` cross-compiles
+//! Dev helpers. `gen-fixture` emits byte-accurate Fermentrack `_full.csv` files and
+//! `brewd` journals so ingest can be built and tested without either running. `build-pi` cross-compiles
 //! `brewd` for the Pi Zero 2 W.
 
 use std::path::{Path, PathBuf};
 
-use brewfixture::{Kind, LogSpec, Scenario};
+use brewfixture::{JournalScenario, Kind, LogSpec, Scenario};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -32,7 +32,7 @@ fn usage() {
          --scenario NAME    nominal | gravity | ugly | v1 | all (default all)\n  \
          --rows N           rows per file (default 120)\n  \
          --seed N           PRNG seed; the same seed gives the same bytes\n  \
-         --interval SECS    logging cadence (default 30, Fermentrack's own default)"
+         --interval SECS    logging cadence (default: the scenario's)"
     );
 }
 
@@ -83,7 +83,8 @@ fn build_pi() {
 /// directory.
 fn gen_fixture(args: Vec<String>) {
     let mut out = PathBuf::from("target/fixtures");
-    let mut scenarios = Scenario::ALL.to_vec();
+    let mut journal = false;
+    let mut scenario = String::from("all");
     let mut rows = None;
     let mut seed = None;
     let mut interval = None;
@@ -95,18 +96,15 @@ fn gen_fixture(args: Vec<String>) {
                 .unwrap_or_else(|| fail(&format!("{arg} needs a value")))
         };
         match arg.as_str() {
-            "--out" => out = PathBuf::from(value()),
-            "--scenario" => {
-                let name = value();
-                scenarios = if name == "all" {
-                    Scenario::ALL.to_vec()
-                } else {
-                    vec![
-                        Scenario::parse(&name)
-                            .unwrap_or_else(|| fail(&format!("unknown scenario: {name}"))),
-                    ]
-                };
+            "--format" => {
+                journal = match value().as_str() {
+                    "fermentrack" => false,
+                    "journal" => true,
+                    other => fail(&format!("unknown format: {other}")),
+                }
             }
+            "--out" => out = PathBuf::from(value()),
+            "--scenario" => scenario = value(),
             "--rows" => rows = Some(parse(&value(), "--rows")),
             "--seed" => seed = Some(parse(&value(), "--seed")),
             "--interval" => interval = Some(parse(&value(), "--interval")),
@@ -118,6 +116,33 @@ fn gen_fixture(args: Vec<String>) {
         fail(&format!("could not create {}: {err}", out.display()));
     }
 
+    if journal {
+        let scenarios = if scenario == "all" {
+            JournalScenario::ALL.to_vec()
+        } else {
+            vec![
+                JournalScenario::parse(&scenario)
+                    .unwrap_or_else(|| fail(&format!("unknown scenario: {scenario}"))),
+            ]
+        };
+        for scenario in scenarios {
+            let mut spec = scenario.spec();
+            spec.rows = rows.unwrap_or(spec.rows);
+            spec.seed = seed.unwrap_or(spec.seed);
+            spec.interval_secs = interval.unwrap_or(spec.interval_secs);
+            write(&out.join(spec.file_name()), &spec.csv());
+        }
+        return;
+    }
+
+    let scenarios = if scenario == "all" {
+        Scenario::ALL.to_vec()
+    } else {
+        vec![
+            Scenario::parse(&scenario)
+                .unwrap_or_else(|| fail(&format!("unknown scenario: {scenario}"))),
+        ]
+    };
     for scenario in scenarios {
         let mut spec = scenario.spec();
         if let Some(rows) = rows {
@@ -131,17 +156,19 @@ fn gen_fixture(args: Vec<String>) {
         }
 
         for kind in [Kind::Full, Kind::Graph] {
-            write(&out, &spec, kind);
+            write_log(&out, &spec, kind);
         }
     }
 }
 
-fn write(dir: &Path, spec: &LogSpec, kind: Kind) {
-    let path = dir.join(spec.file_name(kind));
-    let body = spec.csv(kind);
+fn write_log(dir: &Path, spec: &LogSpec, kind: Kind) {
+    write(&dir.join(spec.file_name(kind)), &spec.csv(kind));
+}
+
+fn write(path: &Path, body: &str) {
     // `write` in binary mode, never a text-mode writer: Windows would turn every
     // `\r\n` this crate emitted into `\r\r\n`, and the bytes are the whole point.
-    if let Err(err) = std::fs::write(&path, body.as_bytes()) {
+    if let Err(err) = std::fs::write(path, body.as_bytes()) {
         fail(&format!("could not write {}: {err}", path.display()));
     }
     println!("{:>8} bytes  {}", body.len(), path.display());

@@ -5,6 +5,7 @@
 //! a window, and so the v2 controller becomes a new module rather than a new
 //! project (docs/BUILDOUT.md, "Keeping the Option 2 door open").
 
+pub mod brewd;
 pub mod calc;
 pub mod config;
 pub mod db;

@@ -25,7 +25,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::{
     batch::{BatchStatus, ensure_open, get_batch, set_pitched_at, transition_batch},
     enums::db_enum,
-    tier1::AnnotationChannel,
+    reference::list_vessel_streams,
+    tier1::{AnnotationChannel, SourceKind},
 };
 use crate::{Error, Result, units::Timestamp};
 
@@ -142,12 +143,18 @@ pub fn delete_event(conn: &Connection, event_id: i64) -> Result<bool> {
 }
 
 /// Record t=0: the event, `batch.pitched_at` and the move out of `planned`, in that
-/// order and in the caller's transaction.
+/// order and in the caller's transaction. Then bind the vessel's default streams from
+/// `at`.
 ///
 /// 3c left `pitched_at` as the gate out of `planned` and said this call would write it
 /// rather than replace the rule. Doing all three here is what keeps them from
 /// disagreeing — the partial unique index on `batch_event(batch_id) WHERE kind='pitch'`
 /// makes a second pitch a constraint error rather than a silent second t=0.
+///
+/// A default stream still bound to another batch fails the pitch with
+/// [`Error::StreamAlreadyBound`], and the caller's transaction takes the rest back with
+/// it. The alternative is closing the other batch's window here, which would end its
+/// curve at a time nobody chose.
 pub fn record_pitch(
     conn: &Connection,
     batch_id: i64,
@@ -166,12 +173,21 @@ pub fn record_pitch(
         },
     )?;
     set_pitched_at(conn, batch_id, at)?;
-    transition_batch(conn, batch_id, BatchStatus::Fermenting)?;
+    transition_batch(conn, batch_id, BatchStatus::Fermenting, at)?;
+    if let Some(vessel_id) = get_batch(conn, batch_id)?.vessel_id {
+        for stream_id in list_vessel_streams(conn, vessel_id)? {
+            bind_stream(conn, batch_id, stream_id, at, None)?;
+        }
+    }
     Ok(id)
 }
 
-/// Undo a pitch entered by mistake: delete the event, clear `pitched_at`, and put the
-/// batch back in `planned`.
+/// Undo a pitch entered by mistake: delete the event, clear `pitched_at`, put the
+/// batch back in `planned`, and drop the sensor bindings the pitch opened.
+///
+/// "The bindings the pitch opened" is every non-manual binding starting at the pitch
+/// time. Nothing marks which ones [`record_pitch`] wrote, and a window that starts at a
+/// pitch that never happened is anchored to nothing either way.
 ///
 /// Only while the batch is still `fermenting` — once it has conditioned, the pitch is
 /// load-bearing for everything recorded since, and "this never happened" stops being
@@ -184,6 +200,12 @@ pub fn undo_pitch(conn: &Connection, batch_id: i64) -> Result<bool> {
         return Err(Error::PitchEventLocked { batch_id });
     }
 
+    if let Some(pitched_at) = batch.pitched_at {
+        conn.execute(
+            "DELETE FROM batch_stream               WHERE batch_id = ?1 AND starts_at = ?2                 AND stream_id IN (                       SELECT s.id FROM stream s JOIN source src ON src.id = s.source_id                        WHERE src.kind <> ?3)",
+            params![batch_id, pitched_at, SourceKind::Manual],
+        )?;
+    }
     let removed = conn.execute(
         "DELETE FROM batch_event WHERE batch_id = ? AND kind = ?",
         params![batch_id, EventKind::Pitch],
@@ -283,6 +305,21 @@ pub fn unbind_stream(conn: &Connection, binding_id: i64, at: Timestamp) -> Resul
         params![at, binding_id, at],
     )?;
     Ok(changed == 1)
+}
+
+/// Close every open sensor binding of a batch at `at`. [`transition_batch`] calls it
+/// on the move to `packaged`.
+///
+/// Manual streams stay open: they are the batch's own, not the vessel's, and a gravity
+/// taken from a bottle a week after packaging still belongs to this batch. A binding
+/// that starts at or after `at` is left alone, because closing it would need an
+/// `ends_at` the schema's `CHECK` refuses.
+pub(crate) fn close_sensor_bindings(conn: &Connection, batch_id: i64, at: Timestamp) -> Result<()> {
+    conn.execute(
+        "UPDATE batch_stream SET ends_at = ?2           WHERE batch_id = ?1 AND ends_at IS NULL AND starts_at < ?2             AND stream_id IN (                   SELECT s.id FROM stream s JOIN source src ON src.id = s.source_id                    WHERE src.kind <> ?3)",
+        params![batch_id, at, SourceKind::Manual],
+    )?;
+    Ok(())
 }
 
 /// Widen a binding backwards. `false` if `starts_at` is not earlier than the current
@@ -494,6 +531,7 @@ mod tests {
         Metric,
         batch::{BatchStatus, NewBatch, archive_batch, create_batch, get_batch, transition_batch},
         recipe::BeverageType,
+        reference::{VesselKind, create_vessel, set_vessel_streams},
         tier1::{SourceKind, create_source, create_stream, insert_annotations},
     };
     use rusqlite::Connection;
@@ -677,7 +715,7 @@ mod tests {
         let conn = db();
         let batch_id = batch(&conn, "SELTZER-001");
         record_pitch(&conn, batch_id, at(0), None).unwrap();
-        transition_batch(&conn, batch_id, BatchStatus::Conditioning).unwrap();
+        transition_batch(&conn, batch_id, BatchStatus::Conditioning, at(60)).unwrap();
 
         let err = undo_pitch(&conn, batch_id).unwrap_err();
         assert_eq!(err.code(), "db.pitch_event_locked");
@@ -855,6 +893,131 @@ mod tests {
             batch_for_stream_at(&conn, stream_id, at(2_000)).unwrap(),
             None
         );
+    }
+
+    // ---------------------------------------------------- vessel defaults
+
+    /// A fermenter carrying `streams` by default, and a batch planned into it.
+    fn in_vessel(conn: &Connection, code: &str, streams: &[i64]) -> i64 {
+        let vessel_id = create_vessel(conn, code, VesselKind::Fermenter, None, None).unwrap();
+        set_vessel_streams(conn, vessel_id, streams).unwrap();
+        create_batch(
+            conn,
+            &NewBatch {
+                code: code.into(),
+                recipe_version_id: None,
+                beverage_type: BeverageType::Seltzer,
+                vessel_id: Some(vessel_id),
+                volume_l: None,
+                og: None,
+                notes: None,
+            },
+            T0,
+        )
+        .unwrap()
+    }
+
+    fn manual_stream(conn: &mut Connection) -> i64 {
+        let source_id = create_source(conn, SourceKind::Manual, "manual", None).unwrap();
+        let tx = conn.transaction().unwrap();
+        let stream_id = create_stream(&tx, source_id, "sg", Metric::Sg).unwrap();
+        tx.commit().unwrap();
+        stream_id
+    }
+
+    #[test]
+    fn a_pitch_binds_the_vessels_sensors_and_packaging_closes_them() {
+        let mut conn = db();
+        let (_, probe) = stream(&mut conn, "FV1");
+        let manual = manual_stream(&mut conn);
+        let batch_id = in_vessel(&conn, "FV1", &[probe]);
+
+        record_pitch(&conn, batch_id, at(0), None).unwrap();
+        bind_stream(&conn, batch_id, manual, at(0), None).unwrap();
+        assert_eq!(
+            batch_for_stream_at(&conn, probe, at(0)).unwrap(),
+            Some(batch_id)
+        );
+
+        transition_batch(&conn, batch_id, BatchStatus::Conditioning, at(600)).unwrap();
+        transition_batch(&conn, batch_id, BatchStatus::Packaged, at(1_000)).unwrap();
+
+        let ends: Vec<_> = list_batch_streams(&conn, batch_id)
+            .unwrap()
+            .into_iter()
+            .map(|b| (b.stream_id, b.ends_at))
+            .collect();
+        assert!(ends.contains(&(probe, Some(at(1_000)))), "{ends:?}");
+        // A bottle's gravity a week later is still this batch's.
+        assert!(ends.contains(&(manual, None)), "{ends:?}");
+    }
+
+    /// The fermenter turnaround, done by the defaults: batch 18 pitched the second
+    /// batch 17 was packaged.
+    #[test]
+    fn the_next_pitch_into_a_packaged_vessel_takes_its_sensors() {
+        let mut conn = db();
+        let (_, probe) = stream(&mut conn, "FV1");
+        let seventeen = in_vessel(&conn, "FV1", &[probe]);
+        record_pitch(&conn, seventeen, at(0), None).unwrap();
+        transition_batch(&conn, seventeen, BatchStatus::Conditioning, at(500)).unwrap();
+        transition_batch(&conn, seventeen, BatchStatus::Packaged, at(1_000)).unwrap();
+
+        let vessel_id = get_batch(&conn, seventeen).unwrap().vessel_id;
+        let eighteen = create_batch(
+            &conn,
+            &NewBatch {
+                code: "SELTZER-018".into(),
+                recipe_version_id: None,
+                beverage_type: BeverageType::Seltzer,
+                vessel_id,
+                volume_l: None,
+                og: None,
+                notes: None,
+            },
+            T0,
+        )
+        .unwrap();
+        record_pitch(&conn, eighteen, at(1_000), None).unwrap();
+        assert_eq!(
+            batch_for_stream_at(&conn, probe, at(999)).unwrap(),
+            Some(seventeen)
+        );
+        assert_eq!(
+            batch_for_stream_at(&conn, probe, at(1_000)).unwrap(),
+            Some(eighteen)
+        );
+    }
+
+    #[test]
+    fn a_pitch_into_a_vessel_whose_sensor_is_still_bound_elsewhere_fails() {
+        let mut conn = db();
+        let (_, probe) = stream(&mut conn, "FV1");
+        let other = batch(&conn, "SELTZER-017");
+        bind_stream(&conn, other, probe, at(0), None).unwrap();
+        let batch_id = in_vessel(&conn, "FV1", &[probe]);
+
+        let err = record_pitch(&conn, batch_id, at(600), None).unwrap_err();
+        assert_eq!(err.code(), "db.stream_already_bound");
+    }
+
+    #[test]
+    fn undoing_a_pitch_drops_the_bindings_it_opened() {
+        let mut conn = db();
+        let (_, probe) = stream(&mut conn, "FV1");
+        let manual = manual_stream(&mut conn);
+        let batch_id = in_vessel(&conn, "FV1", &[probe]);
+        record_pitch(&conn, batch_id, at(0), None).unwrap();
+        bind_stream(&conn, batch_id, manual, at(0), None).unwrap();
+
+        undo_pitch(&conn, batch_id).unwrap();
+
+        let left: Vec<_> = list_batch_streams(&conn, batch_id)
+            .unwrap()
+            .into_iter()
+            .map(|b| b.stream_id)
+            .collect();
+        assert_eq!(left, [manual]);
     }
 
     // -------------------------------------------------- annotation import

@@ -41,6 +41,18 @@ pub fn is_journal_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
+/// `(device, epoch)` for a journal `brewd` rotated away when its header changed:
+/// `esp32-1.1790000000.csv` → `("esp32-1", 1790000000)`. `None` for a live journal,
+/// including one whose device name merely contains a dot.
+pub fn rotated_stem(name: &str) -> Option<(&str, i64)> {
+    let stem = name.strip_suffix(JOURNAL_EXTENSION)?.strip_suffix('.')?;
+    let (device, epoch) = stem.rsplit_once('.')?;
+    if device.is_empty() || epoch.is_empty() || !epoch.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((device, epoch.parse().ok()?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,6 +76,24 @@ mod tests {
             "journal",
         ] {
             assert!(!is_journal_name(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_rotated_name_carries_its_device_and_epoch() {
+        assert_eq!(
+            rotated_stem("esp32-1.1790000000.csv"),
+            Some(("esp32-1", 1_790_000_000))
+        );
+        assert_eq!(rotated_stem("a.b.1.csv"), Some(("a.b", 1)));
+        for live in [
+            "esp32-1.csv",
+            "a.b.csv",
+            ".1790000000.csv",
+            "a..csv",
+            "a.1x.csv",
+        ] {
+            assert_eq!(rotated_stem(live), None, "{live}");
         }
     }
 

@@ -2,3 +2,6 @@
 # output, CRLF included. core.autocrlf would rewrite them on commit and the
 # goldens would be checked out as a file Fermentrack could never have produced.
 crates/fixtures/tests/fixtures/*.csv -text
+# The brewd journal fixtures are LF by the same reasoning: `brewd` writes `\n`, and a
+# checkout that turned it into `\r\n` would move every offset the tests assert.
+crates/fixtures/tests/fixtures/journal/*.csv -text

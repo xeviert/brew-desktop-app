@@ -68,6 +68,38 @@ export interface SourceSummary {
 	synced_at: number | null;
 }
 
+/** Mirrors `brewcore::journal::JournalEntry`, one row of `brewd`'s `GET /journals/`. */
+export interface JournalEntry {
+	name: string;
+	bytes: number;
+	modified: number;
+}
+
+/** Mirrors `brewcore::brewd::MappedColumn`. `metric` is `Metric::as_str`. */
+export interface MappedColumn {
+	column: string;
+	metric: string;
+}
+
+/** Mirrors `brewcore::brewd::JournalHeader`. */
+export interface JournalHeader {
+	header: string;
+	mapped: MappedColumn[];
+	unknown_columns: string[];
+	/** A `gravity` column: the journal will not sync until the iSpindle unit is set. */
+	needs_ispindel_unit: boolean;
+}
+
+/** Mirrors `brewcore::brewd::JournalProbe`. */
+export interface JournalProbe {
+	journal: string;
+	remote_path: string;
+	suggested_name: string;
+	/** Renamed away by `brewd` on a header change. It will not grow. */
+	rotated: boolean;
+	header: JournalHeader;
+}
+
 /**
  * Tauri rejects with whatever the command returned, so ours arrive as `ApiError` —
  * but argument-deserialisation failures and panics do not. Tauri produces those
@@ -114,11 +146,27 @@ export const checkFermentrack = (baseUrl?: string): Promise<number[]> =>
 	call("check_fermentrack", { baseUrl: baseUrl ?? null });
 
 // ---------------------------------------------------------------------------
+// Phase Ve: brewd
+// ---------------------------------------------------------------------------
+
+/** Every journal `brewd` has. Also the brewd "Test connection": an unsaved URL wins. */
+export const listJournals = (baseUrl?: string): Promise<JournalEntry[]> =>
+	call("list_journals", { baseUrl: baseUrl ?? null });
+
+/** Read a journal's header against the saved brewd URL. Writes nothing. */
+export const probeJournal = (journal: string): Promise<JournalProbe> =>
+	call("probe_journal", { journal });
+
+/** Probes again server-side, adds, and starts polling. */
+export const addJournalSource = (journal: string, name?: string): Promise<SourceSummary> =>
+	call("add_journal_source", { journal, name: name ?? null });
+
+// ---------------------------------------------------------------------------
 // Phase 2g: sync
 // ---------------------------------------------------------------------------
 
 /** Mirrors `brewcore::sync::SyncPhase`. */
-export type SyncPhase = "idle" | "syncing" | "error";
+export type SyncPhase = "idle" | "syncing" | "error" | "unreachable";
 
 /** Mirrors `brewcore::sync::SourceStatus`. Timestamps are epoch seconds. */
 export interface SourceStatus {
@@ -126,6 +174,8 @@ export interface SourceStatus {
 	phase: SyncPhase;
 	last_success: number | null;
 	last_error: string | null;
+	/** `ApiError.code` of the last failed poll; `null` for a committed fault. */
+	last_error_code: string | null;
 	rows_added: number;
 	newest_reading: number | null;
 	consecutive_failures: number;
@@ -168,3 +218,46 @@ export function onSyncStatus(cb: (status: SourceStatus) => void): () => void {
 		stop?.();
 	};
 }
+
+// ---------------------------------------------------------------------------
+// Phase Ve: vessels
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::reference::VesselKind`. */
+export type VesselKind = "fermenter" | "brite" | "keg" | "carboy" | "kettle" | "other";
+
+/** Mirrors `src-tauri`'s `VesselView`: a `VesselRow` plus its default stream ids. */
+export interface Vessel {
+	id: number;
+	name: string;
+	kind: VesselKind;
+	capacity_l: number | null;
+	notes: string | null;
+	archived_at: number | null;
+	/** Bound to a batch from its pitch, closed when it is packaged. */
+	default_streams: number[];
+}
+
+/** Mirrors `brewcore::db::tier1::StreamRow`. */
+export interface Stream {
+	id: number;
+	source_id: number;
+	source_name: string;
+	source_kind: string;
+	external_id: string;
+	metric: string;
+}
+
+export const listVessels = (): Promise<Vessel[]> => call("list_vessels");
+
+export const createVessel = (
+	name: string,
+	kind: VesselKind,
+	capacityL: number | null,
+): Promise<number> => call("create_vessel", { name, kind, capacityL });
+
+export const listStreams = (): Promise<Stream[]> => call("list_streams");
+
+/** Replaces the whole set. Batches already pitched keep what they were bound to. */
+export const setVesselStreams = (vesselId: number, streamIds: number[]): Promise<void> =>
+	call("set_vessel_streams", { vesselId, streamIds });

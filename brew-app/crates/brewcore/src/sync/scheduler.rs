@@ -262,11 +262,23 @@ async fn run(
 /// The two failure paths are deliberately identical below the first line: an `Err` and
 /// a committed fault differ in where the text came from, not in what they mean.
 fn record(status: &mut SourceStatus, outcome: Result<PollReport>, source_id: i64) {
-    let (fault, rows_added, newest) = match outcome {
-        Ok(report) => (report.fault, report.rows_added, report.newest_reading),
+    let (fault, rows_added, newest, code, unreachable) = match outcome {
+        Ok(report) => (
+            report.fault,
+            report.rows_added,
+            report.newest_reading,
+            None,
+            false,
+        ),
         Err(err) => {
             tracing::warn!(source_id, %err, "poll failed");
-            (Some(err.to_string()), 0, status.newest_reading)
+            (
+                Some(err.to_string()),
+                0,
+                status.newest_reading,
+                Some(err.code().to_owned()),
+                err.is_unreachable(),
+            )
         }
     };
 
@@ -278,6 +290,7 @@ fn record(status: &mut SourceStatus, outcome: Result<PollReport>, source_id: i64
             status.consecutive_failures = 0;
             status.last_success = Some(Timestamp::now());
             status.last_error = None;
+            status.last_error_code = None;
             status.phase = SyncPhase::Idle;
         }
         Some(error) => {
@@ -285,7 +298,12 @@ fn record(status: &mut SourceStatus, outcome: Result<PollReport>, source_id: i64
             // must not wrap its counter back to "healthy".
             status.consecutive_failures = status.consecutive_failures.saturating_add(1);
             status.last_error = Some(error);
-            status.phase = SyncPhase::Error;
+            status.last_error_code = code;
+            status.phase = if unreachable {
+                SyncPhase::Unreachable
+            } else {
+                SyncPhase::Error
+            };
         }
     }
 }

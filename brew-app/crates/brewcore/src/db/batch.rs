@@ -235,13 +235,22 @@ pub(crate) fn ensure_open(batch: &BatchRow) -> Result<()> {
     }
 }
 
-/// Move a batch along the chain. `false` means it was already there.
+/// Move a batch along the chain at `at`. `false` means it was already there.
 ///
 /// `planned → fermenting` needs `pitched_at`: pitch is what Phase 5's overlay aligns
 /// on, what the finish detector measures from and what lag time is derived from, so a
 /// batch that ferments without one can never be compared to anything. Discovering
 /// that afterwards is not a fix.
-pub fn transition_batch(conn: &Connection, batch_id: i64, to: BatchStatus) -> Result<bool> {
+///
+/// `→ packaged` closes the batch's open sensor bindings at `at`: the beer has left the
+/// vessel, and the vessel's sensors belong to whatever is pitched into it next. See
+/// [`close_sensor_bindings`](super::timeline::close_sensor_bindings).
+pub fn transition_batch(
+    conn: &Connection,
+    batch_id: i64,
+    to: BatchStatus,
+    at: Timestamp,
+) -> Result<bool> {
     let batch = get_batch(conn, batch_id)?;
     ensure_open(&batch)?;
 
@@ -263,6 +272,9 @@ pub fn transition_batch(conn: &Connection, batch_id: i64, to: BatchStatus) -> Re
         "UPDATE batch SET status = ? WHERE id = ?",
         params![to, batch_id],
     )?;
+    if to == BatchStatus::Packaged {
+        super::timeline::close_sensor_bindings(conn, batch_id, at)?;
+    }
     Ok(true)
 }
 
@@ -704,7 +716,7 @@ mod tests {
         let conn = db();
         let batch = create_batch(&conn, &new_batch("SELTZER-001", None), T0).unwrap();
 
-        let err = transition_batch(&conn, batch, BatchStatus::Fermenting)
+        let err = transition_batch(&conn, batch, BatchStatus::Fermenting, T0)
             .expect_err("pitch is t=0 for everything downstream");
         assert_eq!(err.code(), "db.batch_not_pitched");
         assert_eq!(
@@ -713,7 +725,7 @@ mod tests {
         );
 
         set_pitched_at(&conn, batch, T0).unwrap();
-        assert!(transition_batch(&conn, batch, BatchStatus::Fermenting).unwrap());
+        assert!(transition_batch(&conn, batch, BatchStatus::Fermenting, T0).unwrap());
         assert_eq!(
             get_batch(&conn, batch).unwrap().status,
             BatchStatus::Fermenting
@@ -726,15 +738,16 @@ mod tests {
         let batch = create_batch(&conn, &new_batch("SELTZER-001", None), T0).unwrap();
         set_pitched_at(&conn, batch, T0).unwrap();
 
-        let err = transition_batch(&conn, batch, BatchStatus::Packaged).expect_err("no skipping");
+        let err =
+            transition_batch(&conn, batch, BatchStatus::Packaged, T0).expect_err("no skipping");
         assert_eq!(err.code(), "db.illegal_batch_transition");
 
         // Already there is not an error, it is nothing to do.
-        assert!(!transition_batch(&conn, batch, BatchStatus::Planned).unwrap());
+        assert!(!transition_batch(&conn, batch, BatchStatus::Planned, T0).unwrap());
 
-        transition_batch(&conn, batch, BatchStatus::Fermenting).unwrap();
-        transition_batch(&conn, batch, BatchStatus::Conditioning).unwrap();
-        let err = transition_batch(&conn, batch, BatchStatus::Fermenting)
+        transition_batch(&conn, batch, BatchStatus::Fermenting, T0).unwrap();
+        transition_batch(&conn, batch, BatchStatus::Conditioning, T0).unwrap();
+        let err = transition_batch(&conn, batch, BatchStatus::Fermenting, T0)
             .expect_err("a batch does not un-condition");
         assert_eq!(err.code(), "db.illegal_batch_transition");
         assert!(
@@ -742,7 +755,7 @@ mod tests {
             "unexpected: {err}"
         );
 
-        transition_batch(&conn, batch, BatchStatus::Packaged).unwrap();
+        transition_batch(&conn, batch, BatchStatus::Packaged, T0).unwrap();
         assert_eq!(
             get_batch(&conn, batch).unwrap().status,
             BatchStatus::Packaged
@@ -758,7 +771,7 @@ mod tests {
         assert!(!archive_batch(&conn, batch, T0).unwrap());
 
         for err in [
-            transition_batch(&conn, batch, BatchStatus::Fermenting).unwrap_err(),
+            transition_batch(&conn, batch, BatchStatus::Fermenting, T0).unwrap_err(),
             set_pitched_at(&conn, batch, T0).unwrap_err(),
             add_batch_ingredient(&conn, batch, &actual(lot, 2.5, Unit::Kg, Stage::Prep))
                 .unwrap_err(),

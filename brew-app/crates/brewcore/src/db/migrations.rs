@@ -48,6 +48,7 @@ pub const MIGRATIONS: &[Migration] = &[
     plain(5, include_str!("../../migrations/0005_timeline.sql")),
     plain(6, include_str!("../../migrations/0006_manual.sql")),
     rebuild(7, include_str!("../../migrations/0007_source_kind.sql")),
+    plain(8, include_str!("../../migrations/0008_vessel_stream.sql")),
 ];
 
 /// The schema version this build knows about.

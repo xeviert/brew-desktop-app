@@ -60,6 +60,14 @@ pub trait Dialect {
     /// The error for a header that is not text at all: the URL points at the wrong
     /// thing. Each dialect keeps its own error code.
     fn not_a_log(detail: String) -> Error;
+
+    /// Whether a [`Restart`] for `reason` deletes the source's readings before the
+    /// refetch. Yes by default: a Fermentrack log that shrank is a different brew under
+    /// the same name. A dialect whose rows are facts stamped at receipt, never rewritten,
+    /// can keep them across anything but a requested rebuild.
+    fn deletes_on_restart(_reason: &RestartReason) -> bool {
+        true
+    }
 }
 
 /// What a chunk cost to parse. Phase 2g renders this; a sync that is quietly dropping
@@ -190,11 +198,14 @@ pub enum RestartReason {
     /// `byte_offset > 0` with no stored header: a torn write or a hand-edited database.
     /// There is nothing to parse the continuation against.
     NoStoredHeader,
-    /// Phase 2g's "Rebuild from scratch". The only reason here that is not a fault, and
-    /// the only one [`SyncStep::apply_to`] must *clear* `last_error` for: a button the
-    /// user pressed is not a condition to report, and 2g's scheduler backs off any
-    /// source whose `last_error` is set.
+    /// Phase 2g's "Rebuild from scratch". Not a fault, so [`SyncStep::apply_to`] must
+    /// *clear* `last_error` for it: a button the user pressed is not a condition to
+    /// report, and 2g's scheduler backs off any source whose `last_error` is set.
     Requested,
+    /// `brewd` renamed the journal to `rotated_to` when its header changed, and the
+    /// rows between our offset and the end of that file have already been drained from
+    /// it. Not a fault: it clears `last_error`, as [`Requested`](Self::Requested) does.
+    Rotated { rotated_to: String },
 }
 
 /// Something worth `last_error` that is not worth refusing the rows that did parse.
@@ -228,6 +239,7 @@ impl std::fmt::Display for RestartReason {
             }
             Self::NoStoredHeader => write!(f, "no stored header to resume against"),
             Self::Requested => write!(f, "rebuilding from the beginning"),
+            Self::Rotated { rotated_to } => write!(f, "journal rotated to {rotated_to}"),
         }
     }
 }
@@ -407,7 +419,7 @@ impl<R> SyncStep<R> {
                 // keep 2g's scheduler backing the source off for a condition the user
                 // has just resolved.
                 state.last_error = match restart.reason {
-                    RestartReason::Requested => None,
+                    RestartReason::Requested | RestartReason::Rotated { .. } => None,
                     ref reason => Some(reason.to_string()),
                 };
             }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { checkFermentrack, setConfig, toApiError, type ApiError, type Config } from "$lib/api";
+  import { checkFermentrack, listJournals, setConfig, toApiError, type ApiError, type Config } from "$lib/api";
 
   let { config, onsaved }: { config: Config; onsaved: (c: Config) => void } = $props();
 
@@ -24,6 +24,8 @@
   let testing = $state(false);
   /** `null` until Test has run. A string either way — the count, or why not. */
   let reachable = $state<string | null>(null);
+  let testingBrewd = $state(false);
+  let brewdReachable = $state<string | null>(null);
 
   const dirty = $derived(JSON.stringify(draft) !== JSON.stringify(config));
 
@@ -78,6 +80,20 @@
       testing = false;
     }
   }
+
+  /** `GET /journals/`: only brewd answers it with a journal list, so a count is proof. */
+  async function testBrewd() {
+    testingBrewd = true;
+    brewdReachable = null;
+    try {
+      const journals = await listJournals(draft.brewd.base_url);
+      brewdReachable = journals.length === 1 ? "1 journal" : `${journals.length} journals`;
+    } catch (e) {
+      brewdReachable = toApiError(e).message;
+    } finally {
+      testingBrewd = false;
+    }
+  }
 </script>
 
 <section>
@@ -98,7 +114,12 @@
   <label>
     <span>brewd URL</span>
     <input type="text" bind:value={draft.brewd.base_url} placeholder="http://brewd.local:8080" />
-    <small>the Pi — leave empty until it is set up</small>
+    <small>
+      <button class="link" onclick={testBrewd} disabled={testingBrewd || !draft.brewd.base_url.trim()}>
+        {testingBrewd ? "Testing…" : "Test connection"}
+      </button>
+      {#if brewdReachable}<span>· {brewdReachable}</span>{:else}<span>· the Pi — leave empty until it is set up</span>{/if}
+    </small>
   </label>
 
   <label>

@@ -688,19 +688,47 @@ laptop is shut. The desktop app does everything else.
       (`brewd` still links rusqlite through `brewcore`; it opens no database)
 
 **Vd. Journal ingest** — a `ReadingSource` impl beside `fermentrack::source`
-- [ ] Parser for the journal format. Rows map to metrics by header, like 2b
-- [ ] Fixture generator in `crates/fixtures`: iSpindle bursts, a probe that drops
-      out, a `brewd` restart mid-line, a journal rotated underneath a resume
-- [ ] The growing-file test from 2a, rerun against journals under both `RangeMode`s
+- [x] Parser for the journal format. Rows map to metrics by header, like 2b —
+      `brewd::dialect`, a fixed column table: `tilt`, `gravity`, `temperature`,
+      `battery`, `rssi` for the iSpindle; `vessel_temp`, `chamber_temp`, `room_temp`
+      for the ESP32; `interval` ignored, anything else reported as unknown. A header
+      mapping two columns to one metric is refused, since streams key on metric.
+      A `gravity` column with `gravity.ispindel_unit` unset fails the poll and
+      consumes nothing, so setting the unit later ingests every row it held back
+- [x] Rotation drained, not lost: when a resume finds the live journal truncated or
+      mid-record, the source reads the rest out of the newest rotated sibling whose
+      header matches, then restarts the live file at 0 with a
+      `RestartReason::Rotated` that keeps the readings (`Dialect::deletes_on_restart`;
+      Fermentrack's default is unchanged). Rebuild deletes, then rereads every
+      rotated journal oldest first, then the live one. The base URL and gravity unit
+      are read from the live config on every poll
+- [x] Fixture generator in `crates/fixtures`: iSpindle bursts, a probe that drops
+      out, a `brewd` restart mid-line, a journal rotated underneath a resume —
+      `JournalScenario`, goldens in `tests/fixtures/journal/`,
+      `cargo xtask gen-fixture --format journal`
+- [x] The growing-file test from 2a, rerun against journals under both `RangeMode`s —
+      `tests/journal_sync.rs`, plus every split point, a restart mid-line and the
+      unit wedge; `tests/brewd_source.rs` for discovery, rotation and Rebuild
 - [ ] Replace generated fixtures with the Phase 0 captures — same tests
 
 **Ve. Desktop wiring**
-- [ ] Sources pane: pick journals from `brewd`'s listing instead of pasting URLs
-- [ ] v2 streams belong to a physical sensor and outlive batches, which is the case
+- [x] Sources pane: pick journals from `brewd`'s listing instead of pasting URLs —
+      Load journals → pick → probe shows the column mapping → Add. Already-added
+      journals are hidden, rotated ones tagged. Settings has a brewd "Test
+      connection" (`list_journals`). `start_polling` builds each source by `kind`
+- [x] v2 streams belong to a physical sensor and outlive batches, which is the case
       `batch_stream` was designed for. Add a vessel → default-streams mapping (Tier 2,
       referencing `stream.id`, never a topic) so `record_pitch` binds the vessel's
-      sensors from pitch onward and a status move to `packaged` closes the window
-- [ ] Footer: `brewd` reachability as its own state, distinct from "no new data"
+      sensors from pitch onward and a status move to `packaged` closes the window —
+      `0008_vessel_stream.sql`. A default stream still bound to another batch fails
+      the pitch rather than closing that batch's window. `transition_batch` takes
+      `at`; packaging closes non-manual bindings only, so a bottle gravity still
+      lands. `undo_pitch` drops the non-manual bindings starting at the pitch.
+      Minimal Vessels pane for the mapping; batch UI waits for the Phase 3 UI pass
+- [x] Footer: `brewd` reachability as its own state, distinct from "no new data" —
+      `SyncPhase::Unreachable` for a timeout or connect failure, and
+      `SourceStatus.last_error_code` so the UI branches on codes, not text. The
+      footer says "brewd unreachable" when every unreachable source is a journal
 
 **Done when:** the Pi logs both probes and the iSpindle with the laptop shut, and
 opening the app backfills a gap-free curve bound to the pitched batch.
