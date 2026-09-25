@@ -24,7 +24,8 @@
     "vitest": "5.0.2"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.11.1"
+    "@tauri-apps/api": "2.11.1",
+    "uplot": "1.6.32"
   },
   "allowScripts": {
     "esbuild@0.28.2": true

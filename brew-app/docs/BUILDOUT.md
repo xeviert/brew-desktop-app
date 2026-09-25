@@ -856,24 +856,42 @@ opening the app backfills a gap-free curve bound to the pitched batch.
       `db::stability::tests` for the joins and a stalled batch end to end
 
 **4d. Chart** — `src/lib/components/Curve.svelte`
-- [ ] Add `uPlot`, pinned like every other dependency. No install script, so no
-      `allowScripts` entry
-- [ ] Axes: gravity left, temperature right, pH a third axis shown only when the
+- [x] Add `uPlot`, pinned like every other dependency. No install script, so no
+      `allowScripts` entry. 1.6.32
+- [x] Axes: gravity left, temperature right, pH a third axis shown only when the
       batch has pH readings. Temp covers `temp_c`, `fridge_temp_c`, `room_temp_c`,
       `gravity_temp_c` and `setpoint_c` — one scale, since they're compared against
-      each other. `battery_v`, `rssi_dbm`, `tilt_deg`, `state` stay off this chart
-- [ ] Gravity display unit: SG → °P / Brix is a `calc` fit, and `units.ts`
-      deliberately has no copy. `batch_series` converts server-side per
-      `ui.gravity_display` and labels the axis. Temperature converts in
-      `formatTemp` as it does today
-- [ ] Event markers: every `batch_event` as a vertical line with its kind; pitch
-      drawn as t=0. Hover shows the note
-- [ ] X axis toggles absolute time ↔ hours since pitch. The second is Phase 5's
-      overlay axis, built here so the two agree
-- [ ] Zoom refetches at the new range with the same `max_points` — the bucket
-      shrinks, detail appears, the payload doesn't grow
-- [ ] Live: listen on `sync://status` and refetch when `rows_added > 0` for a
-      source bound to this batch. No UI timer — sync already is the timer
+      each other. `battery_v`, `rssi_dbm`, `tilt_deg`, `state` stay off this chart.
+      Sensor `sg` draws 4b's smoothed line over faint raw points; a bucketed series
+      adds its min/max band, so a spike survives downsampling. Manual readings are
+      dashed with points, never banded. The shaping is pure, in `lib/chart.ts`.
+      `fridge_setpoint_c` isn't charted
+- [x] Gravity display unit: SG → °P / Brix is a `calc` fit, and `units.ts`
+      deliberately has no copy. **Refined:** converted in the `batch_series`
+      *command* via `BatchSeries::in_gravity_display`, not in `db::series` —
+      4c and 5e read that in SG. It returns `gravity_unit` for the axis label.
+      Temperature converts client-side through `toDisplayTemp`, pulled out of
+      `formatTemp`, so ticks land on round °F
+- [x] Event markers: every `batch_event` as a vertical line with its kind; pitch
+      drawn as t=0. Hover shows the note. **Added:** 4c's stable and stalled spans
+      shaded behind the series. `batch_stability` returns `flat_spans(history)`,
+      not the per-reading history, which is too big for IPC
+- [x] X axis toggles absolute time ↔ hours since pitch. The second is Phase 5's
+      overlay axis, built here so the two agree (`toX`/`toAbs`)
+- [x] Zoom refetches at the new range with the same `max_points` — the bucket
+      shrinks, detail appears, the payload doesn't grow. **Refined:** driven from
+      uPlot's `setSelect` with `drag.setScale` off, and the range set explicitly
+      after each `setData` — an x `range` function is reapplied on every x change,
+      a drag's included. Double-click resets to the default range
+- [x] Live: listen on `sync://status` and refetch when `rows_added > 0` for a
+      source bound to this batch. No UI timer — sync already is the timer.
+      **Refined:** `Series` carries `source_id` to match on. One fetch in flight; a
+      burst of events is one refetch after it
+- [x] **Added:** `list_batches`, `get_batch`, `batch_series`, `list_batch_events`,
+      `batch_stability` commands. `BatchView.svelte` is a stand-in host (picker +
+      curve) until Phase 3's batch screen. `cargo xtask demo-db [path]` writes a
+      60-day batch — 30 s ESP32 temps, 15 min iSpindle with spikes, a 3-day gap, a
+      cold crash, manual SG/pH, events — for `BREWAPP_DB=<path> npm run tauri dev`
 
 **4e. Status card and batch dashboard**
 - [ ] `batch_dashboard(batch_id)` in `brewcore`, one command, one struct: the

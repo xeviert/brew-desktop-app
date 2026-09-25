@@ -1,10 +1,15 @@
 use brewcore::{
     brewd::{self, JournalProbe},
+    calc::stability::{ExpectedFg, FlatSpan, Stability, flat_spans},
     config::{Config, ConfigStore},
     db::{
-        Db, DbStatus, SourceKind,
+        Db, DbStatus, Metric, SourceKind,
+        batch::{self, BatchRow},
         reference::{self, VesselKind, VesselRow},
+        series::{self, BatchSeries, SeriesRange},
+        stability,
         tier1::{self, StreamRow},
+        timeline::{self, BatchEventRow},
     },
     fermentrack::{self, Client, LogProbe, SourceSummary, discovery},
     journal::JournalEntry,
@@ -293,4 +298,95 @@ pub async fn set_vessel_streams(
         tx.commit()?;
         Ok(())
     })?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4d: the batch curve
+// ---------------------------------------------------------------------------
+
+/// What the curve draws. `battery_v`, `rssi_dbm`, `tilt_deg` and `state` are device
+/// health, not the ferment, and stay off it.
+const CURVE_METRICS: [Metric; 7] = [
+    Metric::Sg,
+    Metric::TempC,
+    Metric::FridgeTempC,
+    Metric::RoomTempC,
+    Metric::GravityTempC,
+    Metric::SetpointC,
+    Metric::Ph,
+];
+
+#[tauri::command]
+pub async fn list_batches(
+    db: tauri::State<'_, Db>,
+    include_archived: bool,
+) -> ApiResult<Vec<BatchRow>> {
+    Ok(db.read(|conn| batch::list_batches(conn, include_archived))?)
+}
+
+#[tauri::command]
+pub async fn get_batch(db: tauri::State<'_, Db>, batch_id: i64) -> ApiResult<BatchRow> {
+    Ok(db.read(|conn| batch::get_batch(conn, batch_id))?)
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CurveView {
+    #[serde(flatten)]
+    pub series: BatchSeries,
+    /// The gravity axis label: `ui.gravity_display` is applied here, since the fits
+    /// live in `calc` and the frontend has no copy of them.
+    pub gravity_unit: &'static str,
+}
+
+#[tauri::command]
+pub async fn batch_series(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_id: i64,
+    range: Option<SeriesRange>,
+    max_points: usize,
+) -> ApiResult<CurveView> {
+    let display = config.get().ui.gravity_display;
+    let series = db.read(|conn| {
+        series::batch_series(conn, batch_id, &CURVE_METRICS, range, max_points)?
+            .in_gravity_display(display)
+    })?;
+    Ok(CurveView {
+        series,
+        gravity_unit: display.unit(),
+    })
+}
+
+#[tauri::command]
+pub async fn list_batch_events(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+) -> ApiResult<Vec<BatchEventRow>> {
+    Ok(db.read(|conn| timeline::list_batch_events(conn, batch_id))?)
+}
+
+/// 4c's detector with its history collapsed to spans: the history is one entry per
+/// raw reading since pitch, which is the payload 4a exists to avoid.
+#[derive(Debug, serde::Serialize)]
+pub struct StabilityView {
+    pub stream_id: Option<i64>,
+    pub current: Stability,
+    pub expected_fg: Option<ExpectedFg>,
+    pub spans: Vec<FlatSpan>,
+}
+
+#[tauri::command]
+pub async fn batch_stability(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_id: i64,
+) -> ApiResult<StabilityView> {
+    let params = config.get().stability.params();
+    let s = db.read(|conn| stability::batch_stability(conn, batch_id, &params))?;
+    Ok(StabilityView {
+        stream_id: s.stream_id,
+        current: s.current,
+        expected_fg: s.expected_fg,
+        spans: flat_spans(&s.history),
+    })
 }

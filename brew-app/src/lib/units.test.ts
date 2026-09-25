@@ -7,6 +7,7 @@ import {
 	formatTemp,
 	formatTimestamp,
 	formatVolume,
+	toDisplayTemp,
 } from "./units";
 
 // Intl separates a currency code from the amount with a no-break space.
@@ -60,6 +61,14 @@ describe("formatTemp", () => {
 		expect(formatTemp(18.44)).toBe("18.4 °C");
 		expect(formatTemp(20, "F")).toBe("68.0 °F");
 		expect(formatTemp(-40, "F", 0)).toBe("-40 °F");
+	});
+});
+
+describe("toDisplayTemp", () => {
+	it("is the identity in Celsius and exact in Fahrenheit", () => {
+		expect(toDisplayTemp(18.44, "C")).toBe(18.44);
+		expect(toDisplayTemp(100, "F")).toBe(212);
+		expect(toDisplayTemp(-40, "F")).toBe(-40);
 	});
 });
 

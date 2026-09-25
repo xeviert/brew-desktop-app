@@ -262,3 +262,136 @@ export const listStreams = (): Promise<Stream[]> => call("list_streams");
 /** Replaces the whole set. Batches already pitched keep what they were bound to. */
 export const setVesselStreams = (vesselId: number, streamIds: number[]): Promise<void> =>
 	call("set_vessel_streams", { vesselId, streamIds });
+
+// ---------------------------------------------------------------------------
+// Phase 4d: the batch curve
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::batch::BatchStatus`. */
+export type BatchStatus = "planned" | "fermenting" | "conditioning" | "packaged";
+
+/** Mirrors `brewcore::db::batch::BatchRow`. Timestamps are epoch seconds, gravity SG. */
+export interface Batch {
+	id: number;
+	code: string;
+	recipe_version_id: number | null;
+	beverage_type: string;
+	vessel_id: number | null;
+	status: BatchStatus;
+	volume_l: number | null;
+	og: number | null;
+	fg: number | null;
+	/** t=0. `null` until pitched. */
+	pitched_at: number | null;
+	archived_at: number | null;
+	notes: string | null;
+}
+
+/** Mirrors `brewcore::db::series::SeriesRange`: half-open `[start, end)`, epoch seconds. */
+export interface SeriesRange {
+	start: number;
+	end: number;
+}
+
+/**
+ * Mirrors `brewcore::db::series::Series`: one stream, columnar. `null` in a value
+ * column is a gap — break the line there, never interpolate across it.
+ */
+export interface Series {
+	stream_id: number;
+	source_id: number;
+	/** `Metric::as_str`: `sg`, `temp_c`, `ph`, … */
+	metric: string;
+	source_kind: string;
+	label: string;
+	/** `null` when these are raw rows, one per reading. */
+	bucket_secs: number | null;
+	ts: number[];
+	avg: (number | null)[];
+	/** Empty when raw. */
+	min: (number | null)[];
+	/** Empty when raw. */
+	max: (number | null)[];
+	/** Sensor `sg` only, empty otherwise. */
+	smoothed: (number | null)[];
+	smoothed_partial: boolean[];
+}
+
+/** Mirrors `src-tauri`'s `CurveView`. Gravity is already in `gravity_unit`. */
+export interface Curve {
+	/** The range queried. `null` for a batch with no pitch and no bindings. */
+	range: SeriesRange | null;
+	series: Series[];
+	gravity_unit: string;
+}
+
+/** Mirrors `brewcore::db::timeline::EventKind`. */
+export type EventKind =
+	| "pitch"
+	| "nutrient_addition"
+	| "flavoring_addition"
+	| "temp_ramp"
+	| "cold_crash"
+	| "transfer"
+	| "fining"
+	| "carbonation"
+	| "package"
+	| "note";
+
+/** Mirrors `brewcore::db::timeline::BatchEventRow`. */
+export interface BatchEvent {
+	id: number;
+	batch_id: number;
+	ts: number;
+	kind: EventKind;
+	/** Opaque JSON. */
+	payload: string | null;
+	note: string | null;
+}
+
+/** Mirrors `brewcore::calc::stability::Stability`. */
+export type Stability =
+	| { state: "active" }
+	| { state: "stable"; since: number; fg_unchecked: boolean }
+	| { state: "stalled"; since: number }
+	| {
+			state: "insufficient";
+			reason: "empty" | "too_few_points" | "under_filled" | "not_started";
+	  };
+
+/** Mirrors `brewcore::calc::stability::FlatSpan`. */
+export interface FlatSpan {
+	start: number;
+	end: number;
+	state: "stable" | "stalled";
+}
+
+/** Mirrors `src-tauri`'s `StabilityView`. */
+export interface StabilityView {
+	stream_id: number | null;
+	current: Stability;
+	expected_fg: { lo: number; hi: number; source: "recipe" | "strain" } | null;
+	spans: FlatSpan[];
+}
+
+export const listBatches = (includeArchived = false): Promise<Batch[]> =>
+	call("list_batches", { includeArchived });
+
+export const getBatch = (batchId: number): Promise<Batch> => call("get_batch", { batchId });
+
+/**
+ * `range: null` is the default: pitch to now, or the bindings' span before a pitch.
+ * `maxPoints` is per sensor series; manual series are never bucketed.
+ */
+export const batchSeries = (
+	batchId: number,
+	range: SeriesRange | null,
+	maxPoints: number,
+): Promise<Curve> => call("batch_series", { batchId, range, maxPoints });
+
+/** Oldest first. */
+export const listBatchEvents = (batchId: number): Promise<BatchEvent[]> =>
+	call("list_batch_events", { batchId });
+
+export const batchStability = (batchId: number): Promise<StabilityView> =>
+	call("batch_stability", { batchId });

@@ -30,8 +30,11 @@ use rusqlite::{Connection, params};
 use super::{Metric, batch::get_batch, tier1::SourceKind};
 use crate::{
     Error, Result,
-    calc::smooth::{SG_WINDOW_DEFAULT, Smoothed, rolling_median},
-    units::Timestamp,
+    calc::{
+        gravity::{sg_to_brix, sg_to_plato},
+        smooth::{SG_WINDOW_DEFAULT, Smoothed, rolling_median},
+    },
+    units::{GravityDisplay, Sg, Timestamp},
 };
 
 /// How many trailing readings [`median_interval`] looks at. Enough to shrug off a
@@ -58,6 +61,8 @@ pub struct BatchSeries {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Series {
     pub stream_id: i64,
+    /// For matching a `sync://status` event to the series it extended.
+    pub source_id: i64,
     pub metric: Metric,
     pub source_kind: SourceKind,
     pub label: String,
@@ -183,6 +188,7 @@ pub fn median_interval(
 
 struct BoundStream {
     stream_id: i64,
+    source_id: i64,
     metric: Metric,
     source_kind: SourceKind,
     label: String,
@@ -192,8 +198,8 @@ struct BoundStream {
 
 fn bound_streams(conn: &Connection, batch_id: i64, now: Timestamp) -> Result<Vec<BoundStream>> {
     let mut stmt = conn.prepare(
-        "SELECT bs.stream_id, s.metric, src.kind, COALESCE(s.label, src.name), \
-                bs.starts_at, bs.ends_at \
+        "SELECT bs.stream_id, s.source_id, s.metric, src.kind, \
+                COALESCE(s.label, src.name), bs.starts_at, bs.ends_at \
            FROM batch_stream bs \
            JOIN stream s ON s.id = bs.stream_id \
            JOIN source src ON src.id = s.source_id \
@@ -201,14 +207,15 @@ fn bound_streams(conn: &Connection, batch_id: i64, now: Timestamp) -> Result<Vec
           ORDER BY bs.stream_id, bs.starts_at",
     )?;
     let rows = stmt.query_map([batch_id], |row| {
-        let ends_at: Option<Timestamp> = row.get(5)?;
+        let ends_at: Option<Timestamp> = row.get(6)?;
         Ok((
             row.get::<_, i64>(0)?,
-            row.get::<_, Metric>(1)?,
-            row.get::<_, SourceKind>(2)?,
-            row.get::<_, String>(3)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Metric>(2)?,
+            row.get::<_, SourceKind>(3)?,
+            row.get::<_, String>(4)?,
             SeriesRange {
-                start: row.get(4)?,
+                start: row.get(5)?,
                 end: ends_at.unwrap_or(now),
             },
         ))
@@ -216,7 +223,7 @@ fn bound_streams(conn: &Connection, batch_id: i64, now: Timestamp) -> Result<Vec
 
     let mut out: Vec<BoundStream> = Vec::new();
     for row in rows {
-        let (stream_id, metric, source_kind, label, window) = row?;
+        let (stream_id, source_id, metric, source_kind, label, window) = row?;
         // An open binding that starts in the future is empty until then.
         if window.start >= window.end {
             continue;
@@ -234,6 +241,7 @@ fn bound_streams(conn: &Connection, batch_id: i64, now: Timestamp) -> Result<Vec
             }
             _ => out.push(BoundStream {
                 stream_id,
+                source_id,
                 metric,
                 source_kind,
                 label,
@@ -255,6 +263,7 @@ fn stream_series(
     let clipped = clip(&stream.windows, range);
     let mut series = Series {
         stream_id: stream.stream_id,
+        source_id: stream.source_id,
         metric: stream.metric,
         source_kind: stream.source_kind,
         label: stream.label.clone(),
@@ -362,6 +371,31 @@ fn stream_series(
         }
     }
     Ok(series)
+}
+
+impl BatchSeries {
+    /// Every `sg` series in `display`'s unit, for the chart. `batch_series` stays SG:
+    /// the detector and the export want canonical units, and the fits live in `calc`
+    /// so the frontend has no copy of them.
+    ///
+    /// Both fits are strictly increasing, so `min <= avg <= max` still holds.
+    pub fn in_gravity_display(mut self, display: GravityDisplay) -> Result<Self> {
+        let fit = match display {
+            GravityDisplay::Sg => return Ok(self),
+            GravityDisplay::Plato => sg_to_plato,
+            GravityDisplay::Brix => sg_to_brix,
+        };
+        for s in self.series.iter_mut().filter(|s| s.metric == Metric::Sg) {
+            for v in [&mut s.avg, &mut s.min, &mut s.max, &mut s.smoothed]
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                *v = fit(Sg::new(*v)?);
+            }
+        }
+        Ok(self)
+    }
 }
 
 impl Series {
@@ -1142,6 +1176,64 @@ mod tests {
         )
         .unwrap();
         assert!(only(&got).ts.is_empty());
+    }
+
+    #[test]
+    fn gravity_display_converts_sg_only_and_keeps_gaps() {
+        let mut conn = db();
+        let batch_id = batch(&conn, "SELTZER-001");
+        let ispindel = stream(&mut conn, SourceKind::BrewdJournal, "ispindel", Metric::Sg);
+        let probe = stream(&mut conn, SourceKind::BrewdJournal, "probe", Metric::TempC);
+        for stream_id in [ispindel, probe] {
+            bind_stream(&conn, batch_id, stream_id, at(0), None).unwrap();
+        }
+        let sg = |t: i64| 1.040 - 0.030 * t as f64 / (4 * DAY) as f64;
+        readings(
+            &mut conn,
+            ispindel,
+            (0..4 * DAY)
+                .step_by(900)
+                .filter(|t| !(DAY..2 * DAY).contains(t))
+                .map(|t| (t, sg(t))),
+        );
+        readings(&mut conn, probe, flat(0, 4 * DAY, 900, 18.0));
+
+        let sg_series = series_at(&conn, batch_id, &Metric::ALL, None, 50, at(4 * DAY)).unwrap();
+        let plato = sg_series
+            .clone()
+            .in_gravity_display(GravityDisplay::Plato)
+            .unwrap();
+
+        let of = |b: &BatchSeries, m: Metric| b.series.iter().position(|s| s.metric == m).unwrap();
+        let (sg_at, temp_at) = (of(&sg_series, Metric::Sg), of(&sg_series, Metric::TempC));
+        let (before, after) = (&sg_series.series[sg_at], &plato.series[sg_at]);
+        assert_eq!(after.metric, Metric::Sg);
+        assert_eq!(gaps(after), gaps(before));
+        assert!(gaps(after) > 0);
+        for (b, a) in before
+            .avg
+            .iter()
+            .zip(&after.avg)
+            .filter_map(|(b, a)| Some((b.as_ref()?, a.as_ref()?)))
+        {
+            assert!((a - sg_to_plato(Sg::new(*b).unwrap())).abs() < 1e-12);
+        }
+        for i in 0..after.ts.len() {
+            if let (Some(lo), Some(avg), Some(hi)) = (after.min[i], after.avg[i], after.max[i]) {
+                assert!(lo <= avg && avg <= hi, "bucket {i}: {lo} {avg} {hi}");
+            }
+        }
+        assert!(
+            after
+                .smoothed
+                .iter()
+                .flatten()
+                .all(|v| (0.0..11.0).contains(v))
+        );
+        assert_eq!(
+            plato.series[temp_at], sg_series.series[temp_at],
+            "temp is untouched"
+        );
     }
 
     #[test]

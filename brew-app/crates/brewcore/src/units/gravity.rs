@@ -37,6 +37,17 @@ pub enum GravityDisplay {
     Brix,
 }
 
+impl GravityDisplay {
+    /// The axis label.
+    pub fn unit(self) -> &'static str {
+        match self {
+            Self::Sg => "SG",
+            Self::Plato => "°P",
+            Self::Brix => "°Bx",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

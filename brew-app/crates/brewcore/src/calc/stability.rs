@@ -296,6 +296,52 @@ pub fn evaluate(
         ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlatState {
+    Stable,
+    Stalled,
+}
+
+/// A run of consecutive evaluations in one flat state, from the first's `at` to the
+/// last's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct FlatSpan {
+    pub start: Timestamp,
+    pub end: Timestamp,
+    pub state: FlatState,
+}
+
+/// [`stability_history`] collapsed into the spans a chart shades. A history is one
+/// entry per raw reading; the spans are a handful.
+///
+/// An insufficient evaluation ends a span even though it doesn't reset `since`: the
+/// shading shows where the detector could say so, not where it inferred it.
+pub fn flat_spans(history: &[Evaluation]) -> Vec<FlatSpan> {
+    let mut out: Vec<FlatSpan> = Vec::new();
+    let mut open = false;
+    for e in history {
+        let state = match e.state {
+            Stability::Stable { .. } => FlatState::Stable,
+            Stability::Stalled { .. } => FlatState::Stalled,
+            _ => {
+                open = false;
+                continue;
+            }
+        };
+        match out.last_mut() {
+            Some(last) if open && last.state == state => last.end = e.at,
+            _ => out.push(FlatSpan {
+                start: e.at,
+                end: e.at,
+                state,
+            }),
+        }
+        open = true;
+    }
+    out
+}
+
 /// Running sums for a least-squares line, so a sliding window costs O(1) per point.
 #[derive(Default)]
 struct Sums {
@@ -660,6 +706,52 @@ mod tests {
                 reason: Insufficient::Empty
             }
         );
+    }
+
+    #[test]
+    fn flat_spans_collapse_runs_and_break_on_anything_else() {
+        let t = |h: i64| Timestamp::from_secs(h * 3_600);
+        let since = t(1);
+        let eval = |h: i64, state: Stability| Evaluation {
+            at: t(h),
+            state,
+            slope_sg_per_day: None,
+            fitted_sg: None,
+        };
+        let stable = Stability::Stable {
+            since,
+            fg_unchecked: false,
+        };
+        let stalled = Stability::Stalled { since };
+        let gap = Stability::Insufficient {
+            reason: Insufficient::UnderFilled,
+        };
+        let history = [
+            eval(0, Stability::Active),
+            eval(1, stalled),
+            eval(2, stalled),
+            eval(3, stable),
+            eval(4, stable),
+            eval(5, gap),
+            eval(6, stable),
+            eval(7, Stability::Active),
+            eval(8, stable),
+        ];
+        let span = |start, end, state| FlatSpan {
+            start: t(start),
+            end: t(end),
+            state,
+        };
+        assert_eq!(
+            flat_spans(&history),
+            vec![
+                span(1, 2, FlatState::Stalled),
+                span(3, 4, FlatState::Stable),
+                span(6, 6, FlatState::Stable),
+                span(8, 8, FlatState::Stable),
+            ]
+        );
+        assert!(flat_spans(&[]).is_empty());
     }
 
     #[test]

@@ -95,6 +95,11 @@ fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
         commands::resync,
         commands::rebuild,
         commands::sync_status,
+        commands::list_batches,
+        commands::get_batch,
+        commands::batch_series,
+        commands::list_batch_events,
+        commands::batch_stability,
     ]
 }
 

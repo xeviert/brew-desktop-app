@@ -69,9 +69,13 @@ export function formatMoney(money: Money): string {
 	}
 }
 
+/** Exact and linear, unlike gravity, so it can live here. The chart converts whole series. */
+export function toDisplayTemp(celsius: number, display: TempDisplay): number {
+	return display === "F" ? celsius * 1.8 + 32 : celsius;
+}
+
 export function formatTemp(celsius: number, display: TempDisplay = "C", digits = 1): string {
-	const value = display === "F" ? celsius * 1.8 + 32 : celsius;
-	return `${value.toFixed(digits)} °${display}`;
+	return `${toDisplayTemp(celsius, display).toFixed(digits)} °${display}`;
 }
 
 /** Gravity is stored and shown as SG: four decimals, as every brewing chart does. */

@@ -11,9 +11,10 @@ use std::sync::Arc;
 
 use brewcore::{
     config::ConfigStore,
-    db::{Db, Metric, SourceKind, migrations, tier1},
+    db::{Db, Metric, SourceKind, batch, migrations, recipe::BeverageType, tier1, timeline},
     fermentrack::Client,
     sync::{NoStatus, SyncManager},
+    units::Timestamp,
 };
 use serde_json::{Value, json};
 use tauri::{
@@ -271,4 +272,133 @@ fn only_kinds_with_a_poller_are_scheduled() {
         let built = super::commands::build_source(&app.db, &client, &config, 999, kind);
         assert!(built.is_err(), "{kind:?}: a missing source must not build");
     }
+}
+
+/// A pitched batch with an iSpindle bound from the pitch: a day of readings at 15 min,
+/// falling from 1.040.
+fn pitched_batch(app: &Harness) -> i64 {
+    app.db
+        .write(|conn| {
+            let tx = conn.transaction()?;
+            let batch_id = batch::create_batch(
+                &tx,
+                &batch::NewBatch {
+                    code: "SELTZER-001".into(),
+                    recipe_version_id: None,
+                    beverage_type: BeverageType::Seltzer,
+                    vessel_id: None,
+                    volume_l: None,
+                    og: None,
+                    notes: None,
+                },
+                T0,
+            )?;
+            let source = tier1::create_source(&tx, SourceKind::BrewdJournal, "ispindel", None)?;
+            let stream = tier1::create_stream(&tx, source, "gravity", Metric::Sg)?;
+            timeline::record_pitch(&tx, batch_id, T0, Some("EC-1118"))?;
+            timeline::bind_stream(&tx, batch_id, stream, T0, None)?;
+            let rows: Vec<_> = (0..96)
+                .map(|i| (stream, at(i * 900), 1.040 - 0.0001 * i as f64))
+                .collect();
+            tier1::insert_readings(&tx, &rows)?;
+            tx.commit()?;
+            Ok(batch_id)
+        })
+        .unwrap()
+}
+
+const T0: Timestamp = Timestamp::from_secs(1_700_000_000);
+
+fn at(offset_secs: i64) -> Timestamp {
+    Timestamp::from_secs(T0.as_secs() + offset_secs)
+}
+
+#[test]
+fn the_curve_commands_read_a_pitched_batch() {
+    let app = Harness::new();
+    let batch_id = pitched_batch(&app);
+
+    let batches = app
+        .invoke("list_batches", json!({ "includeArchived": false }))
+        .unwrap();
+    assert_eq!(batches[0]["id"], batch_id);
+    let batch = app
+        .invoke("get_batch", json!({ "batchId": batch_id }))
+        .unwrap();
+    assert_eq!(batch["pitched_at"], T0.as_secs());
+
+    let events = app
+        .invoke("list_batch_events", json!({ "batchId": batch_id }))
+        .unwrap();
+    assert_eq!(events[0]["kind"], "pitch");
+    assert_eq!(events[0]["note"], "EC-1118");
+
+    // A range under the right name clips; under a wrong one it would be the default,
+    // pitch to now, and return every reading.
+    let curve = app
+        .invoke(
+            "batch_series",
+            json!({
+                "batchId": batch_id,
+                "range": { "start": T0.as_secs(), "end": at(3_600).as_secs() },
+                "maxPoints": 1000,
+            }),
+        )
+        .unwrap();
+    assert_eq!(curve["gravity_unit"], "SG");
+    assert_eq!(curve["range"]["end"], at(3_600).as_secs());
+    let series = &curve["series"][0];
+    assert_eq!(series["metric"], "sg");
+    assert!(series["source_id"].is_number());
+    assert_eq!(series["ts"].as_array().unwrap().len(), 4);
+    assert_eq!(series["avg"][0], 1.040);
+
+    let stability = app
+        .invoke("batch_stability", json!({ "batchId": batch_id }))
+        .unwrap();
+    assert!(stability["spans"].is_array(), "{stability}");
+    assert!(stability.get("history").is_none());
+}
+
+#[test]
+fn the_gravity_axis_follows_the_display_setting() {
+    let app = Harness::new();
+    let batch_id = pitched_batch(&app);
+    let mut config = app.invoke("get_config", json!({})).unwrap();
+    config["ui"]["gravity_display"] = json!("plato");
+    app.invoke("set_config", json!({ "config": config }))
+        .unwrap();
+
+    let curve = app
+        .invoke(
+            "batch_series",
+            json!({ "batchId": batch_id, "range": null, "maxPoints": 1000 }),
+        )
+        .unwrap();
+    assert_eq!(curve["gravity_unit"], "°P");
+    let first = curve["series"][0]["avg"][0].as_f64().unwrap();
+    assert!(
+        (first - 10.0).abs() < 0.1,
+        "1.040 is about 10 °P, got {first}"
+    );
+}
+
+#[test]
+fn a_refused_curve_comes_back_with_a_code() {
+    let app = Harness::new();
+    let batch_id = pitched_batch(&app);
+    let err = app.api_error(
+        "batch_series",
+        json!({ "batchId": batch_id, "range": null, "maxPoints": 0 }),
+    );
+    assert_eq!(err["code"], "units.not_positive");
+    for cmd in ["get_batch", "batch_stability"] {
+        let err = app.api_error(cmd, json!({ "batchId": 404 }));
+        assert_eq!(err["code"], "db.no_such_batch", "{cmd}");
+    }
+    let err = app.api_error(
+        "batch_series",
+        json!({ "batchId": 404, "range": null, "maxPoints": 1000 }),
+    );
+    assert_eq!(err["code"], "db.no_such_batch");
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import BatchView from "$lib/components/BatchView.svelte";
   import Settings from "$lib/components/Settings.svelte";
   import Sources from "$lib/components/Sources.svelte";
   import StatusFooter from "$lib/components/StatusFooter.svelte";
@@ -81,6 +82,7 @@
     <Settings {config} onsaved={(c) => (config = c)} />
     <Sources {sources} {syncs} onchanged={(s) => (sources = s)} />
     <Vessels />
+    <BatchView {config} />
   {:else if error}
     <!-- Without this, a failed `get_config` renders an empty page under the heading
          and one red line in the footer. -->
