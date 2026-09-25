@@ -9,6 +9,7 @@ pub mod migrations;
 mod paths;
 pub mod recipe;
 pub mod reference;
+pub mod series;
 pub mod tier1;
 pub mod timeline;
 

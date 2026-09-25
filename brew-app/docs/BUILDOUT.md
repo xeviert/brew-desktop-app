@@ -740,32 +740,46 @@ opening the app backfills a gap-free curve bound to the pitched batch.
 > item here runs on Vd's generated journal fixtures.
 
 **4a. Series query** — `db/series.rs`, no Tauri
-- [ ] `batch_series(conn, batch_id, metrics, range, max_points)`: readings for every
+- [x] `batch_series(conn, batch_id, metrics, range, max_points)`: readings for every
       stream bound through `batch_stream`, clipped to each binding's half-open
       `[starts_at, ends_at)`. A reading outside every window is not the batch's,
       even from the same stream — that is what lets batch 17 and 18 share a
       fermenter. `range` defaults to `[pitched_at, now)`; a planned batch with no
-      pitch has no t=0, so its default is its bindings' span
-- [ ] One series per **stream**, not per metric. An iSpindle `sg` and a manual
+      pitch has no t=0, so its default is its bindings' span (all bindings, not
+      only the requested metrics', so two charts of one batch line up). No pitch
+      and no bindings is `range: None`. `max_points` is per series; 0 is
+      `units.not_positive`
+- [x] One series per **stream**, not per metric. An iSpindle `sg` and a manual
       hydrometer `sg` on one batch are two series on one axis — merging them
       hides the drift between the two instruments that the chart exists to show.
       Each series carries `stream_id`, `metric`, `source.kind` and a label
-- [ ] Downsample in SQL: `GROUP BY ts / bucket` returning `MIN`, `MAX`, `AVG` and
+      (`stream.label`, else the source's name). Columnar `ts` / `avg` / `min` /
+      `max`, uPlot's own shape
+- [x] Downsample in SQL: `GROUP BY ts / bucket` returning `MIN`, `MAX`, `AVG` and
       the bucket's first `ts`, where `bucket = span / max_points`. It rides
       `reading`'s clustered `(stream_id, ts)` scan, and the IPC payload is what
       costs, not uPlot. **Min/max per bucket, not LTTB**: LTTB picks points that
       look right and can drop the one spike that says a probe fell out of the
-      thermowell. Below `max_points` raw rows, return them unbucketed
-- [ ] Gaps survive downsampling. An empty bucket is a `null`, never skipped, so
+      thermowell. Below `max_points` raw rows, return them unbucketed — buckets are
+      aligned to the range start, and one straddling two windows merges into one
+      point. A test pins `EXPLAIN QUERY PLAN` to `SEARCH … USING PRIMARY KEY`. A
+      60-day 30 s journal to 1000 points: ~56 ms (release, in-memory)
+- [x] Gaps survive downsampling. An empty bucket is a `null`, never skipped, so
       uPlot breaks the line instead of drawing a straight ramp across a week the Pi
       was off. A gap is "no reading for > 3× the stream's median interval", the
-      same rule 4f's staleness uses
-- [ ] Manual streams are never bucketed — a dozen points over a month is the whole
+      same rule 4f's staleness uses — **refined:** zoomed in past a device's
+      interval most buckets are empty, so a run of empty buckets becomes one `null`
+      only when the readings either side are further apart than the rule allows.
+      The null takes an empty bucket's slot, so the count stays ≤ `max_points`. The
+      median is over the batch's last 257 readings of the stream, not the zoomed
+      range, so zooming doesn't move the gaps. `median_interval` is `pub` for 4f
+- [x] Manual streams are never bucketed — a dozen points over a month is the whole
       record, and averaging two pH readings invents a third
-- [ ] Tests: extremes survive bucketing, point count ≤ `max_points`, a gap stays a
+- [x] Tests: extremes survive bucketing, point count ≤ `max_points`, a gap stays a
       gap, a reading one second past `ends_at` is excluded, two bindings of one
       stream to one batch (3d's unplugged-and-reconnected case) read as one series
-      with a gap
+      with a gap — `db::series::tests`, plus 17/18 turnaround, iSpindle + manual
+      `sg`, default ranges, and an `#[ignore]`d 60-day timing
 
 **4b. Smoothing** — `calc/smooth.rs`, pure, `&[(Timestamp, f64)]` in and out
 - [ ] Rolling **median** over a time window (proposal: 2 h), then nothing else.
