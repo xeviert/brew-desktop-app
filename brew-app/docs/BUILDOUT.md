@@ -782,19 +782,34 @@ opening the app backfills a gap-free curve bound to the pitched batch.
       `sg`, default ranges, and an `#[ignore]`d 60-day timing
 
 **4b. Smoothing** — `calc/smooth.rs`, pure, `&[(Timestamp, f64)]` in and out
-- [ ] Rolling **median** over a time window (proposal: 2 h), then nothing else.
-      A median drops a single wild tilt (the iSpindle bumped, a CO₂ bubble on the
-      hull) that a mean or EMA would smear across the window. Time-based, not
-      count-based: the iSpindle's interval is a device setting and changes
-- [ ] Computed on read, never stored. Tier 1 stays the raw journal, so a better
+- [x] Rolling **median** over a centred time window, `SG_WINDOW_DEFAULT` = 2 h,
+      then nothing else. A median drops a single wild tilt (the iSpindle bumped, a
+      CO₂ bubble on the hull) that a mean or EMA would smear across the window.
+      Time-based, not count-based: the iSpindle's interval is a device setting and
+      changes
+- [x] Computed on read, never stored. Tier 1 stays the raw journal, so a better
       filter later reapplies to every past batch for free
-- [ ] Applied to `sg` from an iSpindle stream only. Temperature from a DS18B20
-      doesn't jitter, and smoothing manual readings is 4a's invented-point problem
-- [ ] The chart draws smoothed as the line and raw as faint points behind it —
+- [x] Applied to `sg` from any sensor stream — `source.kind` isn't "iSpindle", and a
+      Tilt through Fermentrack wants the same. Temperature from a DS18B20 doesn't
+      jitter, and smoothing manual readings is 4a's invented-point problem
+- [x] **Smoothed before bucketed.** A bucket's `AVG` already smears the tilt the
+      median exists to drop, so smoothed streams are fetched raw and bucketed in
+      Rust, and `Series.smoothed` is the per-bucket mean of smoothed values. Fetched
+      half a window past each end of the range, so a zoom edge isn't a false
+      `partial`; each run between binding edges and gaps is smoothed on its own. A
+      60-day 60 s iSpindle to 1000 points: ~27 ms (release, in-memory)
+- [x] Data shape for 4d: `smoothed` and `smoothed_partial` beside the raw columns.
+      The chart draws smoothed as the line and raw as faint points behind it —
       hiding raw makes a smoothing bug invisible
-- [ ] Tests: a ±0.002 jitter on a flat line comes out flat within 0.0005; a single
-      outlier is removed; a real step (a dry-hop, a dilution) survives after one
-      window; edges with less than half a window are marked, not extrapolated
+- [x] Tests: a single outlier is removed, two adjacent too; a real step (a dry-hop, a
+      dilution) survives past half a window; edges with less than half a window are
+      marked `partial`, not extrapolated. **Refined:** a median of the ~8 readings a
+      15 min iSpindle gives in 2 h rejects outliers but barely averages jitter —
+      uniform ±0.002 comes out ~0.0006 RMS, so "flat within 0.0005" can't hold. The
+      test is ±0.002 at 5 min: RMS ≤ 0.0005, worst ≤ 0.0015. Averaging jitter down is
+      4c's 24 h least-squares fit. `calc::smooth::tests`, plus `db::series::tests`
+      for the wiring: tilt in `max` but not `smoothed`, zoom edges vs binding and gap
+      edges, and a smoothed series in the 60-day timing
 
 **4c. Stability detector** — `calc/stability.rs`, the function Phase 6's alert calls
 - [ ] Implements *Fermentation-finished detection* below: slope of a least-squares

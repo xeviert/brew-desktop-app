@@ -14,6 +14,9 @@
 //! integer money, here rather than in `db` so the folding is testable without a
 //! database — `db::batch::batch_cost` supplies the rows.
 //!
+//! Phase 4b adds [`smooth`], a filter over a time series rather than a formula: there
+//! is no literature value to check it against, so it is tested on generated curves.
+//!
 //! Nothing in this module reads the config or the database, and nothing defaults a
 //! parameter that changes the answer: the wort correction factor, the nitrogen
 //! demand factor and yeast viability are all arguments, each with a documented
@@ -26,6 +29,7 @@ pub mod gravity;
 pub mod hydrometer;
 pub mod pitch;
 pub mod refractometer;
+pub mod smooth;
 pub mod sugar;
 pub mod yan;
 

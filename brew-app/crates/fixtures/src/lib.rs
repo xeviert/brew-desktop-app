@@ -22,7 +22,7 @@
 //!   `associated_beer_id`. In `_graph.csv` they go *before* `state`.
 
 mod csv_writer;
-mod curve;
+pub mod curve;
 pub mod journal;
 mod time;
 

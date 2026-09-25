@@ -19,12 +19,20 @@
 //! so an empty bucket alone is not a gap: a run of them becomes one `None` only when the
 //! raw readings either side of it are further apart than the rule allows.
 //!
+//! **Smoothed before bucketed.** Sensor gravity carries 4b's rolling median beside the
+//! raw values. A bucket's average already smears the wild tilt the median exists to
+//! drop, so those streams are fetched raw and bucketed here rather than in SQL.
+//!
 //! Same contract as the rest of `db`: a borrowed connection, no transaction of its own.
 
 use rusqlite::{Connection, params};
 
 use super::{Metric, batch::get_batch, tier1::SourceKind};
-use crate::{Error, Result, units::Timestamp};
+use crate::{
+    Error, Result,
+    calc::smooth::{SG_WINDOW_DEFAULT, Smoothed, rolling_median},
+    units::Timestamp,
+};
 
 /// How many trailing readings [`median_interval`] looks at. Enough to shrug off a
 /// dropout or two, few enough to stay one short primary-key scan.
@@ -64,6 +72,14 @@ pub struct Series {
     pub min: Vec<Option<f64>>,
     /// Empty when raw.
     pub max: Vec<Option<f64>>,
+    /// Sensor `sg` only, empty otherwise: 4b's rolling median, taken over the raw
+    /// readings before any bucketing and averaged per bucket after. `None` at a gap.
+    /// The raw columns stay beside it for the chart to draw faintly behind — hiding
+    /// raw would hide a smoothing bug.
+    pub smoothed: Vec<Option<f64>>,
+    /// Aligned with `smoothed`: the point's window was cut short by a binding edge, a
+    /// gap or the newest reading. See [`Smoothed::partial`]. `false` at a gap.
+    pub smoothed_partial: Vec<bool>,
 }
 
 /// Every stream bound to this batch whose metric is in `metrics`, clipped to the
@@ -236,26 +252,19 @@ fn stream_series(
     range: SeriesRange,
     max_points: usize,
 ) -> Result<Series> {
-    let clipped: Vec<SeriesRange> = stream
-        .windows
-        .iter()
-        .map(|w| SeriesRange {
-            start: w.start.max(range.start),
-            end: w.end.min(range.end),
-        })
-        .filter(|w| w.start < w.end)
-        .collect();
-
+    let clipped = clip(&stream.windows, range);
     let mut series = Series {
         stream_id: stream.stream_id,
         metric: stream.metric,
         source_kind: stream.source_kind,
-        label: stream.label,
+        label: stream.label.clone(),
         bucket_secs: None,
         ts: Vec::new(),
         avg: Vec::new(),
         min: Vec::new(),
         max: Vec::new(),
+        smoothed: Vec::new(),
+        smoothed_partial: Vec::new(),
     };
     if clipped.is_empty() {
         return Ok(series);
@@ -276,54 +285,69 @@ fn stream_series(
         end: stream.windows[stream.windows.len() - 1].end,
     };
     let gap_secs = median_interval(conn, stream.stream_id, span)?.map(|m| m * 3);
+    let gap = gap_secs.unwrap_or(i64::MAX);
 
-    let rows = raw_rows(conn, stream.stream_id, &clipped, Some(max_points + 1))?;
+    let smoothed = stream.metric == Metric::Sg;
+    let rows = if smoothed {
+        smoothed_rows(conn, &stream, range, gap)?
+    } else {
+        raw_rows(conn, stream.stream_id, &clipped, Some(max_points + 1))?
+            .into_iter()
+            .map(|(ts, value)| Row {
+                ts,
+                value,
+                smoothed: None,
+            })
+            .collect()
+    };
+
     if rows.len() <= max_points {
-        let gaps = match gap_secs {
-            Some(gap) => rows
-                .windows(2)
-                .filter(|w| w[0].0.secs_until(w[1].0) > gap)
-                .count(),
-            None => 0,
-        };
+        let gaps = rows
+            .windows(2)
+            .filter(|w| w[0].ts.secs_until(w[1].ts) > gap)
+            .count();
         if rows.len() + gaps <= max_points {
-            let gap = gap_secs.unwrap_or(i64::MAX);
             let mut prev: Option<Timestamp> = None;
-            for &(ts, value) in &rows {
+            for row in &rows {
                 match prev {
-                    Some(prev) if prev.secs_until(ts) > gap => {
+                    Some(prev) if prev.secs_until(row.ts) > gap => {
                         // Strictly between the two: the gap exceeds 3 s, since
                         // readings are at least a second apart.
-                        series.ts.push(Timestamp::from_secs(
-                            prev.as_secs() + prev.secs_until(ts) / 2,
-                        ));
-                        series.avg.push(None);
+                        series.push_gap(
+                            Timestamp::from_secs(prev.as_secs() + prev.secs_until(row.ts) / 2),
+                            smoothed,
+                        );
                     }
                     _ => {}
                 }
-                series.ts.push(ts);
-                series.avg.push(Some(value));
-                prev = Some(ts);
+                series.ts.push(row.ts);
+                series.avg.push(Some(row.value));
+                if let Some((value, partial)) = row.smoothed {
+                    series.smoothed.push(Some(value));
+                    series.smoothed_partial.push(partial);
+                }
+                prev = Some(row.ts);
             }
             return Ok(series);
         }
     }
 
     let bucket = bucket_secs(range, max_points);
-    let buckets = bucketed_rows(conn, stream.stream_id, &clipped, range.start, bucket)?;
+    let buckets = if smoothed {
+        bucket_rows(&rows, range.start, bucket)
+    } else {
+        bucketed_rows(conn, stream.stream_id, &clipped, range.start, bucket)?
+    };
     series.bucket_secs = Some(bucket);
-    let gap = gap_secs.unwrap_or(i64::MAX);
     let mut prev: Option<&Bucket> = None;
     for b in &buckets {
         match prev {
             Some(prev) if b.index > prev.index + 1 && prev.last_ts.secs_until(b.first_ts) > gap => {
                 // One empty bucket's slot, so the count stays within `max_points`.
-                series.ts.push(Timestamp::from_secs(
-                    range.start.as_secs() + (prev.index + 1) * bucket,
-                ));
-                series.avg.push(None);
-                series.min.push(None);
-                series.max.push(None);
+                series.push_gap(
+                    Timestamp::from_secs(range.start.as_secs() + (prev.index + 1) * bucket),
+                    smoothed,
+                );
             }
             _ => {}
         }
@@ -332,8 +356,87 @@ fn stream_series(
         series.avg.push(Some(b.sum / b.count as f64));
         series.min.push(Some(b.min));
         series.max.push(Some(b.max));
+        if let Some((sum, partial)) = b.smoothed {
+            series.smoothed.push(Some(sum / b.count as f64));
+            series.smoothed_partial.push(partial);
+        }
     }
     Ok(series)
+}
+
+impl Series {
+    /// A break in the line: `None` in every column this series fills.
+    fn push_gap(&mut self, ts: Timestamp, smoothed: bool) {
+        self.ts.push(ts);
+        self.avg.push(None);
+        if self.bucket_secs.is_some() {
+            self.min.push(None);
+            self.max.push(None);
+        }
+        if smoothed {
+            self.smoothed.push(None);
+            self.smoothed_partial.push(false);
+        }
+    }
+}
+
+/// The windows' parts inside `range`, dropping any left empty.
+fn clip(windows: &[SeriesRange], range: SeriesRange) -> Vec<SeriesRange> {
+    windows
+        .iter()
+        .map(|w| SeriesRange {
+            start: w.start.max(range.start),
+            end: w.end.min(range.end),
+        })
+        .filter(|w| w.start < w.end)
+        .collect()
+}
+
+/// A reading, and for a smoothed stream its smoothed value and whether that was
+/// [partial](Smoothed::partial).
+struct Row {
+    ts: Timestamp,
+    value: f64,
+    smoothed: Option<(f64, bool)>,
+}
+
+/// Every reading of a sensor `sg` stream in `range`, each with its rolling median.
+///
+/// Fetched half a window past each end of `range`, so a zoom edge is not a false
+/// `partial`; a binding edge or a gap is a real one. Each run between those is
+/// smoothed on its own, since the level can move while the Pi is off.
+fn smoothed_rows(
+    conn: &Connection,
+    stream: &BoundStream,
+    range: SeriesRange,
+    gap: i64,
+) -> Result<Vec<Row>> {
+    let half = SG_WINDOW_DEFAULT / 2;
+    let padded = clip(
+        &stream.windows,
+        SeriesRange {
+            start: range.start.saturating_add_secs(-half),
+            end: range.end.saturating_add_secs(half),
+        },
+    );
+    let mut out = Vec::new();
+    for w in padded {
+        let rows = raw_rows(conn, stream.stream_id, &[w], None)?;
+        for run in rows.chunk_by(|a, b| a.0.secs_until(b.0) <= gap) {
+            let Smoothed { points, partial } = rolling_median(run, SG_WINDOW_DEFAULT)?;
+            out.extend(
+                run.iter()
+                    .zip(points.into_iter().zip(partial))
+                    .filter(|((ts, _), _)| range.start <= *ts && *ts < range.end)
+                    .map(|(&(ts, value), ((_, smoothed), partial))| Row {
+                        ts,
+                        value,
+                        smoothed: Some((smoothed, partial)),
+                    }),
+            );
+        }
+    }
+    Ok(out)
 }
 
 /// Seconds per bucket such that every bucket index over `range` is below
@@ -381,6 +484,8 @@ struct Bucket {
     max: f64,
     sum: f64,
     count: i64,
+    /// A smoothed stream's sum of smoothed values, and whether any was partial.
+    smoothed: Option<(f64, bool)>,
 }
 
 const BUCKET_SQL: &str = "SELECT (ts - ?1) / ?2 AS b, MIN(ts), MAX(ts), \
@@ -411,6 +516,7 @@ fn bucketed_rows(
                 max: row.get(4)?,
                 sum: row.get(5)?,
                 count: row.get(6)?,
+                smoothed: None,
             })
         })?;
         for row in rows {
@@ -428,6 +534,39 @@ fn bucketed_rows(
         }
     }
     Ok(out)
+}
+
+/// [`BUCKET_SQL`]'s grouping in Rust, for rows that had to be smoothed first.
+fn bucket_rows(rows: &[Row], origin: Timestamp, bucket: i64) -> Vec<Bucket> {
+    let mut out: Vec<Bucket> = Vec::new();
+    for row in rows {
+        let index = origin.secs_until(row.ts) / bucket;
+        match out.last_mut() {
+            Some(last) if last.index == index => {
+                last.last_ts = row.ts;
+                last.min = last.min.min(row.value);
+                last.max = last.max.max(row.value);
+                last.sum += row.value;
+                last.count += 1;
+                if let (Some((sum, partial)), Some((value, p))) = (&mut last.smoothed, row.smoothed)
+                {
+                    *sum += value;
+                    *partial |= p;
+                }
+            }
+            _ => out.push(Bucket {
+                index,
+                first_ts: row.ts,
+                last_ts: row.ts,
+                min: row.value,
+                max: row.value,
+                sum: row.value,
+                count: 1,
+                smoothed: row.smoothed,
+            }),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -556,38 +695,53 @@ mod tests {
         let mut conn = db();
         let batch_id = batch(&conn, "SELTZER-001");
         let probe = stream(&mut conn, SourceKind::BrewdJournal, "probe", Metric::TempC);
-        // Two windows with a hole between them, and a dropout inside the first.
-        bind_stream(&conn, batch_id, probe, at(0), Some(at(2 * DAY))).unwrap();
-        bind_stream(&conn, batch_id, probe, at(3 * DAY), Some(at(5 * DAY))).unwrap();
-        readings(
-            &mut conn,
-            probe,
-            flat(0, 5 * DAY, 60, 18.0).filter(|(t, _)| !(DAY..DAY + 6 * HOUR).contains(t)),
-        );
+        // Smoothed streams are bucketed in Rust rather than SQL, so both paths.
+        let ispindel = stream(&mut conn, SourceKind::BrewdJournal, "ispindel", Metric::Sg);
+        for (stream_id, value) in [(probe, 18.0), (ispindel, 1.010)] {
+            // Two windows with a hole between them, and a dropout inside the first.
+            bind_stream(&conn, batch_id, stream_id, at(0), Some(at(2 * DAY))).unwrap();
+            bind_stream(&conn, batch_id, stream_id, at(3 * DAY), Some(at(5 * DAY))).unwrap();
+            readings(
+                &mut conn,
+                stream_id,
+                flat(0, 5 * DAY, 60, value).filter(|(t, _)| !(DAY..DAY + 6 * HOUR).contains(t)),
+            );
+        }
 
-        for max_points in [1, 2, 7, 100, 999, 5_000, 10_000] {
-            for (start, end) in [(0, 5 * DAY), (DAY - HOUR, DAY + 7 * HOUR), (0, 10 * HOUR)] {
-                let got = series_at(
-                    &conn,
-                    batch_id,
-                    &[Metric::TempC],
-                    range(start, end),
-                    max_points,
-                    at(10 * DAY),
-                )
-                .unwrap();
-                let s = only(&got);
-                assert!(
-                    s.ts.len() <= max_points,
-                    "{} points for max_points {max_points} over [{start}, {end})",
-                    s.ts.len()
-                );
-                assert_eq!(s.avg.len(), s.ts.len());
-                if s.bucket_secs.is_some() {
-                    assert_eq!(s.min.len(), s.ts.len());
-                    assert_eq!(s.max.len(), s.ts.len());
+        for metric in [Metric::TempC, Metric::Sg] {
+            for max_points in [1, 2, 7, 100, 999, 5_000, 10_000] {
+                for (start, end) in [(0, 5 * DAY), (DAY - HOUR, DAY + 7 * HOUR), (0, 10 * HOUR)] {
+                    let got = series_at(
+                        &conn,
+                        batch_id,
+                        &[metric],
+                        range(start, end),
+                        max_points,
+                        at(10 * DAY),
+                    )
+                    .unwrap();
+                    let s = only(&got);
+                    assert!(
+                        s.ts.len() <= max_points,
+                        "{} {metric:?} points for max_points {max_points} over [{start}, {end})",
+                        s.ts.len()
+                    );
+                    assert_eq!(s.avg.len(), s.ts.len());
+                    if s.bucket_secs.is_some() {
+                        assert_eq!(s.min.len(), s.ts.len());
+                        assert_eq!(s.max.len(), s.ts.len());
+                    }
+                    if metric == Metric::Sg {
+                        assert_eq!(s.smoothed.len(), s.ts.len());
+                        assert_eq!(s.smoothed_partial.len(), s.ts.len());
+                        for (avg, smoothed) in s.avg.iter().zip(&s.smoothed) {
+                            assert_eq!(avg.is_none(), smoothed.is_none(), "a gap in one only");
+                        }
+                    } else {
+                        assert!(s.smoothed.is_empty() && s.smoothed_partial.is_empty());
+                    }
+                    assert!(s.ts.windows(2).all(|w| w[0] < w[1]), "not strictly ordered");
                 }
-                assert!(s.ts.windows(2).all(|w| w[0] < w[1]), "not strictly ordered");
             }
         }
     }
@@ -783,6 +937,125 @@ mod tests {
     }
 
     #[test]
+    fn only_sensor_gravity_is_smoothed() {
+        let mut conn = db();
+        let batch_id = batch(&conn, "SELTZER-001");
+        let ispindel = stream(&mut conn, SourceKind::BrewdJournal, "ispindel", Metric::Sg);
+        let manual = stream(&mut conn, SourceKind::Manual, "manual", Metric::Sg);
+        let probe = stream(&mut conn, SourceKind::BrewdJournal, "probe", Metric::TempC);
+        for stream_id in [ispindel, manual, probe] {
+            bind_stream(&conn, batch_id, stream_id, at(0), None).unwrap();
+        }
+        readings(&mut conn, ispindel, flat(0, DAY, 900, 1.040));
+        readings(&mut conn, manual, [(HOUR, 1.042), (20 * HOUR, 1.041)]);
+        readings(&mut conn, probe, flat(0, DAY, 60, 18.0));
+
+        let got = series_at(
+            &conn,
+            batch_id,
+            &[Metric::Sg, Metric::TempC],
+            None,
+            1_000,
+            at(DAY),
+        )
+        .unwrap();
+        let smoothed: Vec<_> = got
+            .series
+            .iter()
+            .map(|s| (s.stream_id, !s.smoothed.is_empty()))
+            .collect();
+        assert_eq!(
+            smoothed,
+            [(probe, false), (ispindel, true), (manual, false)]
+        );
+    }
+
+    /// The iSpindle bumped: the tilt is in the raw columns for the chart to show, and
+    /// nowhere in the smoothed one — including once bucketed, where an SQL average
+    /// would already have smeared it before the median saw it.
+    #[test]
+    fn a_wild_tilt_is_in_the_raw_columns_but_not_the_smoothed() {
+        let mut conn = db();
+        let batch_id = batch(&conn, "SELTZER-001");
+        let ispindel = stream(&mut conn, SourceKind::BrewdJournal, "ispindel", Metric::Sg);
+        bind_stream(&conn, batch_id, ispindel, at(0), None).unwrap();
+        readings(
+            &mut conn,
+            ispindel,
+            flat(0, 10 * DAY, 900, 1.010)
+                .map(|(t, v)| if t == 5 * DAY { (t, 1.030) } else { (t, v) }),
+        );
+        let flat_everywhere =
+            |s: &Series| s.smoothed.iter().all(|v| (v.unwrap() - 1.010).abs() < 1e-9);
+
+        let raw = series_at(&conn, batch_id, &[Metric::Sg], None, 10_000, at(10 * DAY)).unwrap();
+        let raw = only(&raw);
+        assert_eq!(raw.bucket_secs, None);
+        assert!(raw.avg.contains(&Some(1.030)));
+        assert!(flat_everywhere(raw), "{:?}", raw.smoothed);
+
+        let bucketed = series_at(&conn, batch_id, &[Metric::Sg], None, 50, at(10 * DAY)).unwrap();
+        let bucketed = only(&bucketed);
+        assert!(bucketed.bucket_secs.is_some());
+        assert!(bucketed.max.contains(&Some(1.030)));
+        assert!(
+            bucketed.avg.iter().any(|v| v.unwrap() > 1.0105),
+            "the average smears it"
+        );
+        assert!(flat_everywhere(bucketed), "{:?}", bucketed.smoothed);
+    }
+
+    #[test]
+    fn a_zoom_edge_is_not_partial_but_a_binding_edge_and_a_gap_are() {
+        let mut conn = db();
+        let batch_id = batch(&conn, "SELTZER-001");
+        let ispindel = stream(&mut conn, SourceKind::BrewdJournal, "ispindel", Metric::Sg);
+        bind_stream(&conn, batch_id, ispindel, at(0), None).unwrap();
+        // Falling, so a clipped window would read differently from a full one. Off
+        // for twelve hours on day two.
+        readings(
+            &mut conn,
+            ispindel,
+            flat(0, 4 * DAY, 900, 0.0)
+                .filter(|(t, _)| !(DAY..DAY + 12 * HOUR).contains(t))
+                .map(|(t, _)| (t, 1.040 - t as f64 * 1e-7)),
+        );
+        let now = at(4 * DAY);
+        let partial_at = |s: &Series, offset: i64| {
+            let i = s.ts.iter().position(|&ts| ts == at(offset)).unwrap();
+            s.smoothed_partial[i]
+        };
+
+        let whole = series_at(&conn, batch_id, &[Metric::Sg], None, 10_000, now).unwrap();
+        let whole = only(&whole);
+        assert_eq!(whole.bucket_secs, None);
+        assert!(partial_at(whole, 0), "the binding's start");
+        assert!(partial_at(whole, DAY - 900), "before the gap");
+        assert!(partial_at(whole, DAY + 12 * HOUR), "after the gap");
+        assert!(partial_at(whole, 4 * DAY - 900), "the newest reading");
+        assert!(!partial_at(whole, 12 * HOUR));
+        assert!(!partial_at(whole, 2 * DAY));
+
+        let zoomed = series_at(
+            &conn,
+            batch_id,
+            &[Metric::Sg],
+            range(12 * HOUR, 20 * HOUR),
+            10_000,
+            now,
+        )
+        .unwrap();
+        let zoomed = only(&zoomed);
+        assert!(zoomed.smoothed_partial.iter().all(|&p| !p));
+        // Zooming does not move the smoothed line.
+        let start = whole.ts.iter().position(|&ts| ts == at(12 * HOUR)).unwrap();
+        assert_eq!(
+            zoomed.smoothed,
+            whole.smoothed[start..start + zoomed.ts.len()]
+        );
+    }
+
+    #[test]
     fn a_manual_stream_is_never_bucketed() {
         let mut conn = db();
         let batch_id = batch(&conn, "SELTZER-001");
@@ -951,6 +1224,29 @@ mod tests {
         assert!(only(&got).ts.len() <= 1_000);
         println!(
             "172 800 rows → {} points in {elapsed:?}",
+            only(&got).ts.len()
+        );
+
+        // Smoothed gravity is fetched raw and bucketed in Rust. An iSpindle at 60 s
+        // is four times more often than anyone runs one.
+        let ispindel = stream(&mut conn, SourceKind::BrewdJournal, "ispindel", Metric::Sg);
+        bind_stream(&conn, batch_id, ispindel, at(0), None).unwrap();
+        readings(&mut conn, ispindel, flat(0, 60 * DAY, 60, 1.010));
+
+        let started = std::time::Instant::now();
+        let got = series_at(
+            &conn,
+            batch_id,
+            &[Metric::Sg],
+            range(0, 60 * DAY),
+            1_000,
+            at(60 * DAY),
+        )
+        .unwrap();
+        let elapsed = started.elapsed();
+        assert!(only(&got).ts.len() <= 1_000);
+        println!(
+            "86 400 rows, smoothed → {} points in {elapsed:?}",
             only(&got).ts.len()
         );
     }
