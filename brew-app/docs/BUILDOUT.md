@@ -58,11 +58,12 @@ client that ingests, and it also publishes setpoints (Phase 6).
       line every few seconds, all year
 - [ ] Mosquitto on the Pi: one listener on the LAN, one user for devices and one
       for `brewd`, and persistence off. `brewd`'s journal is the record, not the broker
-- [ ] Reflash ESP32 #1 from BrewPi-ESP32 to ESPHome: `dallas_temp` for both probes,
-      a `thermostat` climate, and the `mqtt:` component (no Home Assistant API).
-      Capture every topic and payload it publishes, plus the setpoint command topic,
-      from `mosquitto_sub -v -t '#'`
-- [ ] iSpindle on the same broker. Capture one full wake cycle: the stock firmware
+- [ ] Reflash ESP32 #1 from BrewPi-ESP32 to ESPHome: `dallas_temp` for both probes
+      and the `mqtt:` component (no Home Assistant API). No `thermostat` yet —
+      temp control is deferred (see "Order of real work"). Capture every topic and
+      payload it publishes from `mosquitto_sub -v -t '#'`
+- [ ] iSpindle on the same broker — **arriving ~2026-10-09**. Until then Vd runs on
+      generated fixtures. Capture one full wake cycle: the stock firmware
       publishes one topic per field (`ispindel/<name>/tilt`, `temperature`,
       `battery`, `gravity`, `interval`, `RSSI`, …). Confirm the field list against
       the capture, not against this line
@@ -644,10 +645,11 @@ laptop is shut. The desktop app does everything else.
       secrets in `secrets.yaml`, gitignored
 - [ ] Probes addressed by OneWire address, never by bus order: vessel probe →
       `temp_c`, chamber probe → `fridge_temp_c`
-- [ ] `thermostat` climate with `min_cooling_off_time` / `min_cooling_run_time`.
-      BrewPi protected the compressor. Nothing does now unless this is set
-- [ ] The ESP32 keeps controlling to its last setpoint when the Pi or the broker
-      is down. Test it by stopping Mosquitto mid-run
+- [ ] **Deferred with temp control:** `thermostat` climate with
+      `min_cooling_off_time` / `min_cooling_run_time`. BrewPi protected the
+      compressor. Nothing does now unless this is set
+- [ ] **Deferred with temp control:** the ESP32 keeps controlling to its last
+      setpoint when the Pi or the broker is down. Test it by stopping Mosquitto mid-run
 
 **Vc. `brewd` — new crate `crates/brewd`, binary, depends on `brewcore`, no `tauri`**
 - [ ] MQTT subscriber (`rumqttc`). **Timestamp at receipt**, UTC epoch seconds —
@@ -709,6 +711,10 @@ opening the app backfills a gap-free curve bound to the pitched batch.
 > only fires while the laptop is open doesn't fire at 3 am, and a 09:00 ramp can't
 > depend on someone having the app open. The rule engine is `brewcore` code, so
 > the move is about where it runs, not a rewrite.
+>
+> **Temp control is deferred** until everything else is built and running:
+> relays, the ESPHome `thermostat`, the `Controller` trait and profiles. Alert
+> rules need no relays and can land before them.
 
 - [ ] Rule engine: condition on latest readings → action. Lives in `brewcore`,
       runs in `brewd`
@@ -1316,8 +1322,13 @@ have run to know what you actually want alerted and recorded.
 iSpindle captures) → Va (migration runner, `0007`, the hoist — all testable with
 no hardware) → Vc–Vd (`brewd` and journal ingest, against generated fixtures
 until the captures exist) → Ve → the Phase 3 UI pass → Phase 4. Va comes first
-among the code work because Vd builds on the hoisted module. One exception to
-"defer Phase 6": setpoint control and profiles are no longer optional, since
-nothing else runs them without Fermentrack. The ESP32 holds the last setpoint on
-its own, so until Phase 6 lands, set it by hand with `mosquitto_pub` or
-ESPHome's `web_server`.
+among the code work because Vd builds on the hoisted module.
+
+v2 starts as a **logger only**. Temp control (relays, `thermostat`, `Controller`,
+profiles) comes after everything else is built and running. Until then, ferments
+run without active temperature control, and the app records what happened rather
+than steering it.
+
+No hardware needed for Va, Vc, Vd (on generated fixtures), the Phase 3 UI pass,
+or Phase 4 — the app can be built through all of them before the iSpindle
+(~2026-10-09) or the Pi arrive.

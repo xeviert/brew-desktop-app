@@ -231,7 +231,8 @@ Fermentrack's role, and only that role:
   alert rules, because those must run while the app is closed.
 - **The control loop stays on the ESP32** (ESPHome's `thermostat`). If the Pi dies,
   the fridge still holds its last setpoint. If the ESP32 dies, nothing else could
-  have saved it anyway.
+  have saved it anyway. Temp control is deferred until everything else is built
+  and running, so v2 starts as a logger only.
 
 The Pi deliberately does **not** own `brewery.db`. That would turn the desktop
 app into a client of a server — the web-app shape this document rejected, with
