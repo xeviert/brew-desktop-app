@@ -197,3 +197,27 @@ where
         }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_panic_on_the_blocking_pool_becomes_an_error() {
+        let err = blocking(|| -> Result<()> { panic!("commit exploded") })
+            .await
+            .expect_err("a panic must not escape as a panic");
+        assert_eq!(err.code(), "sync.task");
+        assert!(err.to_string().contains("panicked"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn results_pass_through_unchanged() {
+        assert_eq!(blocking(|| Ok(7)).await.unwrap(), 7);
+
+        let err = blocking(|| -> Result<()> { Err(Error::MissingSyncState { source_id: 3 }) })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::MissingSyncState { source_id: 3 }));
+    }
+}

@@ -98,24 +98,89 @@ fn a_newer_schema_is_refused() {
 /// The pragmas that matter are per-connection, so the pool customiser is the thing
 /// actually under test here — not the writer.
 #[test]
-fn pooled_readers_get_the_pragmas() {
+fn every_connection_gets_the_pragmas() {
     let (_dir, path) = scratch();
     let db = Db::open(&path).unwrap();
 
-    let (journal, foreign_keys): (String, i32) = db
-        .read(|conn| {
-            Ok((
-                conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?,
-                conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?,
-            ))
-        })
-        .unwrap();
+    // Three of the four are per-connection and reset on every open, so the writer
+    // and a pooled reader are checked separately.
+    let on_writer = db.write(|conn| pragmas(conn)).unwrap();
+    let on_reader = db.read(pragmas).unwrap();
 
-    assert_eq!(journal.to_lowercase(), "wal");
+    for (who, (journal, synchronous, foreign_keys, busy_timeout_ms)) in
+        [("writer", on_writer), ("reader", on_reader)]
+    {
+        assert_eq!(journal.to_lowercase(), "wal", "{who}");
+        assert_eq!(synchronous, 1, "{who}: synchronous=NORMAL");
+        assert_eq!(
+            foreign_keys, 1,
+            "{who}: foreign_keys defaults to OFF on every connection"
+        );
+        assert_eq!(busy_timeout_ms, 5000, "{who}");
+    }
+}
+
+fn pragmas(conn: &Connection) -> brewcore::Result<(String, i32, i32, i32)> {
+    Ok((
+        conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?,
+        conn.query_row("PRAGMA synchronous", [], |r| r.get(0))?,
+        conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?,
+        conn.query_row("PRAGMA busy_timeout", [], |r| r.get(0))?,
+    ))
+}
+
+/// Phase 2g: a sync never blocks a UI query. The writer is held mid-transaction
+/// with an uncommitted row while a read runs, which fails if reads are ever routed
+/// through the writer's lock. WAL itself is pinned by the pragma test above.
+#[test]
+fn a_read_is_not_blocked_by_an_open_write_transaction() {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    let (_dir, path) = scratch();
+    let db = Db::open(&path).unwrap();
+    fn count_sources(conn: &Connection) -> brewcore::Result<i64> {
+        Ok(conn.query_row("SELECT COUNT(*) FROM source", [], |r| r.get(0))?)
+    }
+
+    let (in_txn, wait_in_txn) = mpsc::channel();
+    let (release, wait_release) = mpsc::channel::<()>();
+    let writer = {
+        let db = db.clone();
+        thread::spawn(move || {
+            db.write(|conn| {
+                let tx = conn.transaction()?;
+                tx.execute(
+                    "INSERT INTO source (kind, name) VALUES ('manual', 'held open')",
+                    [],
+                )?;
+                in_txn.send(()).unwrap();
+                wait_release.recv().unwrap();
+                tx.commit()?;
+                Ok(())
+            })
+        })
+    };
+
+    wait_in_txn.recv().unwrap();
+    // On its own thread with a deadline, so a read stuck behind the writer fails the
+    // test instead of hanging it. Well under the 5 s busy_timeout.
+    let (read_done, wait_read) = mpsc::channel();
+    let reader = {
+        let db = db.clone();
+        thread::spawn(move || read_done.send(db.read(count_sources)).unwrap())
+    };
+    let during = wait_read.recv_timeout(Duration::from_secs(1));
+    release.send(()).unwrap();
+    writer.join().unwrap().unwrap();
+    reader.join().unwrap();
+
+    let during = during.expect("the read waited on the open write");
     assert_eq!(
-        foreign_keys, 1,
-        "foreign_keys defaults to OFF on every connection"
+        during.unwrap(),
+        0,
+        "a reader sees the last commit, not the open write"
     );
+    assert_eq!(db.read(count_sources).unwrap(), 1);
 }
 
 #[test]
