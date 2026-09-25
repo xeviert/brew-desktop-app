@@ -72,6 +72,14 @@ pub fn create_vessel(
     capacity_l: Option<Litres>,
     notes: Option<&str>,
 ) -> Result<i64> {
+    // Enforced here rather than by a CHECK: this is the only write path, and adding a
+    // CHECK to an existing SQLite table means rebuilding it.
+    if let Some(capacity) = capacity_l.filter(|c| c.get() <= 0.0) {
+        return Err(Error::NotPositive {
+            field: "capacity_l",
+            value: capacity.get(),
+        });
+    }
     conn.execute(
         "INSERT INTO vessel (name, kind, capacity_l, notes) VALUES (?, ?, ?, ?)",
         params![name, kind, capacity_l, notes],
@@ -767,6 +775,23 @@ mod tests {
         let all = list_vessels(&conn, true).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].archived_at, Some(at));
+    }
+
+    #[test]
+    fn a_vessel_capacity_must_be_positive() {
+        let conn = db();
+        for capacity in [0.0, -5.0] {
+            let err = create_vessel(
+                &conn,
+                "FV1",
+                VesselKind::Fermenter,
+                Some(Litres::new(capacity).unwrap()),
+                None,
+            )
+            .unwrap_err();
+            assert_eq!(err.code(), "units.not_positive", "{capacity}");
+        }
+        assert!(list_vessels(&conn, true).unwrap().is_empty());
     }
 
     #[test]

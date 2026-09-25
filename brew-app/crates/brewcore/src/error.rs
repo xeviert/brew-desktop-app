@@ -359,6 +359,9 @@ pub enum Error {
     #[error("{field} value is not finite: {value}")]
     NotFinite { field: &'static str, value: f64 },
 
+    #[error("{field} must be greater than zero: {value}")]
+    NotPositive { field: &'static str, value: f64 },
+
     #[error("unknown unit '{0}'")]
     UnknownUnit(String),
 
@@ -465,6 +468,7 @@ impl Error {
             Error::BackgroundTask { .. } => "sync.task",
             Error::DimensionMismatch { .. } => "units.dimension_mismatch",
             Error::NotFinite { .. } => "units.not_finite",
+            Error::NotPositive { .. } => "units.not_positive",
             Error::UnknownUnit(_) => "units.unknown_unit",
             Error::CalcOutOfRange { .. } => "calc.out_of_range",
             Error::CurrencyMismatch { .. } => "money.currency_mismatch",

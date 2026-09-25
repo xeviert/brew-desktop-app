@@ -116,7 +116,7 @@
   </label>
   <label>
     <span>Capacity (L)</span>
-    <input type="number" min="0" step="0.5" bind:value={capacity} />
+    <input type="number" min="0.5" step="0.5" bind:value={capacity} />
   </label>
   <div class="actions">
     <button onclick={create} disabled={busy || name.trim() === ""}>Add</button>

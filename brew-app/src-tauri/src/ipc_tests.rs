@@ -240,6 +240,12 @@ fn a_refused_vessel_write_comes_back_with_a_code() {
     assert_eq!(err["code"], "db.sqlite");
 
     let err = app.api_error(
+        "create_vessel",
+        json!({ "name": "FV2", "kind": "fermenter", "capacityL": -5.0 }),
+    );
+    assert_eq!(err["code"], "units.not_positive");
+
+    let err = app.api_error(
         "set_vessel_streams",
         json!({ "vesselId": id, "streamIds": [999] }),
     );
