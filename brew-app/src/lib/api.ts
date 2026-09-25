@@ -21,6 +21,7 @@ export interface Config {
 	ui: { temp_display: TempDisplay; gravity_display: GravityDisplay };
 	measurement: { hydrometer_calibration_c: number; refractometer_wort_correction: number };
 	gravity: { ispindel_unit: IspindelUnit | null };
+	stability: { window_hours: number; slope_sg_per_day: number; fg_band: number };
 }
 
 /** Mirrors `brewcore::config::IspindelUnit`. `null` in `Config` means not recorded yet. */

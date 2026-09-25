@@ -10,6 +10,7 @@ mod paths;
 pub mod recipe;
 pub mod reference;
 pub mod series;
+pub mod stability;
 pub mod tier1;
 pub mod timeline;
 

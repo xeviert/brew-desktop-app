@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, Result,
+    calc::stability::StabilityParams,
     units::{GravityDisplay, TempDisplay},
 };
 
@@ -42,6 +43,22 @@ pub const MAX_HYDROMETER_CALIBRATION_C: f64 = 30.0;
 pub const DEFAULT_REFRACTOMETER_WORT_CORRECTION: f64 = crate::calc::WORT_CORRECTION_DEFAULT;
 pub const MIN_REFRACTOMETER_WORT_CORRECTION: f64 = 0.90;
 pub const MAX_REFRACTOMETER_WORT_CORRECTION: f64 = 1.20;
+
+/// Phase 4c. The finish detector's three numbers. Settings and not constants because
+/// the first ten batches will say what they really are, and 4c's replay shows at once
+/// what a change would have done to every past batch.
+pub const DEFAULT_STABILITY_WINDOW_HOURS: f64 = 24.0;
+pub const MIN_STABILITY_WINDOW_HOURS: f64 = 6.0;
+pub const MAX_STABILITY_WINDOW_HOURS: f64 = 168.0;
+
+pub const DEFAULT_STABILITY_SLOPE_SG_PER_DAY: f64 =
+    crate::calc::stability::SLOPE_SG_PER_DAY_DEFAULT;
+pub const MIN_STABILITY_SLOPE_SG_PER_DAY: f64 = 0.0001;
+pub const MAX_STABILITY_SLOPE_SG_PER_DAY: f64 = 0.01;
+
+pub const DEFAULT_STABILITY_FG_BAND: f64 = crate::calc::stability::FG_BAND_DEFAULT;
+pub const MIN_STABILITY_FG_BAND: f64 = 0.0005;
+pub const MAX_STABILITY_FG_BAND: f64 = 0.020;
 
 /// Resolve the config path from `default_dir`, honouring [`CONFIG_PATH_ENV`].
 ///
@@ -75,6 +92,7 @@ pub struct Config {
     pub ui: Ui,
     pub measurement: Measurement,
     pub gravity: Gravity,
+    pub stability: Stability,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +165,36 @@ impl Default for Measurement {
     }
 }
 
+/// Phase 4c. Passed to `calc::stability` via [`Stability::params`]; nothing there
+/// reads the config.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Stability {
+    pub window_hours: f64,
+    pub slope_sg_per_day: f64,
+    pub fg_band: f64,
+}
+
+impl Default for Stability {
+    fn default() -> Self {
+        Self {
+            window_hours: DEFAULT_STABILITY_WINDOW_HOURS,
+            slope_sg_per_day: DEFAULT_STABILITY_SLOPE_SG_PER_DAY,
+            fg_band: DEFAULT_STABILITY_FG_BAND,
+        }
+    }
+}
+
+impl Stability {
+    pub fn params(&self) -> StabilityParams {
+        StabilityParams {
+            window_secs: (self.window_hours * 3_600.0).round() as i64,
+            slope_sg_per_day: self.slope_sg_per_day,
+            fg_band: self.fg_band,
+        }
+    }
+}
+
 /// Phase V. What the iSpindle's calibration polynomial outputs.
 ///
 /// No payload says: the iSpindle publishes a bare `gravity` number, and whether it is
@@ -210,32 +258,48 @@ impl Config {
             self.sync.poll_interval_secs = clamped;
         }
 
-        let calibration = clamp_finite(
-            self.measurement.hydrometer_calibration_c,
-            DEFAULT_HYDROMETER_CALIBRATION_C,
-            MIN_HYDROMETER_CALIBRATION_C,
-            MAX_HYDROMETER_CALIBRATION_C,
-        );
-        if calibration != self.measurement.hydrometer_calibration_c {
-            notes.push(format!(
-                "measurement.hydrometer_calibration_c {} is out of range, using {calibration}",
-                self.measurement.hydrometer_calibration_c
-            ));
-            self.measurement.hydrometer_calibration_c = calibration;
-        }
-
-        let wort_correction = clamp_finite(
-            self.measurement.refractometer_wort_correction,
-            DEFAULT_REFRACTOMETER_WORT_CORRECTION,
-            MIN_REFRACTOMETER_WORT_CORRECTION,
-            MAX_REFRACTOMETER_WORT_CORRECTION,
-        );
-        if wort_correction != self.measurement.refractometer_wort_correction {
-            notes.push(format!(
-                "measurement.refractometer_wort_correction {} is out of range, using {wort_correction}",
-                self.measurement.refractometer_wort_correction
-            ));
-            self.measurement.refractometer_wort_correction = wort_correction;
+        for (field, value, default, min, max) in [
+            (
+                "measurement.hydrometer_calibration_c",
+                &mut self.measurement.hydrometer_calibration_c,
+                DEFAULT_HYDROMETER_CALIBRATION_C,
+                MIN_HYDROMETER_CALIBRATION_C,
+                MAX_HYDROMETER_CALIBRATION_C,
+            ),
+            (
+                "measurement.refractometer_wort_correction",
+                &mut self.measurement.refractometer_wort_correction,
+                DEFAULT_REFRACTOMETER_WORT_CORRECTION,
+                MIN_REFRACTOMETER_WORT_CORRECTION,
+                MAX_REFRACTOMETER_WORT_CORRECTION,
+            ),
+            (
+                "stability.window_hours",
+                &mut self.stability.window_hours,
+                DEFAULT_STABILITY_WINDOW_HOURS,
+                MIN_STABILITY_WINDOW_HOURS,
+                MAX_STABILITY_WINDOW_HOURS,
+            ),
+            (
+                "stability.slope_sg_per_day",
+                &mut self.stability.slope_sg_per_day,
+                DEFAULT_STABILITY_SLOPE_SG_PER_DAY,
+                MIN_STABILITY_SLOPE_SG_PER_DAY,
+                MAX_STABILITY_SLOPE_SG_PER_DAY,
+            ),
+            (
+                "stability.fg_band",
+                &mut self.stability.fg_band,
+                DEFAULT_STABILITY_FG_BAND,
+                MIN_STABILITY_FG_BAND,
+                MAX_STABILITY_FG_BAND,
+            ),
+        ] {
+            let clamped = clamp_finite(*value, default, min, max);
+            if clamped != *value {
+                notes.push(format!("{field} {value} is out of range, using {clamped}"));
+                *value = clamped;
+            }
         }
 
         notes
@@ -270,6 +334,21 @@ impl Config {
                 "measurement.refractometer_wort_correction",
                 self.measurement.refractometer_wort_correction,
                 MIN_REFRACTOMETER_WORT_CORRECTION..=MAX_REFRACTOMETER_WORT_CORRECTION,
+            ),
+            (
+                "stability.window_hours",
+                self.stability.window_hours,
+                MIN_STABILITY_WINDOW_HOURS..=MAX_STABILITY_WINDOW_HOURS,
+            ),
+            (
+                "stability.slope_sg_per_day",
+                self.stability.slope_sg_per_day,
+                MIN_STABILITY_SLOPE_SG_PER_DAY..=MAX_STABILITY_SLOPE_SG_PER_DAY,
+            ),
+            (
+                "stability.fg_band",
+                self.stability.fg_band,
+                MIN_STABILITY_FG_BAND..=MAX_STABILITY_FG_BAND,
             ),
         ] {
             if !value.is_finite() {
@@ -744,6 +823,68 @@ mod tests {
                 .contains("measurement.refractometer_wort_correction"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn the_stability_defaults_are_a_day_half_a_point_a_day_and_three_points() {
+        let stability = Config::default().stability;
+        assert_eq!(stability.window_hours, 24.0);
+        assert_eq!(stability.slope_sg_per_day, 0.0005);
+        assert_eq!(stability.fg_band, 0.003);
+        assert_eq!(stability.params(), StabilityParams::default());
+    }
+
+    #[test]
+    fn stability_settings_are_clamped_and_a_non_finite_one_goes_back_to_the_default() {
+        let mut config = Config::default();
+        config.stability.window_hours = 1.0;
+        config.stability.slope_sg_per_day = 1.0;
+        config.stability.fg_band = f64::NAN;
+
+        assert_eq!(config.normalize().len(), 3);
+        assert_eq!(config.stability.window_hours, MIN_STABILITY_WINDOW_HOURS);
+        assert_eq!(
+            config.stability.slope_sg_per_day,
+            MAX_STABILITY_SLOPE_SG_PER_DAY
+        );
+        assert_eq!(config.stability.fg_band, DEFAULT_STABILITY_FG_BAND);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_names_the_stability_field_it_rejected() {
+        for (stability, field) in [
+            (
+                Stability {
+                    window_hours: 200.0,
+                    ..Stability::default()
+                },
+                "stability.window_hours",
+            ),
+            (
+                Stability {
+                    slope_sg_per_day: f64::INFINITY,
+                    ..Stability::default()
+                },
+                "stability.slope_sg_per_day",
+            ),
+            (
+                Stability {
+                    fg_band: 0.0,
+                    ..Stability::default()
+                },
+                "stability.fg_band",
+            ),
+        ] {
+            let err = Config {
+                stability,
+                ..Config::default()
+            }
+            .validate()
+            .unwrap_err();
+            assert_eq!(err.code(), "config.invalid");
+            assert!(err.to_string().contains(field), "{err}");
+        }
     }
 
     #[test]

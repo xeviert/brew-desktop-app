@@ -16,6 +16,7 @@
 //!
 //! Phase 4b adds [`smooth`], a filter over a time series rather than a formula: there
 //! is no literature value to check it against, so it is tested on generated curves.
+//! Phase 4c's [`stability`] is the same kind of thing, and tested the same way.
 //!
 //! Nothing in this module reads the config or the database, and nothing defaults a
 //! parameter that changes the answer: the wort correction factor, the nitrogen
@@ -30,6 +31,7 @@ pub mod hydrometer;
 pub mod pitch;
 pub mod refractometer;
 pub mod smooth;
+pub mod stability;
 pub mod sugar;
 pub mod yan;
 

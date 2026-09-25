@@ -812,29 +812,48 @@ opening the app backfills a gap-free curve bound to the pitched batch.
       edges, and a smoothed series in the 60-day timing
 
 **4c. Stability detector** — `calc/stability.rs`, the function Phase 6's alert calls
-- [ ] Implements *Fermentation-finished detection* below: slope of a least-squares
+- [x] Implements *Fermentation-finished detection* below: slope of a least-squares
       fit over a trailing window of the **smoothed** series, below a threshold,
       **and** SG within a band of expected FG. Returns `Active`, `Stable { since }`,
-      `Stalled { since }` (flat but above the band) or `Insufficient { reason }`
-- [ ] Expected FG, in order: `recipe_version.target_fg`, else `batch.og` and the
+      `Stalled { since }` (flat but above the band) or `Insufficient { reason }`.
+      **Refined:** the band is compared against the fit's value at the newest point,
+      not the newest reading — the fit is what averages jitter. One-sided: finishing
+      drier than expected is still finished. A rising SG (sugar in) is `Active`
+- [x] Expected FG, in order: `recipe_version.target_fg`, else `batch.og` and the
       yeast strain's `attenuation_min`/`attenuation_max`, else none. None is
       `Stable` with `fg_unchecked` set, shown as such — a batch with no recipe
-      still finishes, it just can't be told apart from a stall
-- [ ] `Insufficient` when the window is under-filled: proposal ≥ 6 points **and**
+      still finishes, it just can't be told apart from a stall. The strain is from
+      **actuals** (5a's rule), else the recipe's; two strains take the widest band,
+      and one without a band makes it none. `db::stability::expected_fg`
+- [x] `Insufficient` when the window is under-filled: ≥ 6 points **and**
       spanning ≥ 75 % of the window. A fit through three points after a gap is
-      noise with a slope
-- [ ] "Stable for N h" is the time since the slope last crossed the threshold,
-      found by walking the history — not the time since the app noticed
-- [ ] Config: `stability.window_hours` (24), `stability.slope_sg_per_day` (0.0005),
-      `stability.fg_band` (0.003), validated like 3e's `measurement` section
-- [ ] "Log every evaluation" becomes **replay**: the detector is pure over history,
+      noise with a slope. **Added:** `NotStarted` until the smoothed SG is 0.002
+      below OG (else the first reading) — 5a's end of lag, latched
+- [x] "Stable for N h" is the time since the slope last crossed the threshold,
+      found by walking the history — not the time since the app noticed.
+      **Refined — hysteresis:** going flat takes the threshold, leaving it takes 4×
+      (`LEAVE_FLAT_FACTOR`). A day's fit through 4b's median of ±0.002 at 5 min
+      still wanders 0.00036 SG/day RMS and for hours at a time: over 32 seeds × 8
+      flat days it passed 1× for up to 13 h and peaked at 0.0017. At 15 min it peaks
+      at 0.0022, past 4× — the 0.0005 default is under what that iSpindle resolves,
+      so the first batches should set it
+- [x] Config: `stability.window_hours` (24), `stability.slope_sg_per_day` (0.0005),
+      `stability.fg_band` (0.003), validated like 3e's `measurement` section —
+      bounds 6–168 h, 0.0001–0.01, 0.0005–0.020. `Stability::params()` hands them to
+      `calc`, which never reads the config
+- [x] "Log every evaluation" becomes **replay**: the detector is pure over history,
       so `stability_history(series, config)` evaluates it at every point and the
       chart shades the stable spans. Retuning a threshold shows at once where it
-      would have fired on every past batch, which a log of past evaluations can't
-- [ ] Tests on generated curves: lag → active → plateau reads `Stable` at the right
+      would have fired on every past batch, which a log of past evaluations can't.
+      `db::stability::batch_stability` feeds it the newest sensor `sg` stream, raw
+      and smoothed (4a with `max_points` unbounded); manual-only is `Empty`. An
+      O(1)-per-point sliding fit, pinned to a direct one over 60 days at 30 s
+- [x] Tests on generated curves: lag → active → plateau reads `Stable` at the right
       hour; a plateau 10 points above expected FG reads `Stalled`; a jittered
       plateau never flips to `Active`; the lag phase before attenuation starts is
-      not `Stable`, which is the case a slope-only detector gets wrong
+      not `Stable`, which is the case a slope-only detector gets wrong —
+      `calc::stability::tests`, plus `since` asked late, refilling after a gap, and
+      `db::stability::tests` for the joins and a stalled batch end to end
 
 **4d. Chart** — `src/lib/components/Curve.svelte`
 - [ ] Add `uPlot`, pinned like every other dependency. No install script, so no
