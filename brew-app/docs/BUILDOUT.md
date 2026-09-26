@@ -979,26 +979,45 @@ with events marked; and a 60-day, 30 s journal stays interactive when zoomed.
 > that stops being true, not the plan.
 
 **5a. Per-batch metrics** — `calc/batch_metrics.rs` (pure) + `db/analytics.rs` (joins)
-- [ ] Lag time: pitch → first time the smoothed SG is 0.002 below OG. Needs OG and
-      pitch; `None` with a reason otherwise
-- [ ] Peak rate: steepest least-squares slope over any 6 h window, SG/day, and the
-      hour it happened
-- [ ] Days to terminal: pitch → the `since` of 4c's first `Stable`. A batch never
-      stable has `None`, not "still running" — archived batches are compared too
-- [ ] Apparent attenuation and ABV from `batch.og`/`batch.fg` (not the live SG), so
-      finished batches compare on their recorded numbers
-- [ ] Fermentation temp: **median** `temp_c` over `[pitch, terminal)`, plus min and
+- [x] Lag time: pitch → first time the smoothed SG is 0.002 below OG. Needs OG and
+      pitch; `None` with a reason otherwise. **Refined:** read off the stream 4c
+      judges (`db::stability::judge`), so lag, peak and terminal can't disagree
+      with the batch card
+- [x] Peak rate: steepest least-squares slope over any 6 h window, SG/day, and the
+      hour it happened. **Refined:** a window counts only under 4c's fill rule
+      (≥ 6 points spanning ≥ 75 %), so a fit across a gap isn't a false peak; the
+      hour is the midpoint of the window's points, where a least-squares slope
+      applies. 4c's sliding fit moves to `calc::fit::Sums` for both
+- [x] Days to terminal: pitch → the `since` of 4c's first `Stable`. A batch never
+      stable has `None`, not "still running" — archived batches are compared too.
+      `fg_unchecked` carries through
+- [x] Apparent attenuation and ABV from `batch.og`/`batch.fg` (not the live SG), so
+      finished batches compare on their recorded numbers. The field is
+      `abv_alternate`, per 3f's labelling rule
+- [x] Fermentation temp: **median** `temp_c` over `[pitch, terminal)`, plus min and
       max. Median so the cold crash at the end doesn't drag it; the range shows a
-      controller that swung
-- [ ] Nutrient total (YAN mg/L from `batch_ingredient`), cost per litre from 3f's
+      controller that swung. **Refined:** a sensor `temp_c`, else `gravity_temp_c`,
+      never manual — spot checks aren't a ferment temperature; of several, the
+      stream with most readings. Never stable → up to now, with `to_terminal: false`
+- [x] Nutrient total (YAN mg/L from `batch_ingredient`), cost per litre from 3f's
       `batch_cost`, yeast strain from **actuals** (`batch_ingredient` → lot →
       `ingredient.yeast_strain_id`), not the recipe — a substituted yeast is the
-      exact case the analysis is for
-- [ ] Every metric is `Option` plus a reason: "manual readings only" (too sparse
+      exact case the analysis is for. **Refined:** a nutrient's yield is the
+      `ingredient.attrs` key `mg_yan_per_g` (`reference::YAN_ATTR`), not a column
+      — `0002` reserves `attrs` for exactly this. One addition without a yield
+      makes the total unknown, not a partial sum: an understated total reads as
+      underfeeding. YAN and cost share `batch::target_or_batch_volume`. Strains
+      come from `stability::pitched_strains`, shared with 4c's expected FG
+- [x] Every metric is `Option` plus a reason: "manual readings only" (too sparse
       for lag or peak rate), "no pitch", "no OG". A table that prints 0 for
-      "couldn't compute" poisons every average in 5d
-- [ ] Tests: each metric against a generated curve with a known lag, peak and
-      plateau; a manual-only batch returns reasons, not numbers
+      "couldn't compute" poisons every average in 5d. **Refined:** `Computed<T>`,
+      `{"value":…}` or `{"missing":"no_og"}`. **Added:** `mixed_currency` — a
+      mistyped lot currency is a reason, not an error that sinks the whole table.
+      `db::analytics::{batch_metrics, list_batch_metrics}`; no command yet, 5c's
+      results table is the first screen
+- [x] Tests: each metric against a generated curve with a known lag, peak and
+      plateau; a manual-only batch returns reasons, not numbers. **Fixed:**
+      `batch_series` with `max_points` unbounded overflowed on a non-`sg` stream
 
 **5b. Batch comparison overlay**
 - [ ] Pick 2–8 batches; x = hours since pitch, from 4d. Unpitched batches are

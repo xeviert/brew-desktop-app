@@ -164,6 +164,24 @@ pub fn product_grams(yan_mg: f64, mg_yan_per_g: f64) -> Result<Grams> {
     Grams::new(yan_mg / mg_yan_per_g)
 }
 
+/// Milligrams of nitrogen that `grams` of a product supplied — [`product_grams`]
+/// the other way round, for 5a's accounting of what actually went in.
+pub fn supplied_mg(grams: Grams, mg_yan_per_g: f64) -> Result<f64> {
+    if grams.get() < 0.0 {
+        return Err(Error::CalcOutOfRange {
+            what: "nutrient mass",
+            value: grams.get(),
+        });
+    }
+    if !(mg_yan_per_g.is_finite() && mg_yan_per_g > 0.0) {
+        return Err(Error::CalcOutOfRange {
+            what: "nitrogen yield per gram",
+            value: mg_yan_per_g,
+        });
+    }
+    Ok(grams.get() * mg_yan_per_g)
+}
+
 /// Split a total across fractional doses.
 ///
 /// Takes the fractions rather than a dose count so an uneven schedule — a larger
@@ -279,6 +297,21 @@ mod tests {
         assert!(k.get() > dap.get());
         assert!(tosna_o.get() > k.get());
         assert!((k.get() / dap.get() - 2.12).abs() < 0.01);
+    }
+
+    #[test]
+    fn supplied_is_product_grams_inverted() {
+        let dap = product_grams(4890.0, DAP_MG_YAN_PER_G).unwrap();
+        let back = supplied_mg(dap, DAP_MG_YAN_PER_G).unwrap();
+        assert!((back - 4890.0).abs() < 1e-9, "{back}");
+        let g = Grams::new(10.0).unwrap();
+        assert_eq!(supplied_mg(g, 0.0).unwrap_err().code(), "calc.out_of_range");
+        assert_eq!(
+            supplied_mg(Grams::new(-1.0).unwrap(), DAP_MG_YAN_PER_G)
+                .unwrap_err()
+                .code(),
+            "calc.out_of_range"
+        );
     }
 
     /// An uneven schedule is legal; one that does not add up is not.

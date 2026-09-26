@@ -17,7 +17,8 @@
 //! Phase 4b adds [`smooth`], a filter over a time series rather than a formula: there
 //! is no literature value to check it against, so it is tested on generated curves.
 //! Phase 4c's [`stability`] is the same kind of thing, and tested the same way; 4f's
-//! [`health`] is two heuristics, and says so.
+//! [`health`] is two heuristics, and says so. Phase 5a's [`batch_metrics`] reads the
+//! same series and 4c's history, and shares 4c's sliding least-squares fit.
 //!
 //! Nothing in this module reads the config or the database, and nothing defaults a
 //! parameter that changes the answer: the wort correction factor, the nitrogen
@@ -26,7 +27,9 @@
 
 pub mod abv;
 pub mod attenuation;
+pub mod batch_metrics;
 pub mod cost;
+mod fit;
 pub mod gravity;
 pub mod health;
 pub mod hydrometer;

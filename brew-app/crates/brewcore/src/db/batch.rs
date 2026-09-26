@@ -515,6 +515,19 @@ pub struct BatchCost {
 /// [`LotRow::cost_per_canonical_unit`](crate::db::reference::LotRow::cost_per_canonical_unit),
 /// so a sub-cent
 /// bulk price survives the trip; see its doc for why that is an `f64`.
+/// The batch's own volume, else its recipe version's target. What a cost, and 5a's
+/// nitrogen, divide by.
+pub(crate) fn target_or_batch_volume(
+    conn: &Connection,
+    batch: &BatchRow,
+) -> Result<Option<Litres>> {
+    Ok(match (batch.volume_l, batch.recipe_version_id) {
+        (Some(v), _) => Some(v),
+        (None, Some(id)) => get_recipe_version(conn, id)?.target_volume_l,
+        (None, None) => None,
+    })
+}
+
 pub fn batch_cost(conn: &Connection, batch_id: i64) -> Result<BatchCost> {
     let batch = get_batch(conn, batch_id)?;
 
@@ -553,13 +566,7 @@ pub fn batch_cost(conn: &Connection, batch_id: i64) -> Result<BatchCost> {
     }
 
     let rolled = calc::cost::total(lines, lines_without_cost)?;
-    let volume_l = match batch.volume_l {
-        Some(v) => Some(v),
-        None => match batch.recipe_version_id {
-            Some(id) => get_recipe_version(conn, id)?.target_volume_l,
-            None => None,
-        },
-    };
+    let volume_l = target_or_batch_volume(conn, &batch)?;
     let per_litre = match (rolled.total, volume_l) {
         (Some(total), Some(v)) if v.get() > 0.0 => Some(calc::cost::per_litre(total, v)?),
         _ => None,

@@ -248,6 +248,28 @@ pub struct IngredientRow {
     pub archived_at: Option<Timestamp>,
 }
 
+/// The `attrs` key for a nutrient's mg of YAN per gram — `calc::yan`'s
+/// `DAP_MG_YAN_PER_G` and its neighbours are the values to put there. In `attrs`
+/// rather than a column: 0002 reserves it for "ppm contribution" and its kin, and
+/// nothing filters on it.
+pub const YAN_ATTR: &str = "mg_yan_per_g";
+
+/// [`YAN_ATTR`] out of an ingredient's `attrs`. Missing, malformed or not positive is
+/// `None`: 5a reports that batch's nitrogen as unknown rather than failing the table.
+pub fn mg_yan_per_g(attrs: Option<&str>) -> Option<f64> {
+    let attrs: serde_json::Value = serde_json::from_str(attrs?).ok()?;
+    attrs
+        .get(YAN_ATTR)?
+        .as_f64()
+        .filter(|v| v.is_finite() && *v > 0.0)
+}
+
+impl IngredientRow {
+    pub fn mg_yan_per_g(&self) -> Option<f64> {
+        mg_yan_per_g(self.attrs.as_deref())
+    }
+}
+
 pub fn create_ingredient(conn: &Connection, ingredient: &NewIngredient) -> Result<i64> {
     conn.execute(
         "INSERT INTO ingredient (name, category, default_unit, yeast_strain_id, attrs, notes) \
@@ -861,6 +883,16 @@ mod tests {
         )
         .expect_err("90 is not a fraction");
         assert!(err.to_string().contains("CHECK"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn the_nitrogen_yield_is_read_from_attrs_or_is_none() {
+        assert_eq!(mg_yan_per_g(Some(r#"{"mg_yan_per_g": 212}"#)), Some(212.0));
+        assert_eq!(mg_yan_per_g(Some(r#"{"mg_yan_per_g": 0}"#)), None);
+        assert_eq!(mg_yan_per_g(Some(r#"{"mg_yan_per_g": "212"}"#)), None);
+        assert_eq!(mg_yan_per_g(Some(r#"{"alpha": 5}"#)), None);
+        assert_eq!(mg_yan_per_g(Some("not json")), None);
+        assert_eq!(mg_yan_per_g(None), None);
     }
 
     /// The three enums have no `CHECK` behind them, so this is the whole guarantee.

@@ -53,16 +53,10 @@ fn expected_fg_for(conn: &Connection, batch: &BatchRow) -> Result<Option<Expecte
 /// Two strains give the widest band of the two. A strain with no band makes the whole
 /// answer `None`: it could finish anywhere, so nothing can be called a stall.
 fn attenuation_band(conn: &Connection, batch: &BatchRow) -> Result<Option<(f64, f64)>> {
-    let mut bands = strain_bands(
-        conn,
-        "SELECT DISTINCT ys.id, ys.attenuation_min, ys.attenuation_max \
-           FROM batch_ingredient bi \
-           JOIN ingredient_lot l ON l.id = bi.ingredient_lot_id \
-           JOIN ingredient i ON i.id = l.ingredient_id \
-           JOIN yeast_strain ys ON ys.id = i.yeast_strain_id \
-          WHERE bi.batch_id = ?",
-        batch.id,
-    )?;
+    let mut bands: Vec<_> = pitched_strains(conn, batch.id)?
+        .into_iter()
+        .map(|s| s.attenuation_min.zip(s.attenuation_max))
+        .collect();
     if let (true, Some(version_id)) = (bands.is_empty(), batch.recipe_version_id) {
         bands = strain_bands(
             conn,
@@ -83,6 +77,36 @@ fn attenuation_band(conn: &Connection, batch: &BatchRow) -> Result<Option<(f64, 
         widest = Some(widest.map_or((min, max), |(lo, hi)| (lo.min(min), hi.max(max))));
     }
     Ok(widest)
+}
+
+pub(crate) struct PitchedStrain {
+    pub id: i64,
+    pub name: String,
+    pub attenuation_min: Option<f64>,
+    pub attenuation_max: Option<f64>,
+}
+
+/// Every strain among the batch's actual additions, by id. 5a's strain is this list
+/// too, so the band and the rollup cannot disagree about what was pitched.
+pub(crate) fn pitched_strains(conn: &Connection, batch_id: i64) -> Result<Vec<PitchedStrain>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT ys.id, ys.name, ys.attenuation_min, ys.attenuation_max \
+           FROM batch_ingredient bi \
+           JOIN ingredient_lot l ON l.id = bi.ingredient_lot_id \
+           JOIN ingredient i ON i.id = l.ingredient_id \
+           JOIN yeast_strain ys ON ys.id = i.yeast_strain_id \
+          WHERE bi.batch_id = ? \
+          ORDER BY ys.id",
+    )?;
+    let rows = stmt.query_map([batch_id], |row| {
+        Ok(PitchedStrain {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            attenuation_min: row.get(2)?,
+            attenuation_max: row.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 fn strain_bands(conn: &Connection, sql: &str, id: i64) -> Result<Vec<Option<(f64, f64)>>> {

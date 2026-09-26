@@ -1,5 +1,6 @@
 //! The database handle. Every read and write goes through here.
 
+pub mod analytics;
 pub mod batch;
 mod connection;
 pub mod dashboard;

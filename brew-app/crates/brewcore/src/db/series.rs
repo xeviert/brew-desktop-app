@@ -465,14 +465,19 @@ fn stream_series(
     let rows = if smoothed {
         smoothed_rows(conn, &stream, range, gap)?
     } else {
-        raw_rows(conn, stream.stream_id, &clipped, Some(max_points + 1))?
-            .into_iter()
-            .map(|(ts, value)| Row {
-                ts,
-                value,
-                smoothed: None,
-            })
-            .collect()
+        raw_rows(
+            conn,
+            stream.stream_id,
+            &clipped,
+            Some(max_points.saturating_add(1)),
+        )?
+        .into_iter()
+        .map(|(ts, value)| Row {
+            ts,
+            value,
+            smoothed: None,
+        })
+        .collect()
     };
 
     if rows.len() <= max_points {
@@ -661,7 +666,7 @@ fn raw_rows(
     for w in windows {
         let remaining = match limit {
             Some(limit) if out.len() >= limit => break,
-            Some(limit) => (limit - out.len()) as i64,
+            Some(limit) => i64::try_from(limit - out.len()).unwrap_or(-1),
             None => -1,
         };
         let rows = stmt.query_map(params![stream_id, w.start, w.end, remaining], |row| {
