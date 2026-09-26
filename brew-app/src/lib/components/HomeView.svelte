@@ -12,7 +12,7 @@
   } from "$lib/api";
   import { formatGravityIn, gravitySource, stabilityText } from "$lib/dashboard";
   import { age } from "$lib/format";
-  import { silence, silenceText } from "$lib/home";
+  import { quietSources, silenceText } from "$lib/home";
   import { href } from "$lib/route";
   import { formatTemp } from "$lib/units";
 
@@ -23,6 +23,9 @@
 
   const unit = $derived(home?.gravity_unit ?? "SG");
   const now = $derived(home ? Date.now() / 1000 : 0);
+
+  const guessFor = (sourceId: number) =>
+    home?.devices.find((d) => d.source_id === sourceId)?.guess ?? null;
 
   let busy = false;
   let again = false;
@@ -70,9 +73,7 @@
 
     <div class="cards">
       {#each home.batches as b (b.dashboard.batch_id)}
-        {@const quiet = b.streams
-          .map((s) => ({ s, q: silence(s.stale, syncs[s.source_id]) }))
-          .filter(({ q }) => q !== "fresh")}
+        {@const quiet = quietSources(b.streams, syncs)}
         <a class="card" href={href({ name: "batch", id: b.dashboard.batch_id })}>
           <h3>
             {b.code}
@@ -111,8 +112,11 @@
 
           {#if quiet.length > 0}
             <ul class="stale">
-              {#each quiet as { s, q } (s.stream_id)}
-                <li class={q}>{s.label} {s.metric}: {silenceText(q)}, last {age(s.newest)}</li>
+              {#each quiet as q (q.source_id)}
+                <li class={q.silence}>
+                  {q.label}{q.metrics ? ` (${q.metrics.join(", ")})` : ""}: {silenceText(q.silence, guessFor(q.source_id))},
+                  last {age(q.newest)}
+                </li>
               {/each}
             </ul>
           {/if}

@@ -935,7 +935,8 @@ opening the app backfills a gap-free curve bound to the pitched batch.
       and not archived — code, vessel, current SG, temp, stability, newest reading
       age. Click through to the batch. **Refined:** each card carries the batch's
       `dashboard_at`, so home and the batch card can't disagree. The screen
-      refetches on every `sync://status`, like 4e's card
+      refetches on every `sync://status`, like 4e's card. Quiet streams are listed
+      one line per device, naming the streams only when some are still reporting
 - [x] Stale per **stream**: no reading for > 3× its median interval over the last
       day, floor 10 min. Derived, not configured — a 30 s ESP32 and a 15 min
       iSpindle can't share a threshold, and the interval is a device setting.
