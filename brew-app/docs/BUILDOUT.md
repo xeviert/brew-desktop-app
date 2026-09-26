@@ -1020,15 +1020,36 @@ with events marked; and a 60-day, 30 s journal stays interactive when zoomed.
       `batch_series` with `max_points` unbounded overflowed on a non-`sg` stream
 
 **5b. Batch comparison overlay**
-- [ ] Pick 2–8 batches; x = hours since pitch, from 4d. Unpitched batches are
-      listed as excluded with the reason rather than silently missing
-- [ ] Y mode: raw SG, or **fraction of apparent attenuation** `(OG − SG)/(OG − 1)`.
+- [x] Pick 2–8 batches; x = hours since pitch, from 4d. Unpitched batches are
+      listed as excluded with the reason rather than silently missing. **Refined:**
+      counted after duplicates are dropped, `compare.batch_count` outside 2–8;
+      kept in pick order, and colour follows the batch (a newcomer takes the
+      lowest free slot), so removing one never repaints the rest
+- [x] Y mode: raw SG, or **fraction of apparent attenuation** `(OG − SG)/(OG − 1)`.
       Raw SG is unreadable across a 1.030 and a 1.050 wash; the fraction puts both
-      on 0 → ~1. Needs OG; batches without it drop to raw with a note
-- [ ] Optional temp overlay on the right axis, same batches
-- [ ] Reuses `batch_series` per batch with the same `max_points`, and 4b's
-      smoothing. Nothing new server-side except the alignment
-- [ ] Entry points: from the batch screen ("compare with…") and from any 5c result
+      on 0 → ~1. Needs OG; batches without it drop to raw with a note. **Refined:**
+      computed in Rust on SG, before the display conversion
+      (`calc::attenuation::apparent_progress`). Not clamped and not refused above
+      the OG — lag-phase jitter reads slightly negative, a seltzer past 100 %. The
+      transform is decreasing, so a bucket's `min`/`max` swap. An OG under 1.002
+      is `implausible`, not `no_og`
+- [x] Optional temp overlay on the right axis, same batches. **Refined:** its own
+      panel, not a right axis — attenuation, SG and °C are different measures, so
+      each is a stacked chart on one shared x with a synced cursor and zoom. A
+      batch left raw in fraction mode gets the SG panel the same way. One stream
+      per batch, by 5a's ferment-temperature rule (`ferm_temp_series`)
+- [x] Reuses `batch_series` per batch with the same `max_points`, and 4b's
+      smoothing. Nothing new server-side except the alignment. **Refined:** the
+      alignment is one range in *seconds since pitch* (`RelRange`), queried per
+      batch at `[pitch + start, pitch + end)`; `ts` stays absolute and the client
+      maps it with 4d's `toX`. Default span is the data — the latest binding end
+      (open → now) minus pitch — not pitch to now, or an archived batch would be
+      a year bucketed at 9 h. Drawn: smoothed line and manual points only, no raw
+      points or min/max bands — eight of each is noise; the batch screen keeps
+      them. `db::compare::compare_batches`, command `compare_batches`
+- [ ] Entry points: from the batch screen ("compare with…") and from any 5c result.
+      **Done:** the batch screen, `#/compare/<ids>`. 5c's "overlay these" is a
+      navigation to that route once 5c exists
 
 **5c. Saved queries** — `0009_saved_query.sql`, Tier 2
 - [ ] A structured `BatchFilter`, **not SQL text**: beverage type, recipe, recipe

@@ -1,20 +1,20 @@
 //! Dev helpers. `gen-fixture` emits byte-accurate Fermentrack `_full.csv` files and
 //! `brewd` journals so ingest can be built and tested without either running. `build-pi` cross-compiles
 //! `brewd` for the Pi Zero 2 W. `demo-db` writes one long ferment to look at the chart
-//! against.
+//! against, with a few more batches beside it for 5b's comparison overlay.
 
 use std::path::{Path, PathBuf};
 
 use brewcore::{
     db::{
         Db, Metric, SourceKind,
-        batch::{NewBatch, create_batch},
+        batch::{NewBatch, archive_batch, create_batch},
         measurement::{EntryUnit, Instrument, NewMeasurement, record_measurement},
         recipe::BeverageType,
         tier1::{create_source, create_stream, insert_readings},
         timeline::{EventKind, NewBatchEvent, add_event, bind_stream, record_pitch},
     },
-    units::Timestamp,
+    units::{Sg, Timestamp},
 };
 use brewfixture::{
     JournalScenario, Kind, LogSpec, Scenario,
@@ -83,6 +83,10 @@ const DAY: i64 = 24 * HOUR;
 /// events, and three days with the Pi off. 4d's "stays interactive" is judged on this.
 /// The iSpindle's battery runs down and it goes quiet for the last 12 h, so 4f's home
 /// screen has a silent sensor and a "battery likely" guess to show.
+///
+/// Beside it, for 5b: two beers and a cider pitched at other times and gravities (one
+/// beer archived, its streams unbound when it finished), and a planned batch with no
+/// pitch. The seltzer has no OG, so it is also the overlay's raw fallback.
 ///
 /// Refuses an existing file rather than replacing it: the path is whatever was typed,
 /// and it could be the real database.
@@ -237,8 +241,104 @@ fn demo_db(path: Option<PathBuf>) {
                 },
             )?;
         }
+        let mut written = rows.len();
+
+        let base = now - now % HOUR;
+        for (n, (code, kind, og, fg, tau_h, beer_c, ago, days, archived)) in [
+            (
+                "ALE-002",
+                BeverageType::Beer,
+                1.050,
+                1.011,
+                30.0,
+                19.0,
+                120 * DAY,
+                14 * DAY,
+                true,
+            ),
+            (
+                "ALE-003",
+                BeverageType::Beer,
+                1.062,
+                1.014,
+                44.0,
+                20.0,
+                9 * DAY,
+                9 * DAY,
+                false,
+            ),
+            (
+                "CIDER-004",
+                BeverageType::Cider,
+                1.055,
+                0.998,
+                70.0,
+                16.0,
+                30 * DAY,
+                20 * DAY,
+                false,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let pitch = base - ago;
+            let at = |offset: i64| Timestamp::from_secs(pitch + offset);
+            let batch_id = create_batch(
+                &tx,
+                &NewBatch {
+                    code: code.into(),
+                    recipe_version_id: None,
+                    beverage_type: kind,
+                    vessel_id: None,
+                    volume_l: None,
+                    og: Some(Sg::new(og)?),
+                    notes: Some("demo: cargo xtask demo-db".into()),
+                },
+                at(-DAY),
+            )?;
+            record_pitch(&tx, batch_id, at(0), None)?;
+            let source = create_source(&tx, SourceKind::BrewdJournal, &format!("tilt-{n}"), None)?;
+            let sg = create_stream(&tx, source, "gravity", Metric::Sg)?;
+            let temp = create_stream(&tx, source, "temperature", Metric::TempC)?;
+            let until = archived.then(|| at(days));
+            bind_stream(&tx, batch_id, sg, at(0), until)?;
+            bind_stream(&tx, batch_id, temp, at(0), until)?;
+
+            let mut rows = Vec::new();
+            for t in (0..days).step_by(900) {
+                let h = hours(t);
+                let gravity = if h <= 12.0 {
+                    og
+                } else {
+                    fg + (og - fg) * (-(h - 12.0) / tau_h).exp()
+                };
+                rows.push((sg, at(t), gravity + rng.noise(0.0015)));
+                rows.push((temp, at(t), beer_c + 1.5 * activity_at(h) + rng.noise(0.1)));
+            }
+            insert_readings(&tx, &rows)?;
+            written += rows.len();
+            if archived {
+                archive_batch(&tx, batch_id, at(days + DAY))?;
+            }
+        }
+
+        create_batch(
+            &tx,
+            &NewBatch {
+                code: "CIDER-005".into(),
+                recipe_version_id: None,
+                beverage_type: BeverageType::Cider,
+                vessel_id: None,
+                volume_l: None,
+                og: None,
+                notes: Some("demo: not pitched yet".into()),
+            },
+            Timestamp::from_secs(base),
+        )?;
+
         tx.commit()?;
-        Ok(rows.len())
+        Ok(written)
     });
 
     match written {

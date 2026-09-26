@@ -128,12 +128,7 @@ fn series_at(
             start: pitched_at,
             end: now,
         }),
-        None => {
-            let windows = bound.iter().flat_map(|s| &s.windows);
-            let start = windows.clone().map(|w| w.start).min()?;
-            let end = windows.map(|w| w.end).max()?;
-            Some(SeriesRange { start, end })
-        }
+        None => span_of(&bound),
     });
     let Some(range) = range else {
         return Ok(BatchSeries {
@@ -152,6 +147,26 @@ fn series_at(
         range: Some(range),
         series,
     })
+}
+
+/// From the first binding's start to the last one's end, an open binding ending at
+/// `now`. `None` with no bindings.
+///
+/// 5b's default span: an archived batch's `[pitch, now)` is a year of nothing, and
+/// bucketing it would cost the ferment its detail.
+pub fn binding_span(
+    conn: &Connection,
+    batch_id: i64,
+    now: Timestamp,
+) -> Result<Option<SeriesRange>> {
+    Ok(span_of(&bound_streams(conn, batch_id, now)?))
+}
+
+fn span_of(bound: &[BoundStream]) -> Option<SeriesRange> {
+    let windows = bound.iter().flat_map(|s| &s.windows);
+    let start = windows.clone().map(|w| w.start).min()?;
+    let end = windows.map(|w| w.end).max()?;
+    Some(SeriesRange { start, end })
 }
 
 /// The typical time between readings, in seconds, over the newest readings of a stream
@@ -550,25 +565,40 @@ impl BatchSeries {
     ///
     /// Both fits are strictly increasing, so `min <= avg <= max` still holds.
     pub fn in_gravity_display(mut self, display: GravityDisplay) -> Result<Self> {
-        let fit = match display {
-            GravityDisplay::Sg => return Ok(self),
-            GravityDisplay::Plato => sg_to_plato,
-            GravityDisplay::Brix => sg_to_brix,
-        };
-        for s in self.series.iter_mut().filter(|s| s.metric == Metric::Sg) {
-            for v in [&mut s.avg, &mut s.min, &mut s.max, &mut s.smoothed]
-                .into_iter()
-                .flatten()
-                .flatten()
-            {
-                *v = fit(Sg::new(*v)?);
-            }
+        for s in &mut self.series {
+            s.in_gravity_display(display)?;
         }
         Ok(self)
     }
 }
 
 impl Series {
+    /// [`BatchSeries::in_gravity_display`] for one series. Anything but `sg` is left
+    /// alone.
+    pub fn in_gravity_display(&mut self, display: GravityDisplay) -> Result<()> {
+        let fit = match display {
+            GravityDisplay::Sg => return Ok(()),
+            GravityDisplay::Plato => sg_to_plato,
+            GravityDisplay::Brix => sg_to_brix,
+        };
+        if self.metric != Metric::Sg {
+            return Ok(());
+        }
+        for v in [
+            &mut self.avg,
+            &mut self.min,
+            &mut self.max,
+            &mut self.smoothed,
+        ]
+        .into_iter()
+        .flatten()
+        .flatten()
+        {
+            *v = fit(Sg::new(*v)?);
+        }
+        Ok(())
+    }
+
     /// A break in the line: `None` in every column this series fills.
     fn push_gap(&mut self, ts: Timestamp, smoothed: bool) {
         self.ts.push(ts);

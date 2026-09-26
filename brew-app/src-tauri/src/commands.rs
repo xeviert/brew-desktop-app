@@ -6,6 +6,7 @@ use brewcore::{
     db::{
         Db, DbStatus, Metric, SourceKind,
         batch::{self, BatchRow},
+        compare::{self, Comparison, RelRange, YAxis, YMode},
         dashboard::{self, BatchDashboard, DisplayGravity},
         health::DeviceHealth,
         home::{self, HomeBatch},
@@ -477,6 +478,46 @@ pub async fn home_summary(
             })
             .collect(),
         devices: summary.devices,
+        gravity_unit: display.unit(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5b: the comparison overlay
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Serialize)]
+pub struct CompareView {
+    #[serde(flatten)]
+    pub comparison: Comparison,
+    /// The raw gravity axis's label. A fraction has no unit, so only batches left raw
+    /// are converted.
+    pub gravity_unit: &'static str,
+}
+
+#[tauri::command]
+pub async fn compare_batches(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_ids: Vec<i64>,
+    y_mode: YMode,
+    with_temp: bool,
+    range: Option<RelRange>,
+    max_points: usize,
+) -> ApiResult<CompareView> {
+    let display = config.get().ui.gravity_display;
+    let mut comparison = db.read(|conn| {
+        compare::compare_batches(conn, &batch_ids, y_mode, with_temp, range, max_points)
+    })?;
+    for b in &mut comparison.batches {
+        if let YAxis::Raw { .. } = b.y {
+            for s in &mut b.gravity {
+                s.in_gravity_display(display)?;
+            }
+        }
+    }
+    Ok(CompareView {
+        comparison,
         gravity_unit: display.unit(),
     })
 }

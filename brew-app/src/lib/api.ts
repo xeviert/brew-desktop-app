@@ -527,3 +527,71 @@ export interface HomeSummary {
 }
 
 export const homeSummary = (): Promise<HomeSummary> => call("home_summary");
+
+// ---------------------------------------------------------------------------
+// Phase 5b: the comparison overlay
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::calc::batch_metrics::Missing`: why a number isn't there. */
+export type Missing =
+	| "no_pitch"
+	| "no_og"
+	| "no_fg"
+	| "implausible"
+	| "no_sensor_gravity"
+	| "manual_only"
+	| "not_started"
+	| "never_stable"
+	| "too_few_points"
+	| "no_temp"
+	| "no_volume"
+	| "no_cost"
+	| "mixed_currency"
+	| "no_nutrient_yield";
+
+/** Mirrors `brewcore::db::compare::RelRange`: seconds since each batch's pitch. */
+export interface RelRange {
+	start: number;
+	end: number;
+}
+
+export type YMode = "raw" | "fraction";
+
+/** Mirrors `brewcore::db::compare::YAxis`. `reason` is why a fraction fell back to raw. */
+export type YAxis = { kind: "fraction" } | { kind: "raw"; reason: Missing | null };
+
+export interface ComparedBatch {
+	batch_id: number;
+	code: string;
+	pitched_at: number;
+	og: number | null;
+	y: YAxis;
+	/** Absolute `ts`, like the curve's; hours since pitch is `toX`. */
+	gravity: Series[];
+	temp: Series | null;
+}
+
+export interface Excluded {
+	batch_id: number;
+	code: string;
+	reason: Missing;
+}
+
+export interface CompareView {
+	/** `null` when no batch has anything bound. */
+	span: RelRange | null;
+	/** In the order asked for. */
+	batches: ComparedBatch[];
+	excluded: Excluded[];
+	/** The unit of any batch left raw. */
+	gravity_unit: string;
+}
+
+export const compareBatches = (
+	batchIds: number[],
+	yMode: YMode,
+	withTemp: boolean,
+	range: RelRange | null,
+	maxPoints: number,
+): Promise<CompareView> =>
+	call("compare_batches", { batchIds, yMode, withTemp, range, maxPoints });

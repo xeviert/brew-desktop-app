@@ -53,6 +53,18 @@ pub fn apparent(og: Sg, fg: Sg) -> Result<f64> {
     Ok((og.get() - fg.get()) / (og.get() - 1.0))
 }
 
+/// [`apparent`] as a curve: how far each gravity reading along a ferment has come
+/// from `og`, for 5b's overlay.
+///
+/// Refuses only an `og` too close to water. A reading *above* the OG is not refused,
+/// unlike [`apparent`]'s swapped pair: during the lag phase sensor jitter puts half
+/// the readings a point over, and a slightly negative fraction is what that looks
+/// like. Not clamped either way, for the reason [`apparent`] gives.
+pub fn apparent_progress(og: Sg) -> Result<impl Fn(f64) -> f64> {
+    let og = ordered(og, og)?.0.get();
+    Ok(move |sg| (og - sg) / (og - 1.0))
+}
+
 /// Real extract in °P — what is actually still dissolved, alcohol discounted.
 ///
 /// ```text
@@ -190,6 +202,20 @@ mod tests {
         // fermenting, because real extract never goes negative here.
         let r = real(sg(1.075), sg(0.998)).unwrap();
         assert!(r < 1.0 && r > 0.80, "{r}");
+    }
+
+    #[test]
+    fn progress_is_apparent_attenuation_along_the_curve() {
+        let f = apparent_progress(sg(1.050)).unwrap();
+        assert!((f(1.010) - 0.800).abs() < 1e-9);
+        assert!((f(1.050)).abs() < 1e-9);
+        // Lag-phase jitter above the OG, and a seltzer finishing under water.
+        assert!(f(1.051) < 0.0);
+        assert!(apparent_progress(sg(1.075)).unwrap()(0.998) > 1.0);
+        assert_eq!(
+            apparent_progress(sg(1.001)).err().unwrap().code(),
+            "calc.out_of_range"
+        );
     }
 
     #[test]

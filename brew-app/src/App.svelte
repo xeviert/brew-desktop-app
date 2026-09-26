@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import BatchView from "$lib/components/BatchView.svelte";
+  import CompareView from "$lib/components/CompareView.svelte";
   import HomeView from "$lib/components/HomeView.svelte";
   import Settings from "$lib/components/Settings.svelte";
   import Sources from "$lib/components/Sources.svelte";
@@ -98,6 +99,7 @@
     <h1>Brew</h1>
     <nav>
       <a href={href({ name: "home" })} class:active={route.name === "home"}>Home</a>
+      <a href={href({ name: "compare", ids: [] })} class:active={route.name === "compare"}>Compare</a>
       <a href={href({ name: "settings" })} class:active={route.name === "settings"}>Settings</a>
     </nav>
   </header>
@@ -107,6 +109,8 @@
       <HomeView ui={config.ui} syncs={settled} />
     {:else if route.name === "batch"}
       <BatchView {config} batchId={route.id} syncs={settled} />
+    {:else if route.name === "compare"}
+      <CompareView ids={route.ids} ui={config.ui} />
     {:else}
       <Settings {config} onsaved={(c) => (config = c)} />
       <Sources {sources} {syncs} onchanged={(s) => (sources = s)} />

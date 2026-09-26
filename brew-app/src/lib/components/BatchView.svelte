@@ -56,6 +56,7 @@
         <option value={b.id}>{b.code} — {b.status}</option>
       {/each}
     </select>
+    <a class="compare" href={href({ name: "compare", ids: [batchId] })}>Compare with…</a>
 
     {#if batch}
       <!-- Keyed: a curve's zoom and cached data belong to one batch. -->
@@ -72,6 +73,11 @@
 <style>
   select {
     margin-bottom: 0.75rem;
+  }
+
+  .compare {
+    margin-left: 1rem;
+    color: #9aa0a6;
   }
 
   .empty {

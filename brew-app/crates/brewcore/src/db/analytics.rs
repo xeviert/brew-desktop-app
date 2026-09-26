@@ -12,7 +12,7 @@ use super::{
     measurement::list_measurements_for_metric,
     recipe::BeverageType,
     reference::{Category, mg_yan_per_g},
-    series::{SeriesRange, batch_series},
+    series::{Series, SeriesRange, batch_series},
     stability::{judge, pitched_strains},
     tier1::SourceKind,
 };
@@ -213,28 +213,37 @@ fn ferm_temp(
         Some(SeriesRange { start: pitch, end }),
         usize::MAX,
     )?;
-    let best = series
-        .series
-        .iter()
-        .filter(|s| s.source_kind != SourceKind::Manual)
-        .filter_map(|s| {
-            let rank = match s.metric {
-                Metric::TempC => 0,
-                _ => 1,
-            };
-            let values: Vec<f64> = s.avg.iter().flatten().copied().collect();
-            let spread = spread(&values)?;
-            Some(((rank, std::cmp::Reverse(spread.n)), s.stream_id, spread))
-        })
-        .min_by_key(|(key, ..)| *key);
+    let best = ferm_temp_series(&series.series).and_then(|s| {
+        let values: Vec<f64> = s.avg.iter().flatten().copied().collect();
+        Some((s.stream_id, spread(&values)?))
+    });
     Ok(match best {
-        Some((_, stream_id, spread)) => Computed::Value(FermTemp {
+        Some((stream_id, spread)) => Computed::Value(FermTemp {
             spread,
             stream_id,
             to_terminal,
         }),
         None => Computed::Missing(Missing::NoTemp),
     })
+}
+
+/// [`ferm_temp`]'s choice of stream among `temp_c` and `gravity_temp_c` series, shared
+/// with 5b's overlay so the curve drawn is the one the median was taken over.
+pub(crate) fn ferm_temp_series(series: &[Series]) -> Option<&Series> {
+    series
+        .iter()
+        .filter(|s| s.source_kind != SourceKind::Manual)
+        .filter(|s| matches!(s.metric, Metric::TempC | Metric::GravityTempC))
+        .filter_map(|s| {
+            let rank = match s.metric {
+                Metric::TempC => 0,
+                _ => 1,
+            };
+            let n = s.avg.iter().flatten().filter(|v| v.is_finite()).count();
+            (n > 0).then_some(((rank, std::cmp::Reverse(n)), s))
+        })
+        .min_by_key(|(key, _)| *key)
+        .map(|(_, s)| s)
 }
 
 /// Each nutrient addition's grams and its product's nitrogen yield.

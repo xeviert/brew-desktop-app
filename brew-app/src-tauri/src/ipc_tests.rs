@@ -14,7 +14,7 @@ use brewcore::{
     db::{Db, Metric, SourceKind, batch, migrations, recipe::BeverageType, tier1, timeline},
     fermentrack::Client,
     sync::{NoStatus, SyncManager},
-    units::Timestamp,
+    units::{Sg, Timestamp},
 };
 use serde_json::{Value, json};
 use tauri::{
@@ -277,18 +277,23 @@ fn only_kinds_with_a_poller_are_scheduled() {
 /// A pitched batch with an iSpindle bound from the pitch: a day of readings at 15 min,
 /// falling from 1.040.
 fn pitched_batch(app: &Harness) -> i64 {
+    pitched(app, "SELTZER-001", None)
+}
+
+/// A batch pitched at `T0` with a day of iSpindle gravity falling from 1.040.
+fn pitched(app: &Harness, code: &str, og: Option<f64>) -> i64 {
     app.db
         .write(|conn| {
             let tx = conn.transaction()?;
             let batch_id = batch::create_batch(
                 &tx,
                 &batch::NewBatch {
-                    code: "SELTZER-001".into(),
+                    code: code.into(),
                     recipe_version_id: None,
                     beverage_type: BeverageType::Seltzer,
                     vessel_id: None,
                     volume_l: None,
-                    og: None,
+                    og: og.map(Sg::new).transpose()?,
                     notes: None,
                 },
                 T0,
@@ -401,6 +406,61 @@ fn a_refused_curve_comes_back_with_a_code() {
         json!({ "batchId": 404, "range": null, "maxPoints": 1000 }),
     );
     assert_eq!(err["code"], "db.no_such_batch");
+}
+
+#[test]
+fn two_batches_compare_as_a_fraction_or_raw_in_the_display_unit() {
+    let app = Harness::new();
+    let a = pitched(&app, "SELTZER-001", Some(1.040));
+    let b = pitched(&app, "SELTZER-002", None);
+    let mut config = app.invoke("get_config", json!({})).unwrap();
+    config["ui"]["gravity_display"] = json!("plato");
+    app.invoke("set_config", json!({ "config": config }))
+        .unwrap();
+
+    let view = app
+        .invoke(
+            "compare_batches",
+            json!({
+                "batchIds": [a, b],
+                "yMode": "fraction",
+                "withTemp": true,
+                "range": { "start": 0, "end": 3_600 },
+                "maxPoints": 1000,
+            }),
+        )
+        .unwrap();
+    assert_eq!(view["gravity_unit"], "°P");
+    assert_eq!(view["span"]["end"], 3_600);
+    let (a, b) = (&view["batches"][0], &view["batches"][1]);
+    assert_eq!(a["y"], json!({ "kind": "fraction" }));
+    assert_eq!(a["gravity"][0]["ts"].as_array().unwrap().len(), 4);
+    assert_eq!(a["gravity"][0]["avg"][0], 0.0);
+    assert!(a["temp"].is_null());
+    // Left raw for want of an OG, and so converted like the curve.
+    assert_eq!(b["y"], json!({ "kind": "raw", "reason": "no_og" }));
+    let first = b["gravity"][0]["avg"][0].as_f64().unwrap();
+    assert!(
+        (first - 10.0).abs() < 0.1,
+        "1.040 is about 10 °P, got {first}"
+    );
+}
+
+#[test]
+fn one_batch_is_not_a_comparison() {
+    let app = Harness::new();
+    let a = pitched_batch(&app);
+    let err = app.api_error(
+        "compare_batches",
+        json!({
+            "batchIds": [a, a],
+            "yMode": "raw",
+            "withTemp": false,
+            "range": null,
+            "maxPoints": 1000,
+        }),
+    );
+    assert_eq!(err["code"], "compare.batch_count");
 }
 
 #[test]

@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { href, parse } from "./route";
+import { href, parse, type Route } from "./route";
 
 describe("parse", () => {
 	it("reads the three screens", () => {
 		expect(parse("#/")).toEqual({ name: "home" });
 		expect(parse("#/batch/17")).toEqual({ name: "batch", id: 17 });
 		expect(parse("#/settings")).toEqual({ name: "settings" });
+	});
+	it("reads a comparison in pick order", () => {
+		expect(parse("#/compare/7,3,12")).toEqual({ name: "compare", ids: [7, 3, 12] });
+		expect(parse("#/compare")).toEqual({ name: "compare", ids: [] });
+		expect(parse("#/compare/3,")).toEqual({ name: "home" });
 	});
 	it("treats an empty hash and a trailing slash as the same screen", () => {
 		expect(parse("")).toEqual({ name: "home" });
@@ -16,7 +21,14 @@ describe("parse", () => {
 		expect(parse("#/nowhere")).toEqual({ name: "home" });
 	});
 	it("round-trips through href", () => {
-		for (const r of [{ name: "home" }, { name: "batch", id: 3 }, { name: "settings" }] as const) {
+		const routes: Route[] = [
+			{ name: "home" },
+			{ name: "batch", id: 3 },
+			{ name: "compare", ids: [] },
+			{ name: "compare", ids: [4, 2] },
+			{ name: "settings" },
+		];
+		for (const r of routes) {
 			expect(parse(href(r))).toEqual(r);
 		}
 	});

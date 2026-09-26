@@ -334,6 +334,11 @@ pub enum Error {
     )]
     NoOriginalGravity { batch_id: i64 },
 
+    /// Phase 5b. One batch is not a comparison, and past eight the lines cannot be
+    /// told apart. Counted after duplicates are dropped.
+    #[error("compare 2 to {max} batches, not {n}", max = crate::db::compare::MAX_BATCHES)]
+    CompareCount { n: usize },
+
     #[error("source {source_id} has no sync_state row")]
     MissingSyncState { source_id: i64 },
 
@@ -463,6 +468,7 @@ impl Error {
             Error::MeasurementInstrumentMismatch { .. } => "db.measurement_instrument_mismatch",
             Error::MeasurementImplausible { .. } => "db.measurement_implausible",
             Error::NoOriginalGravity { .. } => "db.no_original_gravity",
+            Error::CompareCount { .. } => "compare.batch_count",
             Error::MissingSyncState { .. } => "sync.missing_state",
             Error::SourceNotScheduled { .. } => "sync.not_scheduled",
             Error::BackgroundTask { .. } => "sync.task",
