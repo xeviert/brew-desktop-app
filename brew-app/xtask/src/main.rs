@@ -1,20 +1,25 @@
 //! Dev helpers. `gen-fixture` emits byte-accurate Fermentrack `_full.csv` files and
 //! `brewd` journals so ingest can be built and tested without either running. `build-pi` cross-compiles
 //! `brewd` for the Pi Zero 2 W. `demo-db` writes one long ferment to look at the chart
-//! against, with a few more batches beside it for 5b's comparison overlay.
+//! against, with a few more batches beside it for 5b's comparison overlay and 5c's
+//! queries.
 
 use std::path::{Path, PathBuf};
 
 use brewcore::{
     db::{
         Db, Metric, SourceKind,
-        batch::{NewBatch, archive_batch, create_batch},
+        batch::{NewBatch, NewBatchIngredient, add_batch_ingredient, archive_batch, create_batch},
         measurement::{EntryUnit, Instrument, NewMeasurement, record_measurement},
-        recipe::BeverageType,
+        recipe::{BeverageType, Stage},
+        reference::{
+            Category, NewIngredient, NewLot, NewYeastStrain, create_ingredient, create_lot,
+            create_yeast_strain,
+        },
         tier1::{create_source, create_stream, insert_readings},
         timeline::{EventKind, NewBatchEvent, add_event, bind_stream, record_pitch},
     },
-    units::{Sg, Timestamp},
+    units::{Quantity, Sg, Timestamp, Unit},
 };
 use brewfixture::{
     JournalScenario, Kind, LogSpec, Scenario,
@@ -111,6 +116,56 @@ fn demo_db(path: Option<PathBuf>) {
 
     let written = db.write(|conn| {
         let tx = conn.transaction()?;
+        // A strain, its ingredient, and one lot; returns the lot.
+        let yeast_lot = |name: &str, lab: &str| -> brewcore::Result<i64> {
+            let strain = create_yeast_strain(
+                &tx,
+                &NewYeastStrain {
+                    name: name.into(),
+                    lab: Some(lab.into()),
+                    ..Default::default()
+                },
+            )?;
+            let ingredient = create_ingredient(
+                &tx,
+                &NewIngredient {
+                    name: name.into(),
+                    category: Category::Yeast,
+                    default_unit: Unit::G,
+                    yeast_strain_id: Some(strain),
+                    attrs: None,
+                    notes: None,
+                },
+            )?;
+            create_lot(
+                &tx,
+                &NewLot {
+                    ingredient_id: ingredient,
+                    supplier: None,
+                    lot_code: None,
+                    entry: Quantity::new(500.0, Unit::G)?,
+                    cost: None,
+                    purchased_at: None,
+                    expires_at: None,
+                    notes: None,
+                },
+            )
+        };
+        let pitch_yeast = |batch_id: i64, lot: i64| {
+            add_batch_ingredient(
+                &tx,
+                batch_id,
+                &NewBatchIngredient {
+                    ingredient_lot_id: lot,
+                    entry: Quantity::new(5.0, Unit::G)?,
+                    stage: Stage::Pitch,
+                    added_at: None,
+                    notes: None,
+                },
+            )
+        };
+        let ec1118 = yeast_lot("EC-1118", "Lallemand")?;
+        let us05 = yeast_lot("US-05", "Fermentis")?;
         let batch_id = create_batch(
             &tx,
             &NewBatch {
@@ -125,6 +180,7 @@ fn demo_db(path: Option<PathBuf>) {
             at(-DAY),
         )?;
         record_pitch(&tx, batch_id, at(0), Some("EC-1118, rehydrated"))?;
+        pitch_yeast(batch_id, ec1118)?;
 
         let esp32 = create_source(&tx, SourceKind::BrewdJournal, "esp32-fv1", None)?;
         let ispindel = create_source(&tx, SourceKind::BrewdJournal, "ispindel-1", None)?;
@@ -244,7 +300,9 @@ fn demo_db(path: Option<PathBuf>) {
         let mut written = rows.len();
 
         let base = now - now % HOUR;
-        for (n, (code, kind, og, fg, tau_h, beer_c, ago, days, archived)) in [
+        // The two seltzers answer 5c's "EC-1118 seltzers, OG 1.035–1.040, at 18 °C";
+        // SELTZER-001 has no OG, so it is the one the query can't judge.
+        for (n, (code, kind, og, fg, tau_h, beer_c, ago, days, archived, lot)) in [
             (
                 "ALE-002",
                 BeverageType::Beer,
@@ -255,6 +313,7 @@ fn demo_db(path: Option<PathBuf>) {
                 120 * DAY,
                 14 * DAY,
                 true,
+                us05,
             ),
             (
                 "ALE-003",
@@ -266,6 +325,7 @@ fn demo_db(path: Option<PathBuf>) {
                 9 * DAY,
                 9 * DAY,
                 false,
+                us05,
             ),
             (
                 "CIDER-004",
@@ -277,6 +337,31 @@ fn demo_db(path: Option<PathBuf>) {
                 30 * DAY,
                 20 * DAY,
                 false,
+                ec1118,
+            ),
+            (
+                "SELTZER-006",
+                BeverageType::Seltzer,
+                1.037,
+                0.996,
+                40.0,
+                17.6,
+                90 * DAY,
+                14 * DAY,
+                true,
+                ec1118,
+            ),
+            (
+                "SELTZER-007",
+                BeverageType::Seltzer,
+                1.038,
+                0.997,
+                36.0,
+                17.7,
+                20 * DAY,
+                14 * DAY,
+                false,
+                ec1118,
             ),
         ]
         .into_iter()
@@ -298,6 +383,7 @@ fn demo_db(path: Option<PathBuf>) {
                 at(-DAY),
             )?;
             record_pitch(&tx, batch_id, at(0), None)?;
+            pitch_yeast(batch_id, lot)?;
             let source = create_source(&tx, SourceKind::BrewdJournal, &format!("tilt-{n}"), None)?;
             let sg = create_stream(&tx, source, "gravity", Metric::Sg)?;
             let temp = create_stream(&tx, source, "temperature", Metric::TempC)?;

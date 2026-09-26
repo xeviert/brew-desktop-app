@@ -339,6 +339,27 @@ pub enum Error {
     #[error("compare 2 to {max} batches, not {n}", max = crate::db::compare::MAX_BATCHES)]
     CompareCount { n: usize },
 
+    /// Phase 5c. A stored filter with a missing or newer `"v"`. Refused rather than
+    /// read in part: a skipped criterion widens the result, and a wider result looks
+    /// right. An unknown field under the right version is [`Error::InvalidFilter`].
+    #[error(
+        "saved filter is version {found}; this build reads version {}",
+        crate::db::query::FILTER_VERSION
+    )]
+    FilterVersion { found: String },
+
+    #[error("invalid filter: {reason}")]
+    InvalidFilter { reason: String },
+
+    #[error("saved query {id} does not exist")]
+    NoSuchSavedQuery { id: i64 },
+
+    #[error("a saved query needs a name")]
+    SavedQueryNameEmpty,
+
+    #[error("a saved query named '{name}' already exists")]
+    SavedQueryNameTaken { name: String },
+
     #[error("source {source_id} has no sync_state row")]
     MissingSyncState { source_id: i64 },
 
@@ -469,6 +490,11 @@ impl Error {
             Error::MeasurementImplausible { .. } => "db.measurement_implausible",
             Error::NoOriginalGravity { .. } => "db.no_original_gravity",
             Error::CompareCount { .. } => "compare.batch_count",
+            Error::FilterVersion { .. } => "query.filter_version",
+            Error::InvalidFilter { .. } => "query.invalid_filter",
+            Error::NoSuchSavedQuery { .. } => "db.no_such_saved_query",
+            Error::SavedQueryNameEmpty => "query.name_empty",
+            Error::SavedQueryNameTaken { .. } => "query.name_taken",
             Error::MissingSyncState { .. } => "sync.missing_state",
             Error::SourceNotScheduled { .. } => "sync.not_scheduled",
             Error::BackgroundTask { .. } => "sync.task",

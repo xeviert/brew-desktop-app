@@ -86,8 +86,18 @@ pub fn list_batch_metrics(
     include_archived: bool,
     params: &StabilityParams,
 ) -> Result<Vec<BatchMetrics>> {
+    metrics_for_batches(conn, &list_batches(conn, include_archived)?, params)
+}
+
+/// [`batch_metrics`] for batches already read, in their order: 5c's query computes
+/// metrics only for what survives its SQL prefilter.
+pub fn metrics_for_batches(
+    conn: &Connection,
+    batches: &[BatchRow],
+    params: &StabilityParams,
+) -> Result<Vec<BatchMetrics>> {
     let now = Timestamp::now();
-    list_batches(conn, include_archived)?
+    batches
         .iter()
         .map(|batch| metrics_for(conn, batch, params, now))
         .collect()

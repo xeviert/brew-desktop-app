@@ -95,10 +95,10 @@ pub struct BatchRow {
     pub notes: Option<String>,
 }
 
-const BATCH_COLUMNS: &str = "id, code, recipe_version_id, beverage_type, vessel_id, status, \
+pub(crate) const BATCH_COLUMNS: &str = "id, code, recipe_version_id, beverage_type, vessel_id, status, \
                              volume_l, og, fg, pitched_at, archived_at, notes";
 
-fn batch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BatchRow> {
+pub(crate) fn batch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BatchRow> {
     Ok(BatchRow {
         id: row.get(0)?,
         code: row.get(1)?,

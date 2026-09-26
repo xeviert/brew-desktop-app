@@ -3,6 +3,7 @@
   import BatchView from "$lib/components/BatchView.svelte";
   import CompareView from "$lib/components/CompareView.svelte";
   import HomeView from "$lib/components/HomeView.svelte";
+  import QueryView from "$lib/components/QueryView.svelte";
   import Settings from "$lib/components/Settings.svelte";
   import Sources from "$lib/components/Sources.svelte";
   import StatusFooter from "$lib/components/StatusFooter.svelte";
@@ -100,6 +101,7 @@
     <nav>
       <a href={href({ name: "home" })} class:active={route.name === "home"}>Home</a>
       <a href={href({ name: "compare", ids: [] })} class:active={route.name === "compare"}>Compare</a>
+      <a href={href({ name: "query", id: null })} class:active={route.name === "query"}>Queries</a>
       <a href={href({ name: "settings" })} class:active={route.name === "settings"}>Settings</a>
     </nav>
   </header>
@@ -111,6 +113,8 @@
       <BatchView {config} batchId={route.id} syncs={settled} />
     {:else if route.name === "compare"}
       <CompareView ids={route.ids} ui={config.ui} />
+    {:else if route.name === "query"}
+      <QueryView id={route.id} ui={config.ui} />
     {:else}
       <Settings {config} onsaved={(c) => (config = c)} />
       <Sources {sources} {syncs} onchanged={(s) => (sources = s)} />

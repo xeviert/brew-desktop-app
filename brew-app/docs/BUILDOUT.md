@@ -1047,24 +1047,45 @@ with events marked; and a 60-day, 30 s journal stays interactive when zoomed.
       a year bucketed at 9 h. Drawn: smoothed line and manual points only, no raw
       points or min/max bands — eight of each is noise; the batch screen keeps
       them. `db::compare::compare_batches`, command `compare_batches`
-- [ ] Entry points: from the batch screen ("compare with…") and from any 5c result.
-      **Done:** the batch screen, `#/compare/<ids>`. 5c's "overlay these" is a
-      navigation to that route once 5c exists
+- [x] Entry points: from the batch screen ("compare with…") and from any 5c result.
+      **Done:** the batch screen, `#/compare/<ids>`; 5c's "overlay these" navigates
+      there with the ticked rows
 
 **5c. Saved queries** — `0009_saved_query.sql`, Tier 2
-- [ ] A structured `BatchFilter`, **not SQL text**: beverage type, recipe, recipe
+- [x] A structured `BatchFilter`, **not SQL text**: beverage type, recipe, recipe
       version, yeast strain (actuals), ingredient lot, OG range, FG range, ferm
       temp range (5a's median), pitched between, status, include archived. Stored
-      SQL would couple saved queries to the schema and break on the next migration
-- [ ] `saved_query (id, name, filter JSON, created_at, archived_at)`. The JSON
+      SQL would couple saved queries to the schema and break on the next migration.
+      **Refined:** canonical units only — SG, °C, epoch seconds — so a saved query
+      means the same after a display-unit change; the form types temperature in
+      the display unit and pitch dates as whole local days. Ranges are inclusive,
+      either end open; `min > max` is `query.invalid_filter`. A list criterion is
+      "any of", and a mixed-strain batch matches each of its strains
+- [x] `saved_query (id, name, filter JSON, created_at, archived_at)`. The JSON
       carries `"v": 1`. An unknown or retired field on load is an error — silently
-      dropping one criterion *widens* the result, and a wider result looks right
-- [ ] Filtering runs in Rust over 5a's computed metrics, after a SQL prefilter on
+      dropping one criterion *widens* the result, and a wider result looks right.
+      **Refined:** a missing field is refused too (no `serde(default)`), and a
+      version other than 1 is `query.filter_version`. Names are unique among
+      active queries (partial index), so an archived name is free again. The list
+      returns summaries without parsing filters: one unreadable query fails when
+      opened, not the whole list. Update replaces name and filter in place
+- [x] Filtering runs in Rust over 5a's computed metrics, after a SQL prefilter on
       the columns that exist (type, status, dates, OG). The ARCHITECTURE.md
-      example — "EC-1118, OG 1.035–1.040, 18 °C" — is the acceptance test
-- [ ] Result is the 5a table, sortable, with "overlay these" (5b) and "export" (5e)
-- [ ] Lot filter answers "which batches used that suspect yeast lot" — 3a's
-      traceability question, finally a screen
+      example — "EC-1118, OG 1.035–1.040, 18 °C" — is the acceptance test.
+      **Refined:** the prefilter also takes recipe, version, lot and FG. A NULL
+      OG / FG / pitch passes it on purpose: a batch the filter can't judge is
+      listed as `unevaluated` with the criterion and the reason (**added**
+      `no_yeast`), never dropped and never matched. `db::query::run_query`,
+      commands `run_batch_query` / `run_saved_query`
+- [x] Result is the 5a table, sortable, with "overlay these" (5b) and "export" (5e).
+      **Refined:** missing values sort last in either direction and show "—" with
+      the reason on hover. A result of ≤ 8 starts with its pitched batches ticked.
+      OG / FG are converted to the display unit in Rust (`display_og`/`_fg`).
+      Export is a disabled button until 5e. Screen `#/query`, `#/query/<id>`
+- [x] Lot filter answers "which batches used that suspect yeast lot" — 3a's
+      traceability question, finally a screen. **Refined:** the picker
+      (`query_options`) offers only lots some batch used, with the count, and
+      recipes by their locked versions only
 
 **5d. Yeast / strain rollup**
 - [ ] Group 5a's metrics by actual strain: n, median and range of attenuation,

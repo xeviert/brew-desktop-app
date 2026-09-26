@@ -104,6 +104,13 @@ fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
         commands::set_batch_og,
         commands::home_summary,
         commands::compare_batches,
+        commands::run_batch_query,
+        commands::run_saved_query,
+        commands::list_saved_queries,
+        commands::create_saved_query,
+        commands::update_saved_query,
+        commands::archive_saved_query,
+        commands::query_options,
     ]
 }
 

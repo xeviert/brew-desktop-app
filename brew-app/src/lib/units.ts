@@ -1,6 +1,7 @@
 /**
- * Formatting only. The Rust `units` module owns storage and conversion; this file
- * turns canonical values into strings for display and never the other way round.
+ * Formatting, mostly. The Rust `units` module owns storage and conversion; this file
+ * turns canonical values into strings for display. The one way back is
+ * `fromDisplayTemp`, for a filter typed in the display unit.
  *
  * Deliberately absent: gravity scale conversion. SG -> Plato is a polynomial fit
  * that lives in `crates/brewcore/src/calc`; a second copy here would drift.
@@ -72,6 +73,10 @@ export function formatMoney(money: Money): string {
 /** Exact and linear, unlike gravity, so it can live here. The chart converts whole series. */
 export function toDisplayTemp(celsius: number, display: TempDisplay): number {
 	return display === "F" ? celsius * 1.8 + 32 : celsius;
+}
+
+export function fromDisplayTemp(value: number, display: TempDisplay): number {
+	return display === "F" ? (value - 32) / 1.8 : value;
 }
 
 export function formatTemp(celsius: number, display: TempDisplay = "C", digits = 1): string {

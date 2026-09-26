@@ -12,6 +12,7 @@ pub mod measurement;
 mod metric;
 pub mod migrations;
 mod paths;
+pub mod query;
 pub mod recipe;
 pub mod reference;
 pub mod series;

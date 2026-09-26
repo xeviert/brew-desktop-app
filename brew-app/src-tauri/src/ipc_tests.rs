@@ -510,3 +510,98 @@ fn home_lists_the_fermenting_batch_and_its_devices() {
     assert_eq!(home["devices"][0]["name"], "ispindel");
     assert_eq!(home["devices"][0]["stale"], true);
 }
+
+/// Every field, as `emptyFilter` in `src/lib/query.ts` sends it, with `over` on top.
+fn filter(over: Value) -> Value {
+    let mut filter = json!({
+        "beverage_types": [],
+        "statuses": [],
+        "include_archived": true,
+        "recipe_id": null,
+        "recipe_version_id": null,
+        "strain_ids": [],
+        "lot_ids": [],
+        "og": null,
+        "fg": null,
+        "ferm_temp_c": null,
+        "pitched": null,
+    });
+    for (k, v) in over.as_object().unwrap() {
+        filter[k] = v.clone();
+    }
+    filter
+}
+
+#[test]
+fn a_query_is_saved_run_and_archived() {
+    let app = Harness::new();
+    let a = pitched(&app, "SELTZER-001", Some(1.040));
+    let b = pitched(&app, "SELTZER-002", None);
+    let mut config = app.invoke("get_config", json!({})).unwrap();
+    config["ui"]["gravity_display"] = json!("plato");
+    app.invoke("set_config", json!({ "config": config }))
+        .unwrap();
+    let og = filter(json!({ "og": { "min": 1.035, "max": 1.045 } }));
+
+    let view = app
+        .invoke("run_batch_query", json!({ "filter": og }))
+        .unwrap();
+    assert_eq!(view["gravity_unit"], "°P");
+    assert_eq!(view["rows"][0]["batch_id"], a);
+    let display_og = view["rows"][0]["display_og"].as_f64().unwrap();
+    assert!((display_og - 10.0).abs() < 0.1, "got {display_og}");
+    assert_eq!(
+        view["unevaluated"],
+        json!([{ "batch_id": b, "code": "SELTZER-002", "criterion": "og", "reason": "no_og" }])
+    );
+
+    let saved = app
+        .invoke(
+            "create_saved_query",
+            json!({ "name": "Around 1.040", "filter": og }),
+        )
+        .unwrap();
+    let id = saved["id"].as_i64().unwrap();
+    assert_eq!(saved["filter"]["og"]["min"], 1.035);
+    let list = app
+        .invoke("list_saved_queries", json!({ "includeArchived": false }))
+        .unwrap();
+    assert_eq!(list[0]["name"], "Around 1.040");
+
+    let everything = filter(json!({}));
+    let updated = app
+        .invoke(
+            "update_saved_query",
+            json!({ "id": id, "name": "Everything", "filter": everything }),
+        )
+        .unwrap();
+    assert_eq!(updated["name"], "Everything");
+    let run = app.invoke("run_saved_query", json!({ "id": id })).unwrap();
+    assert_eq!(run["query"]["name"], "Everything");
+    assert_eq!(run["result"]["rows"].as_array().unwrap().len(), 2);
+
+    assert_eq!(
+        app.invoke("archive_saved_query", json!({ "id": id }))
+            .unwrap(),
+        true
+    );
+    let archived = app
+        .invoke("list_saved_queries", json!({ "includeArchived": true }))
+        .unwrap();
+    assert!(archived[0]["archived_at"].is_i64());
+    let options = app.invoke("query_options", json!({})).unwrap();
+    assert!(options["lots"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn a_filter_the_backend_cannot_read_is_refused() {
+    let app = Harness::new();
+    let upside_down = filter(json!({ "fg": { "min": 1.010, "max": 1.000 } }));
+    let err = app.api_error("run_batch_query", json!({ "filter": upside_down }));
+    assert_eq!(err["code"], "query.invalid_filter");
+    let err = app.api_error(
+        "create_saved_query",
+        json!({ "name": " ", "filter": filter(json!({})) }),
+    );
+    assert_eq!(err["code"], "query.name_empty");
+}

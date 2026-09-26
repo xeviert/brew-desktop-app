@@ -47,6 +47,7 @@ fn empty_database_migrates_to_head() {
         "annotation",
         "manual_measurement",
         "vessel_stream",
+        "saved_query",
     ] {
         assert!(tables.contains(&expected.to_string()), "missing {expected}");
     }

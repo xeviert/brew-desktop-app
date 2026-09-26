@@ -1,15 +1,23 @@
 use brewcore::{
     Error,
     brewd::{self, JournalProbe},
-    calc::stability::{ExpectedFg, FlatSpan, Stability, flat_spans},
+    calc::{
+        gravity::sg_to_display,
+        stability::{ExpectedFg, FlatSpan, Stability, flat_spans},
+    },
     config::{Config, ConfigStore},
     db::{
         Db, DbStatus, Metric, SourceKind,
+        analytics::BatchMetrics,
         batch::{self, BatchRow},
         compare::{self, Comparison, RelRange, YAxis, YMode},
         dashboard::{self, BatchDashboard, DisplayGravity},
         health::DeviceHealth,
         home::{self, HomeBatch},
+        query::{
+            self, BatchFilter, QueryOptions, QueryResult, SavedQuery, SavedQuerySummary,
+            Unevaluated,
+        },
         reference::{self, VesselKind, VesselRow},
         series::{self, BatchSeries, SeriesRange},
         stability,
@@ -19,7 +27,7 @@ use brewcore::{
     fermentrack::{self, Client, LogProbe, SourceSummary, discovery},
     journal::JournalEntry,
     sync::{ReadingSource, SourceStatus, SyncManager},
-    units::{Litres, Sg},
+    units::{GravityDisplay, Litres, Sg, Timestamp},
 };
 
 use crate::error::{ApiError, ApiResult};
@@ -520,4 +528,123 @@ pub async fn compare_batches(
         comparison,
         gravity_unit: display.unit(),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5c: saved queries
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Serialize)]
+pub struct QueryView {
+    pub rows: Vec<QueryRowView>,
+    pub unevaluated: Vec<Unevaluated>,
+    pub gravity_unit: &'static str,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct QueryRowView {
+    #[serde(flatten)]
+    pub metrics: BatchMetrics,
+    /// OG and FG in the display unit. The filter itself stays in SG.
+    pub display_og: Option<f64>,
+    pub display_fg: Option<f64>,
+}
+
+fn query_view(result: QueryResult, display: GravityDisplay) -> QueryView {
+    QueryView {
+        rows: result
+            .rows
+            .into_iter()
+            .map(|metrics| QueryRowView {
+                display_og: metrics.og.map(|sg| sg_to_display(sg, display)),
+                display_fg: metrics.fg.map(|sg| sg_to_display(sg, display)),
+                metrics,
+            })
+            .collect(),
+        unevaluated: result.unevaluated,
+        gravity_unit: display.unit(),
+    }
+}
+
+/// An unsaved filter: the form runs this on every change.
+#[tauri::command]
+pub async fn run_batch_query(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    filter: BatchFilter,
+) -> ApiResult<QueryView> {
+    let config = config.get();
+    let params = config.stability.params();
+    let result = db.read(|conn| query::run_query(conn, &filter, &params))?;
+    Ok(query_view(result, config.ui.gravity_display))
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SavedQueryRun {
+    pub query: SavedQuery,
+    pub result: QueryView,
+}
+
+/// Opens and runs in one read, so the filter shown is the one that ran.
+#[tauri::command]
+pub async fn run_saved_query(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    id: i64,
+) -> ApiResult<SavedQueryRun> {
+    let config = config.get();
+    let params = config.stability.params();
+    let (query, result) = db.read(|conn| {
+        let query = query::get_saved_query(conn, id)?;
+        let result = query::run_query(conn, &query.filter, &params)?;
+        Ok((query, result))
+    })?;
+    Ok(SavedQueryRun {
+        query,
+        result: query_view(result, config.ui.gravity_display),
+    })
+}
+
+#[tauri::command]
+pub async fn list_saved_queries(
+    db: tauri::State<'_, Db>,
+    include_archived: bool,
+) -> ApiResult<Vec<SavedQuerySummary>> {
+    Ok(db.read(|conn| query::list_saved_queries(conn, include_archived))?)
+}
+
+#[tauri::command]
+pub async fn create_saved_query(
+    db: tauri::State<'_, Db>,
+    name: String,
+    filter: BatchFilter,
+) -> ApiResult<SavedQuery> {
+    Ok(db.write(|conn| {
+        let id = query::create_saved_query(conn, &name, &filter, Timestamp::now())?;
+        query::get_saved_query(conn, id)
+    })?)
+}
+
+/// Rename and replace the filter in one write; the form always sends both.
+#[tauri::command]
+pub async fn update_saved_query(
+    db: tauri::State<'_, Db>,
+    id: i64,
+    name: String,
+    filter: BatchFilter,
+) -> ApiResult<SavedQuery> {
+    Ok(db.write(|conn| {
+        query::update_saved_query(conn, id, &name, &filter)?;
+        query::get_saved_query(conn, id)
+    })?)
+}
+
+#[tauri::command]
+pub async fn archive_saved_query(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| query::archive_saved_query(conn, id, Timestamp::now()))?)
+}
+
+#[tauri::command]
+pub async fn query_options(db: tauri::State<'_, Db>) -> ApiResult<QueryOptions> {
+    Ok(db.read(query::query_options)?)
 }

@@ -7,6 +7,7 @@ export type Route =
 	| { name: "home" }
 	| { name: "batch"; id: number }
 	| { name: "compare"; ids: number[] }
+	| { name: "query"; id: number | null }
 	| { name: "settings" };
 
 /** Anything unrecognised is home: a stale bookmark should land somewhere useful. */
@@ -18,6 +19,9 @@ export function parse(hash: string): Route {
 	// 5b: `#/compare/3,7,12`, in pick order; `#/compare` is an empty pick.
 	const compare = /^\/compare(?:\/(\d+(?:,\d+)*))?$/.exec(path);
 	if (compare) return { name: "compare", ids: compare[1] ? compare[1].split(",").map(Number) : [] };
+	// 5c: `#/query` is a fresh filter, `#/query/4` saved query 4.
+	const query = /^\/query(?:\/(\d+))?$/.exec(path);
+	if (query) return { name: "query", id: query[1] ? Number(query[1]) : null };
 	return { name: "home" };
 }
 
@@ -29,6 +33,8 @@ export function href(route: Route): string {
 			return `#/batch/${route.id}`;
 		case "compare":
 			return route.ids.length ? `#/compare/${route.ids.join(",")}` : "#/compare";
+		case "query":
+			return route.id === null ? "#/query" : `#/query/${route.id}`;
 		case "settings":
 			return "#/settings";
 	}

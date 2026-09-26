@@ -4,7 +4,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { GravityDisplay, TempDisplay } from "$lib/units";
+import type { GravityDisplay, Money, TempDisplay } from "$lib/units";
 
 /** Mirrors `src-tauri/src/error.rs`. `code` is stable; `message` is for humans. */
 export interface ApiError {
@@ -544,6 +544,7 @@ export type Missing =
 	| "never_stable"
 	| "too_few_points"
 	| "no_temp"
+	| "no_yeast"
 	| "no_volume"
 	| "no_cost"
 	| "mixed_currency"
@@ -595,3 +596,157 @@ export const compareBatches = (
 	maxPoints: number,
 ): Promise<CompareView> =>
 	call("compare_batches", { batchIds, yMode, withTemp, range, maxPoints });
+
+// ---------------------------------------------------------------------------
+// Phase 5c: saved queries
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::recipe::BeverageType`. */
+export type BeverageType =
+	| "seltzer"
+	| "beer"
+	| "cider"
+	| "wine"
+	| "mead"
+	| "kombucha"
+	| "other";
+
+/** Mirrors `brewcore::db::query::Bounds`. Inclusive; `null` leaves that end open. */
+export interface Bounds {
+	min: number | null;
+	max: number | null;
+}
+
+/**
+ * Mirrors `brewcore::db::query::BatchFilter`. Canonical units: SG, °C, epoch seconds.
+ * Every field is required — the backend refuses a filter with one missing rather than
+ * guess, so build from `emptyFilter` in `$lib/query`.
+ */
+export interface BatchFilter {
+	beverage_types: BeverageType[];
+	statuses: BatchStatus[];
+	include_archived: boolean;
+	recipe_id: number | null;
+	recipe_version_id: number | null;
+	strain_ids: number[];
+	lot_ids: number[];
+	og: Bounds | null;
+	fg: Bounds | null;
+	ferm_temp_c: Bounds | null;
+	pitched: Bounds | null;
+}
+
+/** Mirrors `brewcore::calc::batch_metrics::Computed`. */
+export type Computed<T> = { value: T } | { missing: Missing };
+
+/** Mirrors `src-tauri`'s `QueryRowView`: 5a's `BatchMetrics` plus OG / FG for display. */
+export interface QueryRow {
+	batch_id: number;
+	code: string;
+	beverage_type: BeverageType;
+	status: BatchStatus;
+	archived_at: number | null;
+	pitched_at: number | null;
+	/** SG. */
+	og: number | null;
+	fg: number | null;
+	lag: Computed<{ at: number; secs: number }>;
+	peak_rate: Computed<{ sg_per_day: number; at: number; secs_from_pitch: number }>;
+	terminal: Computed<{ at: number; secs_from_pitch: number; fg_unchecked: boolean }>;
+	/** Fractions, not percent. */
+	apparent_attenuation: Computed<number>;
+	abv_alternate: Computed<number>;
+	/** °C. */
+	ferm_temp: Computed<{
+		median: number;
+		min: number;
+		max: number;
+		n: number;
+		stream_id: number;
+		to_terminal: boolean;
+	}>;
+	yan_added_mg_per_l: Computed<number>;
+	cost_per_litre: Computed<Money>;
+	cost_lines_without_cost: number;
+	strains: { id: number; name: string }[];
+	/** In `QueryView.gravity_unit`. */
+	display_og: number | null;
+	display_fg: number | null;
+}
+
+/** Mirrors `brewcore::db::query::Criterion`. */
+export type Criterion = "og" | "fg" | "pitched" | "strain" | "ferm_temp";
+
+/** A batch the filter couldn't judge, and why. Neither a match nor a mismatch. */
+export interface Unevaluated {
+	batch_id: number;
+	code: string;
+	criterion: Criterion;
+	reason: Missing;
+}
+
+/** Mirrors `src-tauri`'s `QueryView`. */
+export interface QueryView {
+	rows: QueryRow[];
+	unevaluated: Unevaluated[];
+	gravity_unit: string;
+}
+
+export interface SavedQuerySummary {
+	id: number;
+	name: string;
+	created_at: number;
+	archived_at: number | null;
+}
+
+export interface SavedQuery extends SavedQuerySummary {
+	filter: BatchFilter;
+}
+
+/** Mirrors `brewcore::db::query::QueryOptions`: what the filter form can pick from. */
+export interface QueryOptions {
+	recipes: {
+		id: number;
+		name: string;
+		beverage_type: BeverageType;
+		archived: boolean;
+		/** Locked versions only. */
+		versions: { id: number; version_no: number }[];
+	}[];
+	strains: { id: number; name: string; lab: string | null }[];
+	/** Only lots some batch used. */
+	lots: {
+		id: number;
+		ingredient: string;
+		category: string;
+		lot_code: string | null;
+		supplier: string | null;
+		purchased_at: number | null;
+		batch_count: number;
+	}[];
+}
+
+export const runBatchQuery = (filter: BatchFilter): Promise<QueryView> =>
+	call("run_batch_query", { filter });
+
+/** Fails with `query.filter_version` when a newer build saved it. */
+export const runSavedQuery = (id: number): Promise<{ query: SavedQuery; result: QueryView }> =>
+	call("run_saved_query", { id });
+
+export const listSavedQueries = (includeArchived = false): Promise<SavedQuerySummary[]> =>
+	call("list_saved_queries", { includeArchived });
+
+export const createSavedQuery = (name: string, filter: BatchFilter): Promise<SavedQuery> =>
+	call("create_saved_query", { name, filter });
+
+/** Rename and replace the filter in place. */
+export const updateSavedQuery = (
+	id: number,
+	name: string,
+	filter: BatchFilter,
+): Promise<SavedQuery> => call("update_saved_query", { id, name, filter });
+
+export const archiveSavedQuery = (id: number): Promise<boolean> =>
+	call("archive_saved_query", { id });
+
+export const queryOptions = (): Promise<QueryOptions> => call("query_options");

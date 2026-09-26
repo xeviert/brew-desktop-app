@@ -68,6 +68,8 @@ pub enum Missing {
     /// No window full enough to fit.
     TooFewPoints,
     NoTemp,
+    /// No yeast addition recorded, so no strain to match on.
+    NoYeast,
     NoVolume,
     /// No priced lot among the additions.
     NoCost,
