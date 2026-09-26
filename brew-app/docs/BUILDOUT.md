@@ -1112,20 +1112,39 @@ with events marked; and a 60-day, 30 s journal stays interactive when zoomed.
       the two views can't disagree and 5c's unevaluated batches aren't counted.
       A "Batches | By strain" toggle on `#/query`, no new command or route
 
-**5e. CSV export** — Rust side, `csv` crate, one writer
-- [ ] Export is the **same query** as the screen plus a writer, never a scrape of
+**5e. CSV export** — `brewcore::export`, `csv` crate, one writer
+- [x] Export is the **same query** as the screen plus a writer, never a scrape of
       the rendered table: metrics table, rollup, overlay series, and a batch's raw
-      readings (4a with `max_points` unbounded)
-- [ ] Values in canonical units with the unit in the header (`temp_c`, `sg`), both
+      readings (4a with `max_points` unbounded). **Refined:** series are long —
+      one row per point, a `metric` column — since two streams of one metric or
+      unaligned timestamps break a wide layout. The overlay export is 5b's
+      `compare_batches` with the screen's ids, y mode, temp toggle and zoom, every
+      point; excluded batches are rows carrying their reason. A batch's readings
+      are the whole bound record (`binding_span`), every metric, not the chart's
+      zoom — pre-pitch readings get a negative `secs_from_pitch`. The metrics
+      file appends 5c's unevaluated batches (`match`, criterion, reason) and the
+      rollup its `no_yeast` row: nothing the screen shows is dropped. Lists are
+      joined with ` | `. Rows in Rust's order, not the UI's sort. Commands
+      `export_query` / `export_comparison` / `export_batch_readings`
+- [x] Values in canonical units with the unit in the header (`temp_c`, `sg`), both
       `ts` (epoch) and `time_utc` (ISO 8601) columns. Display units are for eyes;
-      a file gets re-imported
-- [ ] Dialect: RFC 4180 by default, and an `excel_fr` option — `;` separator, `,`
+      a file gets re-imported. **Refined:** a metric that couldn't be computed is
+      an empty cell plus a `*_missing` column with the reason, never 0. Numbers
+      never use an exponent; non-finite is empty. Cost is `Money::decimal` with
+      the currency in its own column
+- [x] Dialect: RFC 4180 by default, and an `excel_fr` option — `;` separator, `,`
       decimal, UTF-8 BOM — since French Excel opens a comma CSV as one column.
-      Proposal: `export.dialect` in config
-- [ ] Save dialog via `tauri-plugin-dialog`; the path goes to a command that
-      writes it. The frontend never touches the filesystem
-- [ ] Tests: round-trip through the `csv` reader for each dialect; a note with a
-      `;`, a `,` and a quote survives both
+      **Refined:** `export.dialect` in config (`rfc4180` / `excel_fr`), set in
+      Settings, no per-export picker. The decimal comma applies to number cells
+      only; a note's `.` is untouched. CRLF in both
+- [x] Save dialog via `tauri-plugin-dialog`; the path goes to a command that
+      writes it. The frontend never touches the filesystem. **Refined:** only
+      `dialog:allow-save` is granted. Cancel writes nothing. The write is
+      flushed and fsync'd; failure is `export.write` naming the path. Export on
+      `#/query` (either view), `#/compare`, and the batch page
+- [x] Tests: round-trip through the `csv` reader for each dialect; a note with a
+      `;`, a `,` and a quote survives both. **Refined:** plus a newline and a
+      non-ASCII name; IPC test writes all four exports in `excel_fr`
 
 **Done when:** "all EC-1118 seltzers, OG 1.035–1.040, fermented at 18 °C" is a
 saved query that returns the right batches with lag, peak rate and days to

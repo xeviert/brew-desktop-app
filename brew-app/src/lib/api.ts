@@ -23,10 +23,14 @@ export interface Config {
 	gravity: { ispindel_unit: IspindelUnit | null };
 	stability: { window_hours: number; slope_sg_per_day: number; fg_band: number };
 	health: { battery_warn_v: number; rssi_warn_dbm: number };
+	export: { dialect: ExportDialect };
 }
 
 /** Mirrors `brewcore::config::IspindelUnit`. `null` in `Config` means not recorded yet. */
 export type IspindelUnit = "sg" | "plato";
+
+/** Mirrors `brewcore::config::ExportDialect`. `excel_fr`: `;`, decimal comma, UTF-8 BOM. */
+export type ExportDialect = "rfc4180" | "excel_fr";
 
 /** Mirrors `brewcore::db::DbStatus`. */
 export interface DbStatus {
@@ -791,3 +795,25 @@ export const archiveSavedQuery = (id: number): Promise<boolean> =>
 	call("archive_saved_query", { id });
 
 export const queryOptions = (): Promise<QueryOptions> => call("query_options");
+
+// ---------------------------------------------------------------------------
+// Phase 5e: CSV export
+// ---------------------------------------------------------------------------
+// `path` comes from the save dialog (`$lib/export`); Rust writes the file, in
+// canonical units and the configured `export.dialect`. Fails with `export.write`.
+
+export type QueryTable = "batches" | "strains";
+
+export const exportQuery = (filter: BatchFilter, table: QueryTable, path: string): Promise<void> =>
+	call("export_query", { filter, table, path });
+
+export const exportComparison = (
+	batchIds: number[],
+	yMode: YMode,
+	withTemp: boolean,
+	range: RelRange | null,
+	path: string,
+): Promise<void> => call("export_comparison", { batchIds, yMode, withTemp, range, path });
+
+export const exportBatchReadings = (batchId: number, path: string): Promise<void> =>
+	call("export_batch_readings", { batchId, path });

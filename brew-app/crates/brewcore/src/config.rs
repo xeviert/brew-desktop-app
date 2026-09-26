@@ -104,6 +104,7 @@ pub struct Config {
     pub gravity: Gravity,
     pub stability: Stability,
     pub health: Health,
+    pub export: Export,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,6 +250,25 @@ pub struct Gravity {
 pub enum IspindelUnit {
     Sg,
     Plato,
+}
+
+/// Phase 5e. How a CSV export is written. Values are canonical either way; only the
+/// punctuation changes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Export {
+    pub dialect: ExportDialect,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportDialect {
+    /// `,` separator, `.` decimal.
+    #[default]
+    Rfc4180,
+    /// `;` separator, `,` decimal, UTF-8 BOM: French Excel opens a comma CSV as one
+    /// column, and without the BOM reads UTF-8 as Windows-1252.
+    ExcelFr,
 }
 
 /// `f64::clamp` propagates NaN, and TOML has `nan` and `inf` literals — so a

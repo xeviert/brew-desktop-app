@@ -21,6 +21,8 @@ brewcore.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2.11.3", features = [] }
+# 5e's save dialog. The dialog only picks a path; the file is written by a command.
+tauri-plugin-dialog = "2.7.3"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true

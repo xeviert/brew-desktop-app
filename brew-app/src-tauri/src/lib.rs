@@ -17,6 +17,7 @@ use tauri::{Manager, RunEvent, Runtime, ipc::Invoke};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // First, so everything below it is logged. `Db::open` already emits
             // "database ready"; until now there was no subscriber to receive it.
@@ -111,6 +112,9 @@ fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
         commands::update_saved_query,
         commands::archive_saved_query,
         commands::query_options,
+        commands::export_query,
+        commands::export_comparison,
+        commands::export_batch_readings,
     ]
 }
 

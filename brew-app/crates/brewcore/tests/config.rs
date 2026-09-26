@@ -3,7 +3,8 @@
 
 use brewcore::{
     config::{
-        self, Brewd, Config, Fermentrack, Gravity, Health, IspindelUnit, MAX_POLL_INTERVAL_SECS,
+        self, Brewd, Config, Export, ExportDialect, Fermentrack, Gravity, Health, IspindelUnit,
+        MAX_POLL_INTERVAL_SECS,
         MIN_POLL_INTERVAL_SECS, Measurement, Stability, SyncConfig, Ui,
     },
     units::{GravityDisplay, TempDisplay},
@@ -42,6 +43,7 @@ fn the_documented_defaults_are_the_actual_defaults() {
     assert_eq!(config.sync.poll_interval_secs, 60);
     assert_eq!(config.ui.temp_display, TempDisplay::C);
     assert_eq!(config.ui.gravity_display, GravityDisplay::Sg);
+    assert_eq!(config.export.dialect, ExportDialect::Rfc4180);
 }
 
 #[test]
@@ -135,6 +137,9 @@ fn save_then_load_round_trips() {
             battery_warn_v: 3.5,
             rssi_warn_dbm: -85.0,
         },
+        export: Export {
+            dialect: ExportDialect::ExcelFr,
+        },
     };
 
     config::save(&path, &written).unwrap();
@@ -179,6 +184,20 @@ fn the_ispindel_unit_is_stored_lowercase() {
             config::load(&path).unwrap().gravity.ispindel_unit,
             Some(unit)
         );
+    }
+}
+
+#[test]
+fn the_export_dialect_is_stored_snake_case() {
+    let tmp = tempfile::tempdir().unwrap();
+    for (dialect, text) in [
+        (ExportDialect::Rfc4180, "rfc4180"),
+        (ExportDialect::ExcelFr, "excel_fr"),
+    ] {
+        let path = write(tmp.path(), &format!("[export]
+dialect = \"{text}\"
+"));
+        assert_eq!(config::load(&path).unwrap().export.dialect, dialect);
     }
 }
 

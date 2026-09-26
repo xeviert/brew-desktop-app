@@ -10,6 +10,7 @@ pub mod calc;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod export;
 pub mod fermentrack;
 pub mod journal;
 pub mod sync;

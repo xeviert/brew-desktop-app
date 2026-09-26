@@ -4,6 +4,7 @@
   import "uplot/dist/uPlot.min.css";
   import {
     compareBatches,
+    exportComparison,
     listBatches,
     onSyncStatus,
     toApiError,
@@ -17,6 +18,7 @@
     type YMode,
   } from "$lib/api";
   import { assignSlots, buildCompare, colorOf, type ComparePanel, type Panel } from "$lib/compare";
+  import { csvName, saveCsv } from "$lib/export";
   import { href } from "$lib/route";
 
   let { ids, ui }: { ids: number[]; ui: Config["ui"] } = $props();
@@ -71,6 +73,17 @@
         again = false;
         void refresh();
       }
+    }
+  }
+
+  /** Same batches, mode and span as the chart, every point rather than `MAX_POINTS`. */
+  async function exportCsv() {
+    if (!view) return;
+    const name = csvName(["compare", ...view.batches.map((b) => b.code)]);
+    try {
+      await saveCsv(name, (path) => exportComparison(ids, yMode, withTemp, zoomed, path));
+    } catch (e) {
+      error = toApiError(e);
     }
   }
 
@@ -275,6 +288,7 @@
     </div>
     <label><input type="checkbox" bind:checked={withTemp} /> Temperature</label>
     <span class="hint">Drag to zoom, double-click to reset.</span>
+    <button disabled={!view} title="Save these series as CSV" onclick={exportCsv}>Export</button>
   </div>
 
   {#if ids.length < 2}

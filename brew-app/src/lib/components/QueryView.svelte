@@ -3,6 +3,7 @@
   import {
     archiveSavedQuery,
     createSavedQuery,
+    exportQuery,
     listSavedQueries,
     onSyncStatus,
     queryOptions,
@@ -25,6 +26,7 @@
     type SavedQuerySummary,
   } from "$lib/api";
   import { formatGravityIn, span } from "$lib/dashboard";
+  import { csvName, saveCsv } from "$lib/export";
   import {
     MAX_OVERLAY,
     emptyFilter,
@@ -165,6 +167,21 @@
       location.hash = href({ name: "query", id: null });
     } catch (e) {
       saveError = toApiError(e);
+    }
+  }
+
+  /** The filter the table shows, not the form: a half-typed edit isn't what was seen. */
+  async function exportCsv() {
+    if (!shown) return;
+    const filter: BatchFilter = JSON.parse(shown);
+    const table = mode;
+    const what = table === "strains" ? "by strain" : "batches";
+    try {
+      await saveCsv(csvName([open?.name ?? "query", what]), (path) =>
+        exportQuery(filter, table, path),
+      );
+    } catch (e) {
+      error = toApiError(e);
     }
   }
 
@@ -385,8 +402,8 @@
         >
           Overlay these ({picked.length})
         </button>
-        <button disabled title="CSV export arrives in 5e">Export</button>
       {/if}
+      <button title="Save this table as CSV" onclick={exportCsv}>Export</button>
     </div>
 
     {#if mode === "strains"}

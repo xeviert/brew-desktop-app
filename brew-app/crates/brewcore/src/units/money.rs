@@ -250,17 +250,23 @@ impl Money {
 /// which already knows symbol placement and digit count per locale.
 impl std::fmt::Display for Money {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.decimal(), self.currency)
+    }
+}
+
+impl Money {
+    /// `12.50`, exact: the amount in major units without its currency, for 5e's CSV.
+    pub fn decimal(&self) -> String {
         let exponent = self.currency.exponent() as usize;
         if exponent == 0 {
-            return write!(f, "{} {}", self.minor, self.currency);
+            return self.minor.to_string();
         }
         let scale = self.currency.scale().unsigned_abs();
         let sign = if self.minor < 0 { "-" } else { "" };
         let abs = self.minor.unsigned_abs();
         let major = abs / scale;
         let frac = abs % scale;
-        let currency = self.currency;
-        write!(f, "{sign}{major}.{frac:0>exponent$} {currency}")
+        format!("{sign}{major}.{frac:0>exponent$}")
     }
 }
 

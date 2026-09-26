@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use brewcore::{
     Error,
     brewd::{self, JournalProbe},
@@ -25,6 +27,7 @@ use brewcore::{
         tier1::{self, StreamRow},
         timeline::{self, BatchEventRow},
     },
+    export::{self, QueryTable},
     fermentrack::{self, Client, LogProbe, SourceSummary, discovery},
     journal::JournalEntry,
     sync::{ReadingSource, SourceStatus, SyncManager},
@@ -656,4 +659,55 @@ pub async fn archive_saved_query(db: tauri::State<'_, Db>, id: i64) -> ApiResult
 #[tauri::command]
 pub async fn query_options(db: tauri::State<'_, Db>) -> ApiResult<QueryOptions> {
     Ok(db.read(query::query_options)?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5e: CSV export
+// ---------------------------------------------------------------------------
+//
+// The frontend picks `path` with the save dialog and never touches the file. Each
+// reads the table, then writes outside the read so the file I/O holds no connection.
+// Canonical units regardless of `ui`: only `export.dialect` is read from the config.
+
+/// `#/query`'s result, as the batches table or the rollup.
+#[tauri::command]
+pub async fn export_query(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    filter: BatchFilter,
+    table: QueryTable,
+    path: PathBuf,
+) -> ApiResult<()> {
+    let config = config.get();
+    let params = config.stability.params();
+    let table = db.read(|conn| export::query(conn, &filter, &params, table))?;
+    Ok(export::write_file(&path, &table, config.export.dialect)?)
+}
+
+/// The overlay's batches and span, every point.
+#[tauri::command]
+pub async fn export_comparison(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_ids: Vec<i64>,
+    y_mode: YMode,
+    with_temp: bool,
+    range: Option<RelRange>,
+    path: PathBuf,
+) -> ApiResult<()> {
+    let table =
+        db.read(|conn| export::comparison(conn, &batch_ids, y_mode, with_temp, range))?;
+    Ok(export::write_file(&path, &table, config.get().export.dialect)?)
+}
+
+/// Every reading bound to the batch.
+#[tauri::command]
+pub async fn export_batch_readings(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_id: i64,
+    path: PathBuf,
+) -> ApiResult<()> {
+    let table = db.read(|conn| export::readings(conn, batch_id))?;
+    Ok(export::write_file(&path, &table, config.get().export.dialect)?)
 }

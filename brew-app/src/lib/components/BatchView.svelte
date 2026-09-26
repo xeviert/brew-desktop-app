@@ -3,6 +3,7 @@
   import Curve from "$lib/components/Curve.svelte";
   import StatusCard from "$lib/components/StatusCard.svelte";
   import {
+    exportBatchReadings,
     listBatches,
     toApiError,
     type ApiError,
@@ -10,6 +11,7 @@
     type Config,
     type SourceStatus,
   } from "$lib/api";
+  import { csvName, saveCsv } from "$lib/export";
   import { href } from "$lib/route";
 
   // A stand-in host until the Phase 3 batch screen exists: a picker, the card and the curve.
@@ -23,6 +25,7 @@
   let batches = $state<Batch[]>([]);
   let loaded = $state(false);
   let error = $state<ApiError | null>(null);
+  let exportError = $state<ApiError | null>(null);
 
   const batch = $derived(batches.find((b) => b.id === batchId) ?? null);
 
@@ -37,6 +40,18 @@
       }
     })();
   });
+
+  /** Every reading bound to the batch, not the curve's zoom. */
+  async function exportReadings() {
+    if (!batch) return;
+    const { id, code } = batch;
+    try {
+      await saveCsv(csvName([code, "readings"]), (path) => exportBatchReadings(id, path));
+      exportError = null;
+    } catch (e) {
+      exportError = toApiError(e);
+    }
+  }
 
   function pick(e: Event) {
     location.hash = href({ name: "batch", id: Number((e.currentTarget as HTMLSelectElement).value) });
@@ -57,6 +72,8 @@
       {/each}
     </select>
     <a class="compare" href={href({ name: "compare", ids: [batchId] })}>Compare with…</a>
+    <button class="export" disabled={!batch} onclick={exportReadings}>Export readings</button>
+    {#if exportError}<p role="alert">{exportError.message}</p>{/if}
 
     {#if batch}
       <!-- Keyed: a curve's zoom and cached data belong to one batch. -->
@@ -78,6 +95,10 @@
   .compare {
     margin-left: 1rem;
     color: #9aa0a6;
+  }
+
+  .export {
+    margin-left: 1rem;
   }
 
   .empty {

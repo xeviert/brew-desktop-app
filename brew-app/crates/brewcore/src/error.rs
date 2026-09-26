@@ -37,6 +37,15 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// Phase 5e. Its own variant for the same reason as [`Error::ConfigWrite`]: the
+    /// path is the part the user chose, and the only part that helps.
+    #[error("could not write export to {path}: {source}")]
+    ExportWrite {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     // `#[source]` rather than `#[from]`: a bare `#[from]` would let `?` drop which
     // file failed to parse, and Phase 2 reads more than one.
     #[error("{path} is not valid TOML: {source}")]
@@ -490,6 +499,7 @@ impl Error {
             Error::MeasurementImplausible { .. } => "db.measurement_implausible",
             Error::NoOriginalGravity { .. } => "db.no_original_gravity",
             Error::CompareCount { .. } => "compare.batch_count",
+            Error::ExportWrite { .. } => "export.write",
             Error::FilterVersion { .. } => "query.filter_version",
             Error::InvalidFilter { .. } => "query.invalid_filter",
             Error::NoSuchSavedQuery { .. } => "db.no_such_saved_query",

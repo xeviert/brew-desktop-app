@@ -56,7 +56,7 @@ function dayEnd(date: string): number | null {
 	return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() / 1000 - 1;
 }
 
-function toDate(seconds: number): string {
+export function toDate(seconds: number): string {
 	const d = new Date(seconds * 1000);
 	const pad = (n: number) => String(n).padStart(2, "0");
 	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;

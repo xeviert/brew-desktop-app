@@ -160,6 +160,15 @@
   </label>
 
   <label>
+    <span>CSV export</span>
+    <select bind:value={draft.export.dialect}>
+      <option value="rfc4180">RFC 4180</option>
+      <option value="excel_fr">Excel (French) — ; separator, , decimal</option>
+    </select>
+    <small>files are always in canonical units</small>
+  </label>
+
+  <label>
     <span>iSpindle outputs</span>
     <!-- No default: the device publishes a bare number, and SG and °P both look plausible. -->
     <select bind:value={draft.gravity.ispindel_unit}>

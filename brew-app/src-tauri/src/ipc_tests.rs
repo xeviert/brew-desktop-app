@@ -607,3 +607,80 @@ fn a_filter_the_backend_cannot_read_is_refused() {
     );
     assert_eq!(err["code"], "query.name_empty");
 }
+
+/// 5e. Canonical units whatever the display unit, in the configured dialect, at the
+/// path the dialog chose.
+#[test]
+fn exports_write_the_screens_query_in_the_configured_dialect() {
+    let app = Harness::new();
+    let a = pitched(&app, "SELTZER-001", Some(1.040));
+    let b = pitched(&app, "SELTZER-002", None);
+    let mut config = app.invoke("get_config", json!({})).unwrap();
+    config["ui"]["gravity_display"] = json!("plato");
+    config["export"]["dialect"] = json!("excel_fr");
+    app.invoke("set_config", json!({ "config": config }))
+        .unwrap();
+    let dir = app._dir.path();
+    let read = |name: &str| {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        text.strip_prefix('\u{feff}').expect("a BOM").to_owned()
+    };
+
+    let path = dir.join("batches.csv");
+    app.invoke(
+        "export_query",
+        json!({ "filter": filter(json!({})), "table": "batches", "path": path }),
+    )
+    .unwrap();
+    let batches = read("batches.csv");
+    let mut lines = batches.lines();
+    assert!(lines.next().unwrap().starts_with("match;batch_id;code;"));
+    assert!(
+        lines.next().unwrap().starts_with(&format!(
+            "matched;{a};SELTZER-001;seltzer;fermenting;1700000000;2023-11-14T22:13:20Z;;;1,04;"
+        )),
+        "{batches}"
+    );
+
+    let path = dir.join("strains.csv");
+    app.invoke(
+        "export_query",
+        json!({ "filter": filter(json!({})), "table": "strains", "path": path }),
+    )
+    .unwrap();
+    assert!(read("strains.csv").contains(&format!("no_yeast;;;2;;{a} | {b};")));
+
+    let path = dir.join("overlay.csv");
+    app.invoke(
+        "export_comparison",
+        json!({
+            "batchIds": [a, b],
+            "yMode": "fraction",
+            "withTemp": false,
+            "range": null,
+            "path": path,
+        }),
+    )
+    .unwrap();
+    let overlay = read("overlay.csv");
+    assert!(overlay.contains(";attenuation_fraction;"), "{overlay}");
+    assert!(overlay.contains(";sg;"), "{overlay}");
+    assert!(overlay.contains(";no_og;"), "{overlay}");
+
+    let path = dir.join("readings.csv");
+    app.invoke(
+        "export_batch_readings",
+        json!({ "batchId": a, "path": path }),
+    )
+    .unwrap();
+    // A header and the fixture's 96 readings.
+    assert_eq!(read("readings.csv").lines().count(), 97);
+
+    let bad = dir.join("missing").join("out.csv");
+    let err = app.api_error(
+        "export_batch_readings",
+        json!({ "batchId": a, "path": bad }),
+    );
+    assert_eq!(err["code"], "export.write");
+}
