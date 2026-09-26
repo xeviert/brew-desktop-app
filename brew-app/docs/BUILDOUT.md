@@ -1087,17 +1087,30 @@ with events marked; and a 60-day, 30 s journal stays interactive when zoomed.
       (`query_options`) offers only lots some batch used, with the count, and
       recipes by their locked versions only
 
-**5d. Yeast / strain rollup**
-- [ ] Group 5a's metrics by actual strain: n, median and range of attenuation,
+**5d. Yeast / strain rollup** — `db/rollup.rs`, no migration
+- [x] Group 5a's metrics by actual strain: n, median and range of attenuation,
       lag, days to terminal, ferm temp. Median, not mean — at n = 4 one stuck
-      batch owns the mean
-- [ ] Measured attenuation beside the strain's own `attenuation_min`/`max` band,
+      batch owns the mean. **Refined:** each metric is a `calc::batch_metrics::Spread`
+      over the batches that have it, so its own `n` shows how many of the row's
+      did; none is `null`, never 0. Ferm temp is the median of each batch's
+      median. Rows by n, then name. `db::rollup::{group, strain_rollup}`
+- [x] Measured attenuation beside the strain's own `attenuation_min`/`max` band,
       flagged when the median falls outside it — either the strain record is
-      wrong or the process is
-- [ ] A batch with two strains goes to a "mixed" row, never counted twice
-- [ ] n < 3 is shown greyed out, not hidden
-- [ ] Filterable by the same `BatchFilter` as 5c, so "EC-1118 on seltzer only" is
-      the same code path
+      wrong or the process is. **Refined:** `band_check` is `below`/`within`/
+      `above`, both directions flagged; only with both ends recorded
+      (`attenuation_band`), as 4c's expected FG. A seltzer past a wine-yeast band
+      is the finding, not noise
+- [x] A batch with two strains goes to a "mixed" row, never counted twice.
+      **Refined:** one mixed row for all of them, listing every strain involved,
+      with no band. A matched batch with no yeast recorded is `no_yeast`, listed
+      under the table, not dropped
+- [x] n < 3 is shown greyed out, not hidden. **Refined:** `thin` is computed in
+      Rust (`MIN_ROLLUP_N`), so 5e's export carries it
+- [x] Filterable by the same `BatchFilter` as 5c, so "EC-1118 on seltzer only" is
+      the same code path. **Refined:** the rollup rides on 5c's result —
+      `QueryView.rollup`, computed in the same read from `run_query`'s rows — so
+      the two views can't disagree and 5c's unevaluated batches aren't counted.
+      A "Batches | By strain" toggle on `#/query`, no new command or route
 
 **5e. CSV export** — Rust side, `csv` crate, one writer
 - [ ] Export is the **same query** as the screen plus a writer, never a scrape of

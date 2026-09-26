@@ -1,15 +1,18 @@
 //! Dev helpers. `gen-fixture` emits byte-accurate Fermentrack `_full.csv` files and
 //! `brewd` journals so ingest can be built and tested without either running. `build-pi` cross-compiles
 //! `brewd` for the Pi Zero 2 W. `demo-db` writes one long ferment to look at the chart
-//! against, with a few more batches beside it for 5b's comparison overlay and 5c's
-//! queries.
+//! against, with a few more batches beside it for 5b's comparison overlay, 5c's
+//! queries and 5d's strain rollup.
 
 use std::path::{Path, PathBuf};
 
 use brewcore::{
     db::{
         Db, Metric, SourceKind,
-        batch::{NewBatch, NewBatchIngredient, add_batch_ingredient, archive_batch, create_batch},
+        batch::{
+            NewBatch, NewBatchIngredient, add_batch_ingredient, archive_batch, create_batch,
+            set_batch_measurements,
+        },
         measurement::{EntryUnit, Instrument, NewMeasurement, record_measurement},
         recipe::{BeverageType, Stage},
         reference::{
@@ -117,12 +120,14 @@ fn demo_db(path: Option<PathBuf>) {
     let written = db.write(|conn| {
         let tx = conn.transaction()?;
         // A strain, its ingredient, and one lot; returns the lot.
-        let yeast_lot = |name: &str, lab: &str| -> brewcore::Result<i64> {
+        let yeast_lot = |name: &str, lab: &str, band: (f64, f64)| -> brewcore::Result<i64> {
             let strain = create_yeast_strain(
                 &tx,
                 &NewYeastStrain {
                     name: name.into(),
                     lab: Some(lab.into()),
+                    attenuation_min: Some(band.0),
+                    attenuation_max: Some(band.1),
                     ..Default::default()
                 },
             )?;
@@ -164,8 +169,10 @@ fn demo_db(path: Option<PathBuf>) {
                 },
             )
         };
-        let ec1118 = yeast_lot("EC-1118", "Lallemand")?;
-        let us05 = yeast_lot("US-05", "Fermentis")?;
+        // A seltzer ferments past a band written for grape must, so EC-1118's row is
+        // flagged; US-05's sits inside its datasheet.
+        let ec1118 = yeast_lot("EC-1118", "Lallemand", (0.90, 1.00))?;
+        let us05 = yeast_lot("US-05", "Fermentis", (0.78, 0.82))?;
         let batch_id = create_batch(
             &tx,
             &NewBatch {
@@ -301,8 +308,9 @@ fn demo_db(path: Option<PathBuf>) {
 
         let base = now - now % HOUR;
         // The two seltzers answer 5c's "EC-1118 seltzers, OG 1.035–1.040, at 18 °C";
-        // SELTZER-001 has no OG, so it is the one the query can't judge.
-        for (n, (code, kind, og, fg, tau_h, beer_c, ago, days, archived, lot)) in [
+        // SELTZER-001 has no OG, so it is the one the query can't judge. CIDER-004 took
+        // both strains: 5d's mixed row.
+        for (n, (code, kind, og, fg, tau_h, beer_c, ago, days, archived, lots)) in [
             (
                 "ALE-002",
                 BeverageType::Beer,
@@ -313,19 +321,19 @@ fn demo_db(path: Option<PathBuf>) {
                 120 * DAY,
                 14 * DAY,
                 true,
-                us05,
+                vec![us05],
             ),
             (
                 "ALE-003",
                 BeverageType::Beer,
                 1.062,
-                1.014,
+                1.012,
                 44.0,
                 20.0,
                 9 * DAY,
                 9 * DAY,
                 false,
-                us05,
+                vec![us05],
             ),
             (
                 "CIDER-004",
@@ -337,7 +345,7 @@ fn demo_db(path: Option<PathBuf>) {
                 30 * DAY,
                 20 * DAY,
                 false,
-                ec1118,
+                vec![ec1118, us05],
             ),
             (
                 "SELTZER-006",
@@ -349,7 +357,7 @@ fn demo_db(path: Option<PathBuf>) {
                 90 * DAY,
                 14 * DAY,
                 true,
-                ec1118,
+                vec![ec1118],
             ),
             (
                 "SELTZER-007",
@@ -361,7 +369,7 @@ fn demo_db(path: Option<PathBuf>) {
                 20 * DAY,
                 14 * DAY,
                 false,
-                ec1118,
+                vec![ec1118],
             ),
         ]
         .into_iter()
@@ -383,7 +391,10 @@ fn demo_db(path: Option<PathBuf>) {
                 at(-DAY),
             )?;
             record_pitch(&tx, batch_id, at(0), None)?;
-            pitch_yeast(batch_id, lot)?;
+            for lot in lots {
+                pitch_yeast(batch_id, lot)?;
+            }
+            set_batch_measurements(&tx, batch_id, None, None, Some(Sg::new(fg)?))?;
             let source = create_source(&tx, SourceKind::BrewdJournal, &format!("tilt-{n}"), None)?;
             let sg = create_stream(&tx, source, "gravity", Metric::Sg)?;
             let temp = create_stream(&tx, source, "temperature", Metric::TempC)?;

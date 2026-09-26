@@ -554,6 +554,8 @@ fn a_query_is_saved_run_and_archived() {
         view["unevaluated"],
         json!([{ "batch_id": b, "code": "SELTZER-002", "criterion": "og", "reason": "no_og" }])
     );
+    // 5d rides along: no yeast recorded, so no strain row, but the batch is counted.
+    assert_eq!(view["rollup"], json!({ "rows": [], "no_yeast": [a] }));
 
     let saved = app
         .invoke(

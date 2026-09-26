@@ -37,6 +37,7 @@
   } from "$lib/query";
   import { href } from "$lib/route";
   import { formatMoney, formatTemp, formatTimestamp } from "$lib/units";
+  import RollupTable from "./RollupTable.svelte";
 
   let { id, ui }: { id: number | null; ui: Config["ui"] } = $props();
 
@@ -57,6 +58,7 @@
   let picked = $state<number[]>([]);
   let sortKey = $state<SortKey>("code");
   let desc = $state(false);
+  let mode = $state<"batches" | "strains">("batches");
 
   const parsed = $derived(toFilter(form, formTemp));
   const dirty = $derived(
@@ -64,6 +66,7 @@
   );
   const versions = $derived(options.recipes.find((r) => r.id === form.recipe_id)?.versions ?? []);
   const rows = $derived(view ? sortRows(view.rows, sortKey, desc) : []);
+  const codes = $derived(new Map(view?.rows.map((r) => [r.batch_id, r.code])));
 
   let busy = false;
   let again = false;
@@ -370,17 +373,25 @@
   {#if view}
     <div class="toolbar">
       <span>{view.rows.length} batch{view.rows.length === 1 ? "" : "es"}</span>
-      <button
-        disabled={picked.length < 2 || picked.length > MAX_OVERLAY}
-        title="Overlay 2 to {MAX_OVERLAY} ticked batches"
-        onclick={() => (location.hash = href({ name: "compare", ids: picked }))}
-      >
-        Overlay these ({picked.length})
-      </button>
-      <button disabled title="CSV export arrives in 5e">Export</button>
+      <span class="modes">
+        <label><input type="radio" value="batches" bind:group={mode} /> Batches</label>
+        <label><input type="radio" value="strains" bind:group={mode} /> By strain</label>
+      </span>
+      {#if mode === "batches"}
+        <button
+          disabled={picked.length < 2 || picked.length > MAX_OVERLAY}
+          title="Overlay 2 to {MAX_OVERLAY} ticked batches"
+          onclick={() => (location.hash = href({ name: "compare", ids: picked }))}
+        >
+          Overlay these ({picked.length})
+        </button>
+        <button disabled title="CSV export arrives in 5e">Export</button>
+      {/if}
     </div>
 
-    {#if view.rows.length}
+    {#if mode === "strains"}
+      <RollupTable rollup={view.rollup} {codes} unevaluated={view.unevaluated.length} {ui} />
+    {:else if view.rows.length}
       <table>
         <thead>
           <tr>
@@ -420,7 +431,7 @@
       <p class="empty">No batch matches.</p>
     {/if}
 
-    {#if view.unevaluated.length}
+    {#if mode === "batches" && view.unevaluated.length}
       <p class="hint">Couldn't judge — neither matched nor excluded:</p>
       <ul class="unevaluated">
         {#each view.unevaluated as u (u.batch_id)}
@@ -457,6 +468,11 @@
     align-items: center;
     gap: 0.75rem;
     margin-bottom: 0.5rem;
+  }
+
+  .modes {
+    display: flex;
+    gap: 0.5rem;
   }
 
   .filter {

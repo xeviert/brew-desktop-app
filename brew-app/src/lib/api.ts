@@ -685,10 +685,51 @@ export interface Unevaluated {
 	reason: Missing;
 }
 
+/** Mirrors `brewcore::calc::batch_metrics::Spread`. */
+export interface Spread {
+	median: number;
+	min: number;
+	max: number;
+	/** How many batches had the value. */
+	n: number;
+}
+
+/** Mirrors `brewcore::db::rollup::RollupGroup`. */
+export type RollupGroup =
+	| { kind: "strain"; id: number; name: string }
+	| { kind: "mixed"; strains: { id: number; name: string }[] };
+
+export type BandCheck = "below" | "within" | "above";
+
+/** Mirrors `brewcore::db::rollup::StrainRollup`. */
+export interface StrainRollup {
+	group: RollupGroup;
+	batch_ids: number[];
+	n: number;
+	/** `n` under 3: shown, greyed. */
+	thin: boolean;
+	/** Fractions. */
+	attenuation: Spread | null;
+	lag_secs: Spread | null;
+	terminal_secs: Spread | null;
+	/** °C. */
+	ferm_temp_c: Spread | null;
+	/** The strain record's datasheet band, fractions. */
+	band: { min: number; max: number } | null;
+	band_check: BandCheck | null;
+}
+
+/** Mirrors `brewcore::db::rollup::Rollup`: 5d, over the same rows as the table. */
+export interface Rollup {
+	rows: StrainRollup[];
+	no_yeast: number[];
+}
+
 /** Mirrors `src-tauri`'s `QueryView`. */
 export interface QueryView {
 	rows: QueryRow[];
 	unevaluated: Unevaluated[];
+	rollup: Rollup;
 	gravity_unit: string;
 }
 

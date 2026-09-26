@@ -19,6 +19,7 @@ use brewcore::{
             Unevaluated,
         },
         reference::{self, VesselKind, VesselRow},
+        rollup::{self, Rollup},
         series::{self, BatchSeries, SeriesRange},
         stability,
         tier1::{self, StreamRow},
@@ -538,6 +539,8 @@ pub async fn compare_batches(
 pub struct QueryView {
     pub rows: Vec<QueryRowView>,
     pub unevaluated: Vec<Unevaluated>,
+    /// 5d: the same rows grouped by strain, so the two views can't disagree.
+    pub rollup: Rollup,
     pub gravity_unit: &'static str,
 }
 
@@ -550,7 +553,7 @@ pub struct QueryRowView {
     pub display_fg: Option<f64>,
 }
 
-fn query_view(result: QueryResult, display: GravityDisplay) -> QueryView {
+fn query_view(result: QueryResult, rollup: Rollup, display: GravityDisplay) -> QueryView {
     QueryView {
         rows: result
             .rows
@@ -562,6 +565,7 @@ fn query_view(result: QueryResult, display: GravityDisplay) -> QueryView {
             })
             .collect(),
         unevaluated: result.unevaluated,
+        rollup,
         gravity_unit: display.unit(),
     }
 }
@@ -575,8 +579,12 @@ pub async fn run_batch_query(
 ) -> ApiResult<QueryView> {
     let config = config.get();
     let params = config.stability.params();
-    let result = db.read(|conn| query::run_query(conn, &filter, &params))?;
-    Ok(query_view(result, config.ui.gravity_display))
+    let (result, rollup) = db.read(|conn| {
+        let result = query::run_query(conn, &filter, &params)?;
+        let rollup = rollup::strain_rollup(conn, &result.rows)?;
+        Ok((result, rollup))
+    })?;
+    Ok(query_view(result, rollup, config.ui.gravity_display))
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -594,14 +602,15 @@ pub async fn run_saved_query(
 ) -> ApiResult<SavedQueryRun> {
     let config = config.get();
     let params = config.stability.params();
-    let (query, result) = db.read(|conn| {
+    let (query, result, rollup) = db.read(|conn| {
         let query = query::get_saved_query(conn, id)?;
         let result = query::run_query(conn, &query.filter, &params)?;
-        Ok((query, result))
+        let rollup = rollup::strain_rollup(conn, &result.rows)?;
+        Ok((query, result, rollup))
     })?;
     Ok(SavedQueryRun {
         query,
-        result: query_view(result, config.ui.gravity_display),
+        result: query_view(result, rollup, config.ui.gravity_display),
     })
 }
 

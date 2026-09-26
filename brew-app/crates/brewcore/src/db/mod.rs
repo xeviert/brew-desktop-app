@@ -15,6 +15,7 @@ mod paths;
 pub mod query;
 pub mod recipe;
 pub mod reference;
+pub mod rollup;
 pub mod series;
 pub mod stability;
 pub mod tier1;

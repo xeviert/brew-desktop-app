@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { QueryRow } from "./api";
-import { emptyFilter, preselect, sortRows, toFilter, toForm } from "./query";
+import {
+	emptyFilter,
+	formatSpread,
+	preselect,
+	rollupLabel,
+	sortRows,
+	toFilter,
+	toForm,
+} from "./query";
 
 const row = (over: Partial<QueryRow>): QueryRow => ({
 	batch_id: 1,
@@ -95,5 +103,36 @@ describe("preselect", () => {
 	});
 	it("ticks nothing past the overlay limit", () => {
 		expect(preselect(Array.from({ length: 9 }, (_, i) => row({ batch_id: i })))).toEqual([]);
+	});
+});
+
+describe("formatSpread", () => {
+	const pct = (v: number) => `${Math.round(v * 100)} %`;
+
+	it("shows the median with its range", () => {
+		expect(formatSpread({ median: 0.98, min: 0.9, max: 1.02, n: 3 }, pct)).toBe("98 % (90 %–102 %)");
+	});
+
+	it("drops a range of one value", () => {
+		expect(formatSpread({ median: 0.98, min: 0.98, max: 0.98, n: 1 }, pct)).toBe("98 %");
+	});
+
+	it("is a dash when no batch had it", () => {
+		expect(formatSpread(null, pct)).toBe("—");
+	});
+});
+
+describe("rollupLabel", () => {
+	it("names a strain, or every strain of a mixed row", () => {
+		expect(rollupLabel({ kind: "strain", id: 1, name: "EC-1118" })).toBe("EC-1118");
+		expect(
+			rollupLabel({
+				kind: "mixed",
+				strains: [
+					{ id: 1, name: "EC-1118" },
+					{ id: 2, name: "US-05" },
+				],
+			}),
+		).toBe("Mixed: EC-1118 + US-05");
 	});
 });

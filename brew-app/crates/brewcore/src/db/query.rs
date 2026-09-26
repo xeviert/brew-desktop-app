@@ -581,13 +581,14 @@ mod tests {
             Metric, SourceKind,
             batch::{
                 NewBatch, NewBatchIngredient, add_batch_ingredient, archive_batch, create_batch,
-                set_pitched_at, transition_batch,
+                set_batch_measurements, set_pitched_at, transition_batch,
             },
             recipe::{NewRecipeVersion, Stage, create_recipe, create_recipe_version},
             reference::{
                 NewIngredient, NewLot, NewYeastStrain, create_ingredient, create_lot,
                 create_yeast_strain,
             },
+            rollup::{BandCheck, RollupGroup, strain_rollup},
             tier1::{create_source, create_stream, insert_readings},
             timeline::bind_stream,
         },
@@ -651,10 +652,16 @@ mod tests {
 
     /// A strain, its ingredient, and one lot of it.
     fn yeast(conn: &Connection, name: &str) -> (i64, i64, i64) {
+        yeast_banded(conn, name, None)
+    }
+
+    fn yeast_banded(conn: &Connection, name: &str, band: Option<(f64, f64)>) -> (i64, i64, i64) {
         let strain = create_yeast_strain(
             conn,
             &NewYeastStrain {
                 name: name.into(),
+                attenuation_min: band.map(|b| b.0),
+                attenuation_max: band.map(|b| b.1),
                 ..Default::default()
             },
         )
@@ -1077,5 +1084,48 @@ mod tests {
         assert_eq!(list_saved_queries(&conn, false).unwrap().len(), 1);
         let err = get_saved_query(&conn, id).unwrap_err();
         assert_eq!(err.code(), "query.filter_version");
+    }
+    /// 5d over 5c: "EC-1118 on seltzer only" is a filter, and the rollup groups its rows.
+    #[test]
+    fn the_strain_rollup_groups_the_query_rows() {
+        let conn = db();
+        let (ec1118, _, ec) = yeast_banded(&conn, "EC-1118", Some((0.88, 0.98)));
+        let (_, _, us05) = yeast(&conn, "US-05");
+        let finished = |code: &str, kind: BeverageType, lots: &[i64]| {
+            let id = batch(&conn, code, kind, Some(1.040));
+            set_batch_measurements(&conn, id, None, None, Some(sg(0.998))).unwrap();
+            for &lot in lots {
+                pitch(&conn, id, lot);
+            }
+            id
+        };
+        let seltzer = BeverageType::Seltzer;
+        let a = finished("SELTZER-001", seltzer, &[ec]);
+        let b = finished("SELTZER-002", seltzer, &[ec]);
+        let c = finished("SELTZER-003", seltzer, &[ec]);
+        let mixed = finished("SELTZER-004", seltzer, &[ec, us05]);
+        finished("SELTZER-005", seltzer, &[us05]);
+        finished("BEER-006", BeverageType::Beer, &[ec]);
+
+        let result = run(
+            &conn,
+            &BatchFilter {
+                beverage_types: vec![seltzer],
+                strain_ids: vec![ec1118],
+                ..Default::default()
+            },
+        );
+        let rollup = strain_rollup(&conn, &result.rows).unwrap();
+
+        assert_eq!(rollup.rows.len(), 2);
+        let ec_row = &rollup.rows[0];
+        assert!(matches!(&ec_row.group, RollupGroup::Strain(s) if s.id == ec1118));
+        assert_eq!(ec_row.batch_ids, [a, b, c]);
+        // A seltzer finishing under 1.000 is past a beer datasheet's band.
+        assert_eq!(ec_row.band_check, Some(BandCheck::Above));
+        assert!(
+            matches!(&rollup.rows[1].group, RollupGroup::Mixed { strains } if strains.len() == 2)
+        );
+        assert_eq!(rollup.rows[1].batch_ids, [mixed]);
     }
 }

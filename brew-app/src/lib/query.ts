@@ -7,7 +7,7 @@
  * gravity in SG (the filter never converts it), temperature in the display unit, and
  * pitch dates as local days.
  */
-import type { BatchFilter, Bounds, Computed, QueryRow } from "$lib/api";
+import type { BatchFilter, Bounds, Computed, QueryRow, RollupGroup, Spread } from "$lib/api";
 import { fromDisplayTemp, toDisplayTemp, type TempDisplay } from "$lib/units";
 
 /**
@@ -189,4 +189,16 @@ export const MAX_OVERLAY = 8;
 export function preselect(rows: QueryRow[]): number[] {
 	if (rows.length > MAX_OVERLAY) return [];
 	return rows.filter((r) => r.pitched_at !== null).map((r) => r.batch_id);
+}
+
+/** 5d: `median (min–max)`, the range dropped when there's nothing to range over. */
+export function formatSpread(s: Spread | null, f: (v: number) => string): string {
+	if (s === null) return "—";
+	return s.min === s.max ? f(s.median) : `${f(s.median)} (${f(s.min)}–${f(s.max)})`;
+}
+
+export function rollupLabel(group: RollupGroup): string {
+	return group.kind === "strain"
+		? group.name
+		: `Mixed: ${group.strains.map((s) => s.name).join(" + ")}`;
 }
