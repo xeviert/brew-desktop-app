@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
+  import Devices from "$lib/components/Devices.svelte";
   import {
     batchDashboard,
     onSyncStatus,
@@ -8,12 +9,18 @@
     type ApiError,
     type Config,
     type Dashboard,
+    type SourceStatus,
   } from "$lib/api";
   import { estimateText, fgSourceText, formatGravityIn, gravitySource, stabilityText } from "$lib/dashboard";
   import { age } from "$lib/format";
   import { formatTemp } from "$lib/units";
 
-  let { batchId, code, ui }: { batchId: number; code: string; ui: Config["ui"] } = $props();
+  let {
+    batchId,
+    code,
+    ui,
+    syncs,
+  }: { batchId: number; code: string; ui: Config["ui"]; syncs: Record<number, SourceStatus> } = $props();
 
   let card = $state.raw<Dashboard | null>(null);
   let error = $state<ApiError | null>(null);
@@ -144,6 +151,11 @@
           </span>
         {/if}
       </dd>
+
+      {#if card.devices.length > 0}
+        <dt>Devices</dt>
+        <dd><Devices devices={card.devices} {syncs} /></dd>
+      {/if}
     </dl>
   {/if}
 </div>

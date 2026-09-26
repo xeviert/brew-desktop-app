@@ -433,3 +433,20 @@ fn the_card_offers_an_og_and_takes_it() {
     let err = app.api_error("batch_dashboard", json!({ "batchId": 404 }));
     assert_eq!(err["code"], "db.no_such_batch");
 }
+
+#[test]
+fn home_lists_the_fermenting_batch_and_its_devices() {
+    let app = Harness::new();
+    let batch_id = pitched_batch(&app);
+
+    let home = app.invoke("home_summary", json!({})).unwrap();
+    assert_eq!(home["gravity_unit"], "SG");
+    let card = &home["batches"][0];
+    assert_eq!(card["code"], "SELTZER-001");
+    assert_eq!(card["dashboard"]["batch_id"], batch_id);
+    assert!(card["display"]["gravity"].is_number(), "{card}");
+    // The fixture's readings are from 2023: long silent.
+    assert_eq!(card["streams"][0]["stale"], true);
+    assert_eq!(home["devices"][0]["name"], "ispindel");
+    assert_eq!(home["devices"][0]["stale"], true);
+}

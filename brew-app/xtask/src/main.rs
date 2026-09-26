@@ -81,6 +81,8 @@ const DAY: i64 = 24 * HOUR;
 /// One seltzer, pitched 60 days ago so the default range is the whole ferment: an
 /// ESP32 at 30 s, an iSpindle at 15 min, a few hydrometer and pH readings, the usual
 /// events, and three days with the Pi off. 4d's "stays interactive" is judged on this.
+/// The iSpindle's battery runs down and it goes quiet for the last 12 h, so 4f's home
+/// screen has a silent sensor and a "battery likely" guess to show.
 ///
 /// Refuses an existing file rather than replacing it: the path is whatever was typed,
 /// and it could be the real database.
@@ -129,15 +131,16 @@ fn demo_db(path: Option<PathBuf>) {
             (ispindel, "gravity", Metric::Sg),
             (ispindel, "temperature", Metric::GravityTempC),
             (ispindel, "battery", Metric::BatteryV),
+            (ispindel, "rssi", Metric::RssiDbm),
         ]
         .map(|(source, name, metric)| {
             let id = create_stream(&tx, source, name, metric)?;
             bind_stream(&tx, batch_id, id, at(0), None)?;
             Ok::<_, brewcore::Error>(id)
         });
-        let [temp, setpoint, room, sg, sg_temp, battery] = streams;
+        let [temp, setpoint, room, sg, sg_temp, battery, rssi] = streams;
         let (temp, setpoint, room) = (temp?, setpoint?, room?);
-        let (sg, sg_temp, battery) = (sg?, sg_temp?, battery?);
+        let (sg, sg_temp, battery, rssi) = (sg?, sg_temp?, battery?, rssi?);
 
         let setpoint_at = |t: i64| if t < cold_crash { 18.0 } else { 2.0 };
         // Runs warm while the yeast works, and lags the setpoint down after the crash.
@@ -155,13 +158,17 @@ fn demo_db(path: Option<PathBuf>) {
             rows.push((setpoint, at(t), setpoint_at(t)));
             rows.push((room, at(t), 21.0 + 2.0 * day_cycle + rng.noise(0.1)));
         }
-        for t in (0..60 * DAY).step_by(900).filter(|t| !pi_off.contains(t)) {
+        for t in (0..60 * DAY - 12 * HOUR)
+            .step_by(900)
+            .filter(|t| !pi_off.contains(t))
+        {
             // A knock once a week: the spike 4a's min/max must keep and 4b's median
             // must drop.
             let bump = if t % (7 * DAY) == 3 * DAY { 0.012 } else { 0.0 };
             rows.push((sg, at(t), gravity_at(hours(t)) + rng.noise(0.002) + bump));
             rows.push((sg_temp, at(t), beer_at(t) + rng.noise(0.2)));
-            rows.push((battery, at(t), 4.1 - 0.3 * hours(t) / (60.0 * 24.0)));
+            rows.push((battery, at(t), 4.1 - 0.45 * hours(t) / (60.0 * 24.0)));
+            rows.push((rssi, at(t), -65.0 + rng.noise(3.0)));
         }
         insert_readings(&tx, &rows)?;
 

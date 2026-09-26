@@ -22,6 +22,7 @@ export interface Config {
 	measurement: { hydrometer_calibration_c: number; refractometer_wort_correction: number };
 	gravity: { ispindel_unit: IspindelUnit | null };
 	stability: { window_hours: number; slope_sg_per_day: number; fg_band: number };
+	health: { battery_warn_v: number; rssi_warn_dbm: number };
 }
 
 /** Mirrors `brewcore::config::IspindelUnit`. `null` in `Config` means not recorded yet. */
@@ -447,6 +448,8 @@ export interface Dashboard {
 	stability: Stability;
 	expected_fg: ExpectedFg | null;
 	source_ids: number[];
+	/** Bound devices that report a battery or a signal. */
+	devices: DeviceHealth[];
 	display: {
 		og: number | null;
 		og_candidate: number | null;
@@ -463,3 +466,64 @@ export const batchDashboard = (batchId: number): Promise<Dashboard> =>
 /** `og` in SG: send back `og_candidate.sg`, not the display value. */
 export const setBatchOg = (batchId: number, og: number): Promise<void> =>
 	call("set_batch_og", { batchId, og });
+
+// ---------------------------------------------------------------------------
+// Phase 4f: home
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::health::Level`. */
+export interface Level {
+	ts: number;
+	value: number;
+	/** Under the configured threshold. */
+	warn: boolean;
+}
+
+/** Mirrors `brewcore::calc::health::SilenceGuess`. */
+export type SilenceGuess = "battery" | "signal";
+
+/** Mirrors `brewcore::db::health::DeviceHealth`. */
+export interface DeviceHealth {
+	source_id: number;
+	name: string;
+	kind: string;
+	newest: number | null;
+	stale: boolean;
+	battery: Level | null;
+	rssi: Level | null;
+	/** `[ts, volts]`, oldest first. */
+	battery_7d: [number, number][];
+	/** Only when stale, and a guess. */
+	guess: SilenceGuess | null;
+}
+
+/** Mirrors `brewcore::db::series::Freshness`. */
+export interface Freshness {
+	stream_id: number;
+	source_id: number;
+	metric: string;
+	source_kind: string;
+	label: string;
+	newest: number | null;
+	stale: boolean;
+}
+
+/** Mirrors `src-tauri`'s `HomeBatchView`. `display` is in `HomeSummary.gravity_unit`. */
+export interface HomeBatch {
+	code: string;
+	status: string;
+	vessel: string | null;
+	dashboard: Omit<Dashboard, "display" | "gravity_unit">;
+	streams: Freshness[];
+	newest: number | null;
+	display: Dashboard["display"];
+}
+
+/** Mirrors `src-tauri`'s `HomeView`. */
+export interface HomeSummary {
+	batches: HomeBatch[];
+	devices: DeviceHealth[];
+	gravity_unit: string;
+}
+
+export const homeSummary = (): Promise<HomeSummary> => call("home_summary");

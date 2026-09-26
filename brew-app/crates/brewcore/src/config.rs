@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, Result,
-    calc::stability::StabilityParams,
+    calc::{health::HealthParams, stability::StabilityParams},
     units::{GravityDisplay, TempDisplay},
 };
 
@@ -60,6 +60,16 @@ pub const DEFAULT_STABILITY_FG_BAND: f64 = crate::calc::stability::FG_BAND_DEFAU
 pub const MIN_STABILITY_FG_BAND: f64 = 0.0005;
 pub const MAX_STABILITY_FG_BAND: f64 = 0.020;
 
+/// Phase 4f. When a device's own battery and signal are worth a warning. Settings
+/// because a Li-ion cutoff and a Wi-Fi floor are properties of the hardware.
+pub const DEFAULT_HEALTH_BATTERY_WARN_V: f64 = crate::calc::health::BATTERY_WARN_V_DEFAULT;
+pub const MIN_HEALTH_BATTERY_WARN_V: f64 = 3.0;
+pub const MAX_HEALTH_BATTERY_WARN_V: f64 = 4.2;
+
+pub const DEFAULT_HEALTH_RSSI_WARN_DBM: f64 = crate::calc::health::RSSI_WARN_DBM_DEFAULT;
+pub const MIN_HEALTH_RSSI_WARN_DBM: f64 = -100.0;
+pub const MAX_HEALTH_RSSI_WARN_DBM: f64 = -50.0;
+
 /// Resolve the config path from `default_dir`, honouring [`CONFIG_PATH_ENV`].
 ///
 /// As with [`crate::db::resolve_db_path`], the caller supplies the directory because
@@ -93,6 +103,7 @@ pub struct Config {
     pub measurement: Measurement,
     pub gravity: Gravity,
     pub stability: Stability,
+    pub health: Health,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +202,32 @@ impl Stability {
             window_secs: (self.window_hours * 3_600.0).round() as i64,
             slope_sg_per_day: self.slope_sg_per_day,
             fg_band: self.fg_band,
+        }
+    }
+}
+
+/// Phase 4f. Passed to `calc::health` via [`Health::params`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Health {
+    pub battery_warn_v: f64,
+    pub rssi_warn_dbm: f64,
+}
+
+impl Default for Health {
+    fn default() -> Self {
+        Self {
+            battery_warn_v: DEFAULT_HEALTH_BATTERY_WARN_V,
+            rssi_warn_dbm: DEFAULT_HEALTH_RSSI_WARN_DBM,
+        }
+    }
+}
+
+impl Health {
+    pub fn params(&self) -> HealthParams {
+        HealthParams {
+            battery_warn_v: self.battery_warn_v,
+            rssi_warn_dbm: self.rssi_warn_dbm,
         }
     }
 }
@@ -294,6 +331,20 @@ impl Config {
                 MIN_STABILITY_FG_BAND,
                 MAX_STABILITY_FG_BAND,
             ),
+            (
+                "health.battery_warn_v",
+                &mut self.health.battery_warn_v,
+                DEFAULT_HEALTH_BATTERY_WARN_V,
+                MIN_HEALTH_BATTERY_WARN_V,
+                MAX_HEALTH_BATTERY_WARN_V,
+            ),
+            (
+                "health.rssi_warn_dbm",
+                &mut self.health.rssi_warn_dbm,
+                DEFAULT_HEALTH_RSSI_WARN_DBM,
+                MIN_HEALTH_RSSI_WARN_DBM,
+                MAX_HEALTH_RSSI_WARN_DBM,
+            ),
         ] {
             let clamped = clamp_finite(*value, default, min, max);
             if clamped != *value {
@@ -349,6 +400,16 @@ impl Config {
                 "stability.fg_band",
                 self.stability.fg_band,
                 MIN_STABILITY_FG_BAND..=MAX_STABILITY_FG_BAND,
+            ),
+            (
+                "health.battery_warn_v",
+                self.health.battery_warn_v,
+                MIN_HEALTH_BATTERY_WARN_V..=MAX_HEALTH_BATTERY_WARN_V,
+            ),
+            (
+                "health.rssi_warn_dbm",
+                self.health.rssi_warn_dbm,
+                MIN_HEALTH_RSSI_WARN_DBM..=MAX_HEALTH_RSSI_WARN_DBM,
             ),
         ] {
             if !value.is_finite() {
@@ -885,6 +946,30 @@ mod tests {
             assert_eq!(err.code(), "config.invalid");
             assert!(err.to_string().contains(field), "{err}");
         }
+    }
+
+    #[test]
+    fn the_health_defaults_are_three_point_six_volts_and_minus_eighty_dbm() {
+        let health = Config::default().health;
+        assert_eq!(health.battery_warn_v, 3.6);
+        assert_eq!(health.rssi_warn_dbm, -80.0);
+        assert_eq!(health.params(), HealthParams::default());
+    }
+
+    #[test]
+    fn health_settings_are_clamped_and_validated_by_name() {
+        let mut config = Config::default();
+        config.health.battery_warn_v = 5.0;
+        config.health.rssi_warn_dbm = f64::NAN;
+        assert_eq!(config.normalize().len(), 2);
+        assert_eq!(config.health.battery_warn_v, MAX_HEALTH_BATTERY_WARN_V);
+        assert_eq!(config.health.rssi_warn_dbm, DEFAULT_HEALTH_RSSI_WARN_DBM);
+        assert!(config.validate().is_ok());
+
+        config.health.rssi_warn_dbm = -20.0;
+        let err = config.validate().unwrap_err();
+        assert_eq!(err.code(), "config.invalid");
+        assert!(err.to_string().contains("health.rssi_warn_dbm"), "{err}");
     }
 
     #[test]

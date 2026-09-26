@@ -252,6 +252,103 @@ pub fn latest_readings(
     Ok(out)
 }
 
+/// A sensor stream bound to the batch now, and whether it has gone quiet.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Freshness {
+    pub stream_id: i64,
+    /// For matching the source's `sync://status`: stale with the Pi unreachable is not
+    /// the sensor's fault.
+    pub source_id: i64,
+    pub metric: Metric,
+    pub source_kind: SourceKind,
+    pub label: String,
+    /// `None` only for a stream a Rebuild has emptied.
+    pub newest: Option<Timestamp>,
+    pub stale: bool,
+}
+
+/// Every non-manual stream with an open binding to the batch, and how fresh it is by
+/// [`stale_after`]. Closed bindings are history, not silence. The newest reading is
+/// the stream's, not only the binding's: a batch pitched a minute ago is not waiting on
+/// a device that reported two minutes ago.
+pub fn stream_freshness(
+    conn: &Connection,
+    batch_id: i64,
+    now: Timestamp,
+) -> Result<Vec<Freshness>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT bs.stream_id, s.source_id, s.metric, src.kind, \
+                COALESCE(s.label, src.name) \
+           FROM batch_stream bs \
+           JOIN stream s ON s.id = bs.stream_id \
+           JOIN source src ON src.id = s.source_id \
+          WHERE bs.batch_id = ?1 AND bs.ends_at IS NULL AND bs.starts_at <= ?2 \
+            AND src.kind != ?3 \
+          ORDER BY s.metric, bs.stream_id",
+    )?;
+    let rows = stmt
+        .query_map(params![batch_id, now, SourceKind::Manual], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Metric>(2)?,
+                row.get::<_, SourceKind>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for (stream_id, source_id, metric, source_kind, label) in rows {
+        let newest: Option<Timestamp> = conn.query_row(
+            "SELECT MAX(ts) FROM reading WHERE stream_id = ? AND ts <= ?",
+            params![stream_id, now],
+            |row| row.get(0),
+        )?;
+        let stale = match newest {
+            Some(ts) => ts.secs_until(now) > stale_after(conn, stream_id, ts)?,
+            None => false,
+        };
+        out.push(Freshness {
+            stream_id,
+            source_id,
+            metric,
+            source_kind,
+            label,
+            newest,
+            stale,
+        });
+    }
+    Ok(out)
+}
+
+/// A stream's average per bucket over `range`, oldest first, at most `max_points`.
+/// Not scoped to a batch — a device's battery outlives the batches it sat in — and
+/// empty buckets are left out: a sparkline has no gaps to show.
+pub fn stream_buckets(
+    conn: &Connection,
+    stream_id: i64,
+    range: SeriesRange,
+    max_points: usize,
+) -> Result<Vec<(Timestamp, f64)>> {
+    if max_points == 0 {
+        return Err(Error::NotPositive {
+            field: "max_points",
+            value: 0.0,
+        });
+    }
+    if range.start >= range.end {
+        return Ok(Vec::new());
+    }
+    let bucket = bucket_secs(range, max_points);
+    Ok(
+        bucketed_rows(conn, stream_id, &[range], range.start, bucket)?
+            .into_iter()
+            .map(|b| (b.first_ts, b.sum / b.count as f64))
+            .collect(),
+    )
+}
+
 // ------------------------------------------------------------- bindings
 
 struct BoundStream {

@@ -10,7 +10,10 @@
    * `ApiError`, and the pane shows "invalid args `config` for command `set_config`".
    * Modelling the hole instead lets Save refuse it with something readable.
    */
-  type Draft = Omit<Config, "sync"> & { sync: { poll_interval_secs: number | null } };
+  type Draft = Omit<Config, "sync" | "health"> & {
+    sync: { poll_interval_secs: number | null };
+    health: { battery_warn_v: number | null; rssi_warn_dbm: number | null };
+  };
 
   // A working copy behind an explicit Save, not save-on-keystroke: every save is an
   // fsync'd file write. `$state.snapshot` first — `structuredClone` on a `$state`
@@ -32,6 +35,8 @@
   // Not coerced to a number on input: snapping an empty field back to 0 or to the
   // default fights the user mid-keystroke. Let it stay empty and block Save.
   const intervalMissing = $derived(!Number.isFinite(draft.sync.poll_interval_secs));
+  const batteryMissing = $derived(!Number.isFinite(draft.health.battery_warn_v));
+  const rssiMissing = $derived(!Number.isFinite(draft.health.rssi_warn_dbm));
 
   // Re-seed from the stored value whenever it changes, so a save's normalised result
   // (trimmed URL, clamped interval) lands in the fields. Reads only `config`, so the
@@ -51,9 +56,14 @@
     try {
       const snapshot = $state.snapshot(draft);
       const poll_interval_secs = snapshot.sync.poll_interval_secs;
-      if (poll_interval_secs === null) return;
+      const { battery_warn_v, rssi_warn_dbm } = snapshot.health;
+      if (poll_interval_secs === null || battery_warn_v === null || rssi_warn_dbm === null) return;
       // Adopt what was stored: the URL may come back trimmed, the interval clamped.
-      const stored = await setConfig({ ...snapshot, sync: { poll_interval_secs } });
+      const stored = await setConfig({
+        ...snapshot,
+        sync: { poll_interval_secs },
+        health: { battery_warn_v, rssi_warn_dbm },
+      });
       onsaved(stored);
       saved = true;
     } catch (e) {
@@ -160,8 +170,28 @@
     <small>whatever its calibration polynomial was written in</small>
   </label>
 
+  <label>
+    <span>Battery warning</span>
+    <input type="number" min="3" max="4.2" step="0.05" bind:value={draft.health.battery_warn_v} />
+    {#if batteryMissing}
+      <small class="warn">required — 3.0 to 4.2 V</small>
+    {:else}
+      <small>volts — a device under this is flagged</small>
+    {/if}
+  </label>
+
+  <label>
+    <span>Signal warning</span>
+    <input type="number" min="-100" max="-50" step="1" bind:value={draft.health.rssi_warn_dbm} />
+    {#if rssiMissing}
+      <small class="warn">required — −100 to −50 dBm</small>
+    {:else}
+      <small>dBm — a device under this is flagged</small>
+    {/if}
+  </label>
+
   <div class="actions">
-    <button onclick={save} disabled={!dirty || saving || intervalMissing}>
+    <button onclick={save} disabled={!dirty || saving || intervalMissing || batteryMissing || rssiMissing}>
       {saving ? "Saving…" : "Save"}
     </button>
     {#if saved && !dirty}

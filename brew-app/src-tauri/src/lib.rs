@@ -102,6 +102,7 @@ fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
         commands::batch_stability,
         commands::batch_dashboard,
         commands::set_batch_og,
+        commands::home_summary,
     ]
 }
 

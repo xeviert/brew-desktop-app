@@ -20,6 +20,7 @@ use rusqlite::Connection;
 use super::{
     Metric,
     batch::get_batch,
+    health::{DeviceHealth, batch_device_health},
     measurement::{Instrument, MeasurementRow, list_measurements_for_metric},
     series::{Latest, Series, latest_readings, stale_after},
     stability::judge,
@@ -30,6 +31,7 @@ use crate::{
     calc::{
         abv, attenuation,
         gravity::sg_to_display,
+        health::HealthParams,
         stability::{ExpectedFg, LAG_DROP, Stability, StabilityParams},
     },
     units::{GravityDisplay, Sg, Timestamp},
@@ -55,6 +57,8 @@ pub struct BatchDashboard {
     pub expected_fg: Option<ExpectedFg>,
     /// Every source bound to the batch, for matching a `sync://status` event.
     pub source_ids: Vec<i64>,
+    /// 4f's health of the bound devices that report a battery or a signal.
+    pub devices: Vec<DeviceHealth>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -125,14 +129,16 @@ pub fn batch_dashboard(
     conn: &Connection,
     batch_id: i64,
     params: &StabilityParams,
+    health: &HealthParams,
 ) -> Result<BatchDashboard> {
-    dashboard_at(conn, batch_id, params, Timestamp::now())
+    dashboard_at(conn, batch_id, params, health, Timestamp::now())
 }
 
-fn dashboard_at(
+pub(crate) fn dashboard_at(
     conn: &Connection,
     batch_id: i64,
     params: &StabilityParams,
+    health: &HealthParams,
     now: Timestamp,
 ) -> Result<BatchDashboard> {
     let batch = get_batch(conn, batch_id)?;
@@ -198,6 +204,7 @@ fn dashboard_at(
         stability: judged.current,
         expected_fg: judged.expected_fg,
         source_ids: bound_sources(conn, batch_id)?,
+        devices: batch_device_health(conn, batch_id, health, now)?,
     })
 }
 
@@ -413,7 +420,14 @@ mod tests {
     }
 
     fn dashboard(conn: &Connection, batch_id: i64, now: i64) -> BatchDashboard {
-        dashboard_at(conn, batch_id, &StabilityParams::default(), at(now)).unwrap()
+        dashboard_at(
+            conn,
+            batch_id,
+            &StabilityParams::default(),
+            &HealthParams::default(),
+            at(now),
+        )
+        .unwrap()
     }
 
     #[test]

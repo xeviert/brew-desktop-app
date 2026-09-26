@@ -927,26 +927,44 @@ opening the app backfills a gap-free curve bound to the pitched batch.
       `lib/dashboard.ts` with vitest
 
 **4f. Home view**
-- [ ] Route: the app has one screen. Hash routing (`#/`, `#/batch/17`,
+- [x] Route: the app has one screen. Hash routing (`#/`, `#/batch/17`,
       `#/settings`) in a few lines, no router dependency, unless the Phase 3 UI
-      pass already added one
-- [ ] `home_summary()`: one card per batch that is `fermenting` or `conditioning`
+      pass already added one. **Added:** `lib/route.ts` with vitest; unknown hashes
+      fall back to home. `BatchView`'s picker navigates instead of holding state
+- [x] `home_summary()`: one card per batch that is `fermenting` or `conditioning`
       and not archived — code, vessel, current SG, temp, stability, newest reading
-      age. Click through to the batch
-- [ ] Stale per **stream**: no reading for > 3× its median interval over the last
+      age. Click through to the batch. **Refined:** each card carries the batch's
+      `dashboard_at`, so home and the batch card can't disagree. The screen
+      refetches on every `sync://status`, like 4e's card
+- [x] Stale per **stream**: no reading for > 3× its median interval over the last
       day, floor 10 min. Derived, not configured — a 30 s ESP32 and a 15 min
-      iSpindle can't share a threshold, and the interval is a device setting
-- [ ] Stale is not unreachable. Ve's `SyncPhase::Unreachable` says the Pi is down;
+      iSpindle can't share a threshold, and the interval is a device setting.
+      **Refined:** `series::stream_freshness` only judges open bindings — a closed
+      binding is history, not silence. A stream's newest reading is its own, not
+      the binding window's: the device is what went quiet
+- [x] Stale is not unreachable. Ve's `SyncPhase::Unreachable` says the Pi is down;
       a stale stream with `brewd` reachable says the *sensor* is silent. The card
-      says which, from `last_error_code`, not from text
-- [ ] Device health per journal source, not per batch — an iSpindle is a device:
+      says which, from `last_error_code`, not from text. **Refined:** from `phase`,
+      not `last_error_code` — a refused connection and a 500 both carry
+      `fermentrack.http`, and `phase` already made the call. A third state,
+      `sync_error`: with the sync failing the app never saw the readings, so it
+      won't call the sensor silent either. Judged against the last settled status,
+      so a retry's `syncing` doesn't flicker it
+- [x] Device health per journal source, not per batch — an iSpindle is a device:
       battery voltage with a warning threshold (proposal 3.6 V, config), RSSI
       (proposal warn below −80 dBm) and a 7-day battery sparkline. Shown on the
-      batch card too when the device is bound to it
-- [ ] A silent iSpindle with a last battery near the threshold says "battery
+      batch card too when the device is bound to it. **Added:** `[health]` config
+      (`battery_warn_v` 3.0–4.2, `rssi_warn_dbm` −100…−50) in Settings;
+      `db::health`; the sparkline is ≤ 84 bucketed points via
+      `series::stream_buckets`
+- [x] A silent iSpindle with a last battery near the threshold says "battery
       likely"; one with healthy battery and falling RSSI says "signal". Two cheap
       heuristics, labelled as guesses — the gravity series alone can't tell a dead
-      device from a finished ferment
+      device from a finished ferment. **Refined:** `calc::health::guess` — "near"
+      is within 0.1 V above the threshold; "falling" is the latest RSSI below the
+      warning or ≥ 10 dB under its 7-day median. Battery wins when both hold.
+      `xtask demo-db` now runs the iSpindle's battery down and silences it for the
+      last 12 h, so the path is visible
 
 **Done when:** opening the app shows every active batch with current SG, temp and
 stability; clicking one shows a responsive multi-axis curve over the full ferment

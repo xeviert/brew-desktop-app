@@ -7,6 +7,8 @@ use brewcore::{
         Db, DbStatus, Metric, SourceKind,
         batch::{self, BatchRow},
         dashboard::{self, BatchDashboard, DisplayGravity},
+        health::DeviceHealth,
+        home::{self, HomeBatch},
         reference::{self, VesselKind, VesselRow},
         series::{self, BatchSeries, SeriesRange},
         stability,
@@ -413,8 +415,8 @@ pub async fn batch_dashboard(
     batch_id: i64,
 ) -> ApiResult<DashboardView> {
     let config = config.get();
-    let params = config.stability.params();
-    let dashboard = db.read(|conn| dashboard::batch_dashboard(conn, batch_id, &params))?;
+    let (params, health) = (config.stability.params(), config.health.params());
+    let dashboard = db.read(|conn| dashboard::batch_dashboard(conn, batch_id, &params, &health))?;
     Ok(DashboardView {
         display: dashboard.gravity_in(config.ui.gravity_display),
         dashboard,
@@ -435,4 +437,46 @@ pub async fn set_batch_og(db: tauri::State<'_, Db>, batch_id: i64, og: f64) -> A
         .into());
     }
     Ok(db.write(|conn| batch::set_batch_measurements(conn, batch_id, None, Some(og), None))?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4f: home
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Serialize)]
+pub struct HomeView {
+    pub batches: Vec<HomeBatchView>,
+    pub devices: Vec<DeviceHealth>,
+    pub gravity_unit: &'static str,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct HomeBatchView {
+    #[serde(flatten)]
+    pub batch: HomeBatch,
+    /// As [`DashboardView::display`].
+    pub display: DisplayGravity,
+}
+
+#[tauri::command]
+pub async fn home_summary(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+) -> ApiResult<HomeView> {
+    let config = config.get();
+    let (params, health) = (config.stability.params(), config.health.params());
+    let summary = db.read(|conn| home::home_summary(conn, &params, &health))?;
+    let display = config.ui.gravity_display;
+    Ok(HomeView {
+        batches: summary
+            .batches
+            .into_iter()
+            .map(|batch| HomeBatchView {
+                display: batch.dashboard.gravity_in(display),
+                batch,
+            })
+            .collect(),
+        devices: summary.devices,
+        gravity_unit: display.unit(),
+    })
 }

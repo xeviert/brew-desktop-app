@@ -3,7 +3,7 @@
 
 use brewcore::{
     config::{
-        self, Brewd, Config, Fermentrack, Gravity, IspindelUnit, MAX_POLL_INTERVAL_SECS,
+        self, Brewd, Config, Fermentrack, Gravity, Health, IspindelUnit, MAX_POLL_INTERVAL_SECS,
         MIN_POLL_INTERVAL_SECS, Measurement, Stability, SyncConfig, Ui,
     },
     units::{GravityDisplay, TempDisplay},
@@ -130,6 +130,10 @@ fn save_then_load_round_trips() {
             window_hours: 36.0,
             slope_sg_per_day: 0.001,
             fg_band: 0.002,
+        },
+        health: Health {
+            battery_warn_v: 3.5,
+            rssi_warn_dbm: -85.0,
         },
     };
 
