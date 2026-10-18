@@ -53,6 +53,7 @@ backups/
 .env.*
 !.env.example
 secrets.toml
+firmware/secrets.yaml
 config.local.*
 *.local.toml
 
