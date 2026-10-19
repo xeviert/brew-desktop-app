@@ -4,41 +4,29 @@ esp32-1/sensor/vessel_temp/state 17.1
 esphome/discover/esp32-1 {"ip":"192.168.1.16","name":"esp32-1","version":"2026.9.1","mac":"8c94df596900","platform":"ESP32","board":"esp32doit-devkit-v1","network":"wifi"}
 esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.125000°C[0m
 esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/debug [0;32m[I][safe_mode:154]: Boot seems successful; resetting boot loop counter[0m
+esp32-1/debug [0;36m[D][preferences:254]: Writing 1 items: 0 cached, 1 written, 0 failed[0m
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.125000°C[0m
 esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][wifi:2485]: Roam scan (-72 dBm, attempt 1/3)[0m
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.000000°C[0m
-esp32-1/sensor/vessel_temp/state 17.0
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][wifi:2485]: Roam scan (-74 dBm, attempt 2/3)[0m
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
-esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
-esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.187500°C[0m
+esp32-1/sensor/vessel_temp/state 17.2
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.250000°C[0m
+esp32-1/sensor/vessel_temp/state 17.2
+esp32-1/status offline
+esp32-1/status online
+esp32-1/sensor/vessel_temp/state 17.38
+esphome/discover/esp32-1 {"ip":"192.168.1.16","name":"esp32-1","version":"2026.9.1","mac":"8c94df596900","platform":"ESP32","board":"esp32doit-devkit-v1","network":"wifi"}
+esp32-1/sensor/vessel_temp/state 17.38
+esp32-1/status online
+esp32-1/sensor/vessel_temp/state 17.38
+esphome/discover/esp32-1 {"ip":"192.168.1.16","name":"esp32-1","version":"2026.9.1","mac":"8c94df596900","platform":"ESP32","board":"esp32doit-devkit-v1","network":"wifi"}
+esp32-1/sensor/vessel_temp/state 17.44
+esp32-1/sensor/vessel_temp/state 17.50
+esp32-1/sensor/vessel_temp/state 17.50
+esp32-1/sensor/vessel_temp/state 17.50
+esp32-1/sensor/vessel_temp/state 17.44
+esp32-1/sensor/vessel_temp/state 17.38
+esp32-1/sensor/vessel_temp/state 17.38
+esp32-1/sensor/vessel_temp/state 17.31
+esp32-1/sensor/vessel_temp/state 17.25
+esp32-1/sensor/vessel_temp/state 17.25
