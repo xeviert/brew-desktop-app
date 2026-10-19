@@ -25,13 +25,16 @@ mqtt:
   password: !secret mqtt_password
   # Discovery publishes homeassistant/... config topics nobody reads.
   discovery: false
+  log_topic: null
 
 one_wire:
   - platform: gpio
     pin: GPIO13
 
 sensor:
-  # Topic: esp32-1/sensor/vessel_temp/state. Pin `address:` once the boot log shows it.
+  # Topic: esp32-1/sensor/vessel_temp/state.
   - platform: dallas_temp
+    address: 0x1b000000d27af828
     name: vessel_temp
+    accuracy_decimals: 2
     update_interval: 30s

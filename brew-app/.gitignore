@@ -70,7 +70,7 @@ tmp/
 *.bak
 *.orig
 # Throwaway Fermentrack log captures. Committed fixtures live in tests/fixtures/.
-captures/
+/captures/
 *_full.csv
 *_graph.csv
 *.almost_json

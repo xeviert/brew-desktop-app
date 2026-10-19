@@ -1,0 +1,44 @@
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.125000°C[0m
+esp32-1/status online
+esp32-1/sensor/vessel_temp/state 17.1
+esphome/discover/esp32-1 {"ip":"192.168.1.16","name":"esp32-1","version":"2026.9.1","mac":"8c94df596900","platform":"ESP32","board":"esp32doit-devkit-v1","network":"wifi"}
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.125000°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][wifi:2485]: Roam scan (-72 dBm, attempt 1/3)[0m
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.000000°C[0m
+esp32-1/sensor/vessel_temp/state 17.0
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][wifi:2485]: Roam scan (-74 dBm, attempt 2/3)[0m
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
+esp32-1/debug [0;36m[D][dallas.temp.sensor:054]: 'vessel_temp': Got Temperature=17.062500°C[0m
+esp32-1/sensor/vessel_temp/state 17.1
