@@ -55,15 +55,17 @@ client that ingests, and it also publishes setpoints (Phase 6).
 **v2 spikes** — these gate Phase V, and each ends in a committed capture, not a note
 - [x] Pick the Raspberry Pi model: **Raspberry Pi Zero 2 W**, recorded in
       [HARDWARE.md](HARDWARE.md)
-- [ ] Set up the Pi Zero 2 W (later): 64-bit Raspberry Pi OS Lite on a high-endurance
+- [x] Set up the Pi Zero 2 W: 64-bit Raspberry Pi OS Lite on a high-endurance
       microSD — `brewd` appends a journal line every few seconds, all year, and the
-      Zero has no practical SSD boot. Wi-Fi (2.4 GHz only), SSH
-- [ ] Mosquitto on the Pi: one listener on the LAN, one user for devices and one
+      Zero has no practical SSD boot. Wi-Fi (2.4 GHz only), SSH. Address and MAC in
+      [HARDWARE.md — Raspberry Pi](HARDWARE.md#raspberry-pi)
+- [x] Mosquitto on the Pi: one listener on the LAN, one user for devices and one
       for `brewd`, and persistence off. `brewd`'s journal is the record, not the broker
-- [ ] Reflash ESP32 #1 from BrewPi-ESP32 to ESPHome: `dallas_temp` for both probes
-      and the `mqtt:` component (no Home Assistant API). No `thermostat` yet —
-      temp control is deferred (see "Order of real work"). Capture every topic and
-      payload it publishes from `mosquitto_sub -v -t '#'`
+- [x] Reflash ESP32 #1 from BrewPi-ESP32 to ESPHome: `dallas_temp` ~~for both probes~~
+      — **one probe**, DS18B20 #2 was dropped — and the `mqtt:` component (no Home
+      Assistant API). No `thermostat` yet — temp control is deferred (see "Order of
+      real work"). Capture every topic and payload it publishes from
+      `mosquitto_sub -v -t '#'` → [captures/esp32-1-capture.txt](captures/esp32-1-capture.txt)
 - [ ] iSpindle on the same broker — **arriving ~2026-10-09**. Until then Vd runs on
       generated fixtures. Capture one full wake cycle: the stock firmware
       publishes one topic per field (`ispindel/<name>/tilt`, `temperature`,
@@ -387,7 +389,7 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
       `fork_recipe_version` and `diff_recipe_versions`, the latter over a pure
       `diff_items` keyed on (ingredient, stage, occurrence) and *not* `offset_hours`,
       so a nutrient addition moved 24 h → 36 h reads as one change, not a re-add
-- [ ] The same two in the UI, **deferred to the Phase 3 UI pass**: a recipe screen
+- [ ] The same two in the UI, **deferred to the Phase 3 UI pass** (U2): a recipe screen
       with no batch screen is half a feature, so it lands once 3c exists
 - [x] Nutrient schedule as first-class `recipe_item` rows with `offset_hours` —
       for a sugar wash this is the process variable that decides the batch
@@ -644,10 +646,11 @@ laptop is shut. The desktop app does everything else.
       disk and Tier 1 is gone. Cross-cutting backup now covers the journals
 
 **Vb. Firmware and broker** (lands with the Phase 0 v2 spikes)
-- [ ] ESPHome config committed to the repo (proposal: `firmware/esp32-1.yaml`),
-      secrets in `secrets.yaml`, gitignored
-- [ ] Probes addressed by OneWire address, never by bus order: vessel probe →
-      `temp_c`, chamber probe → `fridge_temp_c`
+- [x] ESPHome config committed to the repo: `firmware/esp32-1.yaml`, secrets in
+      `firmware/secrets.yaml`, gitignored (`secrets.example.yaml` committed)
+- [x] Probes addressed by OneWire address, never by bus order: vessel probe →
+      `temp_c`. ~~chamber probe → `fridge_temp_c`~~ — no chamber probe, DS18B20 #2
+      was dropped
 - [ ] **Deferred with temp control:** `thermostat` climate with
       `min_cooling_off_time` / `min_cooling_run_time`. BrewPi protected the
       compressor. Nothing does now unless this is set
@@ -677,12 +680,13 @@ laptop is shut. The desktop app does everything else.
       `GET /journals/<name>` honours `Range`. Read-only, LAN-only, no auth — same
       trust model Fermentrack had. `tower-http`'s `ServeFile`; tested end to end
       against `journal::Client`
-- [ ] Runs under systemd, restarts on failure. Logs to journald —
-      `crates/brewd/deploy/brewd.service` written, not yet run on a Pi
-- [ ] Cross-compiled for the Pi Zero 2 W's `aarch64-unknown-linux-gnu` (64-bit OS),
+- [x] Runs under systemd, restarts on failure. Logs to journald —
+      `crates/brewd/deploy/brewd.service`, running on the Pi (HARDWARE.md, bring-up
+      step 4)
+- [x] Cross-compiled for the Pi Zero 2 W's `aarch64-unknown-linux-gnu` (64-bit OS),
       via `cargo xtask` or `cross`. Never built on the device: 512 MB RAM does not
-      link a Rust binary of this size — `cargo xtask build-pi` wraps `cross`, not yet
-      run
+      link a Rust binary of this size — `cargo xtask build-pi` wraps `cross`. On
+      Windows it needs a one-off `--force-non-host` toolchain (HARDWARE.md, step 4)
 - [x] No SQLite on the Pi. `brewery.db` stays on the desktop; `brewd` owns only
       its journals and its config. Revisit only if a second machine needs to write.
       (`brewd` still links rusqlite through `brewcore`; it opens no database)
@@ -732,6 +736,89 @@ laptop is shut. The desktop app does everything else.
 
 **Done when:** the Pi logs both probes and the iSpindle with the laptop shut, and
 opening the app backfills a gap-free curve bound to the pitched batch.
+
+### Phase 3 UI pass
+> Deferred from 3b, 3d and 3e, and overtaken by Phases 4–5, which were built on
+> `xtask demo-db` data. The data layer is done; what is missing is every Tier 2
+> *write* on the command surface — today the app cannot create an ingredient, a
+> recipe or a batch. Lettered `U1`–`U6` in dependency order. Every command gets an
+> IPC test in `src-tauri/src/ipc_tests.rs` sending `api.ts`'s argument names, since
+> a misspelt `Option` argument arrives as `None` rather than failing.
+
+**U1. Reference data screens** — ingredients, yeast strains, lots
+- [ ] Migration `0010_reference_archive.sql`: `archived_at` on `yeast_strain` and
+      `ingredient_lot`. `ADD COLUMN`, no rebuild. A discontinued strain and a used-up
+      lot must leave the pickers while every batch that used them still reads them —
+      3a's rule, which these two tables were missed by. Lot consumption is Phase 7;
+      until then archiving is how a lot is marked empty
+- [ ] Edits in `db::reference`: `update_ingredient`, `update_yeast_strain`,
+      `update_lot`, plus `restore_*` beside each `archive_*`. Without them a typo is
+      permanent — `ingredient.name` is `UNIQUE` across archived rows too, so
+      archive-and-recreate under the same name fails
+- [ ] `update_ingredient` refuses a `default_unit` of another **dimension** once
+      any `ingredient_lot`, `recipe_item` or `batch_ingredient` references it — their
+      canonical column was chosen by the old dimension, and every `SUM` would read
+      grams as litres. Same dimension (`g` → `kg`) is free: the canonical column is
+      unchanged. New error code, tested against all three tables
+- [ ] `update_lot` re-derives the canonical column from the new entry through
+      `canonical_for_ingredient`, as `create_lot` does. Allowed on a used lot: cost
+      and quantity are read at query time, so a corrected receipt fixes every
+      `batch_cost` at once — which is the point of fixing it
+- [ ] Yeast ↔ strain: an ingredient of category `yeast` requires a
+      `yeast_strain_id`, and any other category refuses one. Enforced at the write
+      path, not the form: a yeast with no strain is a batch 5a/5d report as
+      `no_yeast`, invisible to every strain query. Check the five existing
+      `Category::Yeast` call sites in tests before landing
+- [ ] Strain fractions validated in Rust before the `CHECK` does it: each of
+      `attenuation_min`/`max`, `alcohol_tolerance` in 0–1, and `min ≤ max`, with
+      their own codes. Today a `78` comes back as a bare `db.sqlite`. The form types
+      **percent** and divides by 100 at the edge; the field label says `%`
+- [ ] `UNIQUE` violations map to `db.duplicate` naming the column, not `db.sqlite`.
+      The forms say "an ingredient called X already exists" from the code, not by
+      parsing the message
+- [ ] YAN without the frontend writing JSON: commands take `mg_yan_per_g:
+      Option<f64>` and merge it into `attrs` in Rust under `YAN_ATTR`, keeping any
+      other key. Shown for `nutrient` only, with `calc::yan`'s DAP / Fermaid K /
+      Fermaid O consts offered as presets from a command — `api.ts` gets no copy of
+      the numbers
+- [ ] Lot cost typed as text (`12,50`) plus a currency, parsed by `Money::parse` in
+      the command — one parser, the one with the tests. New config
+      `money.default_currency` (`EUR`), in Settings, prefilling the field. Dates as
+      whole local days, reusing 5c's day handling in `query.ts`. Unit picker filtered
+      to the ingredient's dimension; the server's `DimensionMismatch` stays the
+      enforcement
+- [ ] Strain temp range typed in the display unit via `fromDisplayTemp`, stored °C
+- [ ] Commands: `list_ingredients(include_archived)` → row + strain name + YAN + lot
+      count; `create_`/`update_`/`archive_`/`restore_ingredient`; the same four for
+      yeast strains and lots; `list_lots(ingredient_id, include_archived)` → row +
+      `cost_per_canonical_unit` + how many batches used it. That count links to
+      `#/query` with the lot filter, 5c's traceability screen
+- [ ] Screen `#/ingredients` (nav: "Ingredients"), tabs Ingredients | Yeast
+      strains (`#/ingredients/strains`). Ingredients grouped by category, each
+      expanding to its lots and an add-lot form; edit in place; "show archived"
+      toggle. A yeast ingredient's form offers "new strain" inline, so the
+      requirement above costs no screen change. Vessels stay in Settings. Water
+      profiles stay **deferred** — nothing references `water_profile` yet
+- [ ] Form → payload shaping (percent → fraction, display temp → °C, local day →
+      epoch, YAN preset) pure in `lib/reference.ts`, with vitest
+
+**Done when:** from an empty database, a yeast strain, a yeast ingredient linked to
+it, sucrose in kg and DAP with its YAN can be created; each gets a lot with a cost
+typed as `12,50`; a typo in each is fixed; a used-up lot is archived and leaves the
+picker — and 5c's lot filter and 5a's YAN total see all of it.
+
+**U2. Recipe screen** — list → versions → item editor, lock badge, fork, diff (3b)
+
+**U3. Batch create and lifecycle** — from a version or none, pitch / undo pitch,
+transitions, archive (3c, 3d)
+
+**U4. Timeline and quick-entry** — events and manual measurements in one list,
+quick-entry form, "use as FG" (3d, 3e)
+
+**U5. Actuals** — `batch_ingredient` from lots, `plan_vs_actual`, `batch_cost` (3c, 3f)
+
+**U6. Batch screen** — status card, curve, timeline and actuals on one page,
+replacing `BatchView`'s stand-in
 
 ### Phase 4 — Dashboard & curves
 > Starts after the Phase 3 UI pass: the batch screen, recipe screen, timeline and
