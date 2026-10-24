@@ -1,24 +1,19 @@
 <script lang="ts">
   import {
-    archiveBatch,
-    listVessels,
     recordPitch,
-    restoreBatch,
     toApiError,
     transitionBatch,
     undoPitch,
-    updateBatch,
     type ApiError,
     type BatchSummary,
-    type Vessel,
   } from "$lib/api";
-  import { NEXT, editForm, fromLocalDateTime, localDateTime, recipeLabel, toBatchEdit, type EditForm } from "$lib/batch";
+  import { NEXT, fromLocalDateTime, localDateTime } from "$lib/batch";
   import { confirmAction } from "$lib/confirm";
-  import { href } from "$lib/route";
   import { formatTimestamp } from "$lib/units";
 
-  // The status, the one move forward from it, and the batch's own fields. `onchanged`
-  // reloads the batch; this panel holds no copy of it.
+  // The one move forward from the batch's status, and undoing the pitch. `onchanged`
+  // reloads the batch; this panel holds no copy of it. Nothing to show once archived or
+  // packaged.
   let { batch, onchanged }: { batch: BatchSummary; onchanged: () => Promise<void> } = $props();
 
   // Codes that mean the batch moved under this screen: reload rather than leave a
@@ -27,14 +22,11 @@
 
   let busy = $state(false);
   let error = $state<ApiError | null>(null);
-  let editing = $state<EditForm | null>(null);
-  let vessels = $state<Vessel[]>([]);
   // Both default to when the panel was opened, editable down to the minute.
   let pitchAt = $state(localDateTime(Date.now() / 1000));
   let pitchNote = $state("");
   let packAt = $state(localDateTime(Date.now() / 1000));
 
-  const archived = $derived(batch.archived_at !== null);
   const next = $derived(NEXT[batch.status]);
 
   async function attempt(write: () => Promise<unknown>) {
@@ -42,7 +34,6 @@
     error = null;
     try {
       await write();
-      editing = null;
       await onchanged();
     } catch (e) {
       error = toApiError(e);
@@ -83,101 +74,12 @@
     }
     void attempt(() => transitionBatch(batch.id, next.to, t));
   }
-
-  async function setArchived(archive: boolean) {
-    if (archive && (batch.status === "fermenting" || batch.status === "conditioning")) {
-      const ok = await confirmAction(
-        `Archive ${batch.code} while it is ${batch.status}? Its vessel's sensors stop recording to it now.`,
-        "Archive",
-      );
-      if (!ok) return;
-    }
-    void attempt(() => (archive ? archiveBatch(batch.id) : restoreBatch(batch.id)));
-  }
-
-  async function edit() {
-    error = null;
-    try {
-      vessels = await listVessels();
-      editing = editForm(batch);
-    } catch (e) {
-      error = toApiError(e);
-    }
-  }
-
-  function save() {
-    if (!editing) return;
-    const input = toBatchEdit(editing);
-    if (!input.ok) {
-      error = { code: "form", message: input.error };
-      return;
-    }
-    const value = input.value;
-    void attempt(() => updateBatch(batch.id, value));
-  }
-
-  function cancel() {
-    editing = null;
-    error = null;
-  }
 </script>
 
-<div class="ref lifecycle">
-  <header>
-    <span class="status" class:archived>{batch.status}{archived ? " · archived" : ""}</span>
-    <span class="detail">
-      {#if batch.recipe_id !== null && batch.version_no !== null}
-        <a href={href({ name: "recipe", id: batch.recipe_id, version: batch.version_no })}>{recipeLabel(batch)}</a>
-      {:else}
-        {recipeLabel(batch)}
-      {/if}
-      {batch.vessel_name ? `· ${batch.vessel_name}` : ""}
-      {batch.volume_l !== null ? `· ${batch.volume_l} L` : ""}
-      {batch.pitched_at !== null ? `· pitched ${formatTimestamp(batch.pitched_at)}` : ""}
-    </span>
-    <span class="row-actions">
-      {#if !archived}
-        <button class="link" onclick={edit} disabled={busy || editing !== null}>Edit</button>
-        <button class="link" onclick={() => setArchived(true)} disabled={busy}>Archive</button>
-      {:else}
-        <button class="link" onclick={() => setArchived(false)} disabled={busy}>Restore</button>
-      {/if}
-    </span>
-  </header>
-  {#if batch.notes}<p class="detail">{batch.notes}</p>{/if}
-
-  {#if editing}
-    <label>
-      <span>Code</span>
-      <input type="text" bind:value={editing.code} />
-    </label>
-    <label>
-      <span>Vessel</span>
-      <select bind:value={editing.vessel_id} disabled={batch.pitched_at !== null}>
-        <option value={null}>None</option>
-        {#each vessels as v (v.id)}
-          <option value={v.id}>{v.name}</option>
-        {/each}
-        {#if batch.vessel_id !== null && !vessels.some((v) => v.id === batch.vessel_id)}
-          <option value={batch.vessel_id}>{batch.vessel_name}</option>
-        {/if}
-      </select>
-      {#if batch.pitched_at !== null}<small>Fixed by the pitch: undo it to move the batch.</small>{/if}
-    </label>
-    <label>
-      <span>Volume (L)</span>
-      <input type="text" inputmode="decimal" bind:value={editing.volume} />
-    </label>
-    <label>
-      <span>Notes</span>
-      <input type="text" bind:value={editing.notes} />
-    </label>
-    <div class="actions">
-      <button onclick={save} disabled={busy}>Save</button>
-      <button class="link" onclick={cancel}>Cancel</button>
-    </div>
-  {:else if !archived}
+{#if batch.archived_at === null && (batch.status === "planned" || next)}
+  <div class="ref lifecycle">
     {#if batch.status === "planned"}
+      <h3>Pitch</h3>
       <label>
         <span>Pitched at</span>
         <input type="datetime-local" bind:value={pitchAt} />
@@ -205,41 +107,27 @@
         {/if}
       </div>
     {/if}
-  {/if}
 
-  {#if error}
-    <p role="alert">{error.message}</p>
-  {/if}
-</div>
+    {#if error}
+      <p role="alert">{error.message}</p>
+    {/if}
+  </div>
+{/if}
 
 <style>
   .lifecycle {
-    max-width: 48rem;
     margin-bottom: 1rem;
   }
 
-  header {
-    display: flex;
-    align-items: baseline;
-    gap: 1rem;
+  h3 {
+    margin: 0 0 0.5rem;
   }
 
-  .status {
-    text-transform: capitalize;
-    font-weight: 600;
+  .lifecycle label {
+    grid-template-columns: 7rem 1fr;
   }
 
-  .status.archived,
-  .detail,
   small {
     color: #6f757d;
-  }
-
-  .detail a {
-    color: #7ba7d4;
-  }
-
-  .row-actions {
-    margin-left: auto;
   }
 </style>

@@ -18,11 +18,14 @@
   import { buildPlot, toAbs, toX, type Drawn, type Plot, type XMode } from "$lib/chart";
   import { formatTimestamp } from "$lib/units";
 
+  // `revision` is bumped by every write from the batch screen — a manual reading or an
+  // event raises no `sync://status` — and refetches at the same zoom.
   let {
     batchId,
     pitchedAt,
     ui,
-  }: { batchId: number; pitchedAt: number | null; ui: Config["ui"] } = $props();
+    revision,
+  }: { batchId: number; pitchedAt: number | null; ui: Config["ui"]; revision: number } = $props();
 
   /** Per sensor series. A zoom refetches at the same count: the bucket shrinks, the payload doesn't grow. */
   const MAX_POINTS = 1000;
@@ -44,6 +47,7 @@
   // a change is a fetch, and the chart reads it when that lands.
   let view: SeriesRange | null = null;
 
+  const nothing = $derived(curve !== null && curve.range === null);
   const plot = $derived(curve ? buildPlot(curve, mode, pitchedAt, ui.temp_display) : null);
 
   // One fetch at a time. Anything asked for meanwhile runs once after, with whatever
@@ -287,6 +291,7 @@
   // Gravity is converted server-side, so a unit change is a refetch.
   $effect(() => {
     void ui.gravity_display;
+    void revision;
     untrack(() => void refresh(true));
   });
 
@@ -312,23 +317,25 @@
   });
 </script>
 
-<div class="toolbar">
-  <div class="toggle" role="group" aria-label="Time axis">
-    <button class:on={mode === "abs"} onclick={() => (mode = "abs")}>Time</button>
-    <button
-      class:on={mode === "rel"}
-      onclick={() => (mode = "rel")}
-      disabled={pitchedAt === null}
-      title={pitchedAt === null ? "Not pitched: no t=0 to count from" : undefined}
-    >
-      Hours since pitch
-    </button>
+{#if !nothing}
+  <div class="toolbar">
+    <div class="toggle" role="group" aria-label="Time axis">
+      <button class:on={mode === "abs"} onclick={() => (mode = "abs")}>Time</button>
+      <button
+        class:on={mode === "rel"}
+        onclick={() => (mode = "rel")}
+        disabled={pitchedAt === null}
+        title={pitchedAt === null ? "Not pitched: no t=0 to count from" : undefined}
+      >
+        Hours since pitch
+      </button>
+    </div>
+    <span class="hint">Drag to zoom, double-click to reset.</span>
+    {#if stability?.spans.length}
+      <span class="key"><i class="stable"></i>stable <i class="stalled"></i>stalled</span>
+    {/if}
   </div>
-  <span class="hint">Drag to zoom, double-click to reset.</span>
-  {#if stability?.spans.length}
-    <span class="key"><i class="stable"></i>stable <i class="stalled"></i>stalled</span>
-  {/if}
-</div>
+{/if}
 
 <div class="wrap">
   <div bind:this={host}></div>
@@ -343,8 +350,10 @@
 
 {#if error}
   <p role="alert">{error.message}</p>
-{:else if curve && curve.range === null}
-  <p class="empty">Not pitched and no streams bound — nothing to chart yet.</p>
+{:else if nothing}
+  <p class="empty">
+    {pitchedAt === null ? "Not pitched yet: the curve starts at the pitch." : "No streams bound — nothing to chart yet."}
+  </p>
 {:else if plot && plot.drawn.length === 0}
   <p class="empty">No readings in this range.</p>
 {/if}

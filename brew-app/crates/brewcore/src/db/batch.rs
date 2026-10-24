@@ -259,9 +259,10 @@ pub struct BatchSummary {
     pub vessel_name: Option<String>,
 }
 
-pub fn list_batch_summaries(
+fn summaries_where(
     conn: &Connection,
-    include_archived: bool,
+    filter: &str,
+    arg: &dyn rusqlite::ToSql,
 ) -> Result<Vec<BatchSummary>> {
     let columns = BATCH_COLUMNS
         .split(',')
@@ -269,14 +270,9 @@ pub fn list_batch_summaries(
         .collect::<Vec<_>>()
         .join(", ");
     let mut stmt = conn.prepare(&format!(
-        "SELECT {columns}, r.id, r.name, v.version_no, ves.name \
-         FROM batch b \
-         LEFT JOIN recipe_version v ON v.id = b.recipe_version_id \
-         LEFT JOIN recipe r ON r.id = v.recipe_id \
-         LEFT JOIN vessel ves ON ves.id = b.vessel_id \
-         WHERE ?1 OR b.archived_at IS NULL ORDER BY b.code"
+        "SELECT {columns}, r.id, r.name, v.version_no, ves.name          FROM batch b          LEFT JOIN recipe_version v ON v.id = b.recipe_version_id          LEFT JOIN recipe r ON r.id = v.recipe_id          LEFT JOIN vessel ves ON ves.id = b.vessel_id          WHERE {filter} ORDER BY b.code"
     ))?;
-    let rows = stmt.query_map([include_archived], |row| {
+    let rows = stmt.query_map([arg], |row| {
         Ok(BatchSummary {
             batch: batch_from_row(row)?,
             recipe_id: row.get(12)?,
@@ -286,6 +282,20 @@ pub fn list_batch_summaries(
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+pub fn list_batch_summaries(
+    conn: &Connection,
+    include_archived: bool,
+) -> Result<Vec<BatchSummary>> {
+    summaries_where(conn, "?1 OR b.archived_at IS NULL", &include_archived)
+}
+
+/// One batch as the list shows it, archived or not: the batch screen's header.
+pub fn get_batch_summary(conn: &Connection, batch_id: i64) -> Result<BatchSummary> {
+    summaries_where(conn, "b.id = ?1", &batch_id)?
+        .pop()
+        .ok_or(Error::NoSuchBatch { batch_id })
 }
 
 /// Record t=0. Separate from the transition because the pitch is a fact about the

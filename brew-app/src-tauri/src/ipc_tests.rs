@@ -1212,6 +1212,11 @@ fn a_batch_is_created_from_a_version_in_the_display_unit_and_locks_it() {
         (list[0]["og"].as_f64().unwrap() - 1.040).abs() < 0.001,
         "{list}"
     );
+    assert_eq!(
+        app.invoke("get_batch", json!({ "batchId": id })).unwrap(),
+        list[0],
+        "the screen's header reads what the list does"
+    );
 
     let view = app
         .invoke("get_recipe_version", json!({ "id": v1 }))

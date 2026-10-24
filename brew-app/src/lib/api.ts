@@ -718,7 +718,7 @@ export interface BatchSummary extends Batch {
 export const listBatches = (includeArchived = false): Promise<BatchSummary[]> =>
 	call("list_batches", { includeArchived });
 
-export const getBatch = (batchId: number): Promise<Batch> => call("get_batch", { batchId });
+export const getBatch = (batchId: number): Promise<BatchSummary> => call("get_batch", { batchId });
 
 /**
  * `range: null` is the default: pitch to now, or the bindings' span before a pitch.

@@ -1023,6 +1023,40 @@ archived a new addition was `db.lot_archived`, while the existing line still edi
 
 **U6. Batch screen** — status card, curve, timeline and actuals on one page,
 replacing `BatchView`'s stand-in
+- [x] `get_batch` returns `BatchSummary`, the list's row: `db::batch::get_batch_summary`
+      shares one query with `list_batch_summaries`. The screen loads its one batch
+      rather than every batch to find it; an unknown id is "No batch N" with a link back
+- [x] `BatchHeader.svelte`: "← Batches", the code, the status, edit, archive (asked
+      while fermenting or conditioning) / restore, export readings and "compare with…";
+      under it the recipe vN link, vessel, volume, the day it is on while in the vessel
+      and the pitch time (`headerFacts` in `lib/batch.ts`, with vitest). The picker is
+      gone — the batches list and home are the way in. `BatchLifecycle` keeps only the
+      status moves and renders nothing once there are none (packaged, archived)
+- [x] Layout: wide, the curve and actuals in the main column beside the card, the move
+      forward and the timeline — so "Add reading" sits under the numbers it changes;
+      narrow (< 1100 px), one column in the order card, move, curve, timeline, actuals
+- [x] **Refined:** the card and curve refetch in place on U4's revision counter instead
+      of being remounted on it, so a reading, an event or an actuals edit keeps the
+      curve's zoom. Remounted only when the batch changes
+- [x] An archived batch is read-only everywhere: the card's OG/FG use and clear are
+      hidden too (`readonly`), not only the lists'. A planned batch shows "Not pitched
+      yet: the curve starts at the pitch" in place of an empty chart and its toolbar
+
+**Done when:** a batch opens from home and from the list onto one page; a write from
+anywhere on it updates the card, curve and lists without losing the zoom; a planned batch
+is pitched from it and its curve starts; archived, it offers nothing to write; an unknown
+id says so. **Status:** driven in the running app (WebView2 over CDP) on a `demo-db`
+file: home's first card opened ALE-003 and the list SELTZER-001; at 1400 px the card,
+move and timeline sat right of the curve and actuals, at 800 px they stacked in the
+narrow order. Zoomed, then a pH reading and an actuals edit: each `batch_series` refetch
+carried the zoomed range, double-click sent `null`, the card's pH moved to the new
+reading. "Use as OG" on the first hydrometer set 1.0460 on the card. A new planned
+SELTZER-U6 showed the pitch message and no toolbar; pitched, its header read "10 L · day
+1 · pitched …" and the curve's toolbar appeared. SELTZER-001 archived through the dialog
+left only Restore, Export and the curve's axis toggle; restored, every control came
+back. `#/batch/999` read "No batch 999." No console errors.
+
+**Phase 3 UI pass done.** Next: the calculators deferred to after U6.
 
 ### Phase 4 — Dashboard & curves
 > Starts after the Phase 3 UI pass: the batch screen, recipe screen, timeline and

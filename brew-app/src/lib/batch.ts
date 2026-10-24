@@ -8,7 +8,7 @@
  */
 import type { BatchEdit, BatchInput, BatchStatus, BatchSummary, BeverageType } from "$lib/api";
 import { reader, type Result } from "$lib/reference";
-import type { GravityDisplay } from "$lib/units";
+import { formatTimestamp, type GravityDisplay } from "$lib/units";
 
 /** Mirrors `brewcore::units::GravityDisplay::unit`, for a field label. */
 export const GRAVITY_UNIT: Record<GravityDisplay, string> = { sg: "SG", plato: "°P", brix: "°Bx" };
@@ -107,4 +107,19 @@ export function byStatus<T extends { status: BatchStatus }>(batches: T[]): { sta
 	return STATUSES.map((status) => ({ status, items: batches.filter((b) => b.status === status) })).filter(
 		(g) => g.items.length > 0,
 	);
+}
+
+// ------------------------------------------------------------------ screen
+
+/** The batch screen's header after the recipe: vessel, volume, the day it is on while
+ * it is in the vessel (day 1 is the pitch's first 24 hours), and when it was pitched. */
+export function headerFacts(b: BatchSummary, now: number = Date.now() / 1000): string[] {
+	const facts: string[] = [];
+	if (b.vessel_name) facts.push(b.vessel_name);
+	if (b.volume_l !== null) facts.push(`${Number(b.volume_l.toFixed(2))} L`);
+	if (b.pitched_at !== null && (b.status === "fermenting" || b.status === "conditioning") && b.archived_at === null) {
+		facts.push(`day ${Math.floor(Math.max(0, now - b.pitched_at) / 86_400) + 1}`);
+	}
+	if (b.pitched_at !== null) facts.push(`pitched ${formatTimestamp(b.pitched_at)}`);
+	return facts;
 }

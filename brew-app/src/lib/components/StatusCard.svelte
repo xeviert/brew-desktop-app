@@ -16,12 +16,21 @@
   import { age } from "$lib/format";
   import { formatTemp } from "$lib/units";
 
+  // `revision` refetches in place after a write from the screen; `readonly` hides the
+  // OG/FG writes on an archived batch.
   let {
     batchId,
-    code,
     ui,
     syncs,
-  }: { batchId: number; code: string; ui: Config["ui"]; syncs: Record<number, SourceStatus> } = $props();
+    revision,
+    readonly,
+  }: {
+    batchId: number;
+    ui: Config["ui"];
+    syncs: Record<number, SourceStatus>;
+    revision: number;
+    readonly: boolean;
+  } = $props();
 
   let card = $state.raw<Dashboard | null>(null);
   let error = $state<ApiError | null>(null);
@@ -68,6 +77,7 @@
 
   $effect(() => {
     void ui.gravity_display;
+    void revision;
     untrack(() => void refresh());
   });
 
@@ -82,8 +92,6 @@
 </script>
 
 <div class="card">
-  <h3>{code}</h3>
-
   {#if error}
     <p role="alert">{error.message}</p>
   {/if}
@@ -94,10 +102,10 @@
       <dd>
         {#if card.display.og !== null}
           {formatGravityIn(card.display.og, unit)}
-          <button class="clear" disabled={saving} onclick={() => setGravity("og", null)}>clear</button>
+          {#if !readonly}<button class="clear" disabled={saving} onclick={() => setGravity("og", null)}>clear</button>{/if}
         {:else}
           <span class="muted">no OG</span>
-          {#if card.og_candidate && card.display.og_candidate !== null}
+          {#if !readonly && card.og_candidate && card.display.og_candidate !== null}
             {@const c = card.og_candidate}
             <button disabled={saving} onclick={() => setGravity("og", c.sg)}>
               Use {formatGravityIn(card.display.og_candidate, unit)} ({gravitySource(c)}, {age(c.ts)}) as OG
@@ -120,10 +128,10 @@
       <dd>
         {#if card.display.fg !== null}
           {formatGravityIn(card.display.fg, unit)}
-          <button class="clear" disabled={saving} onclick={() => setGravity("fg", null)}>clear</button>
+          {#if !readonly}<button class="clear" disabled={saving} onclick={() => setGravity("fg", null)}>clear</button>{/if}
         {:else}
           <span class="muted">not set</span>
-          {#if card.gravity && card.display.gravity !== null}
+          {#if !readonly && card.gravity && card.display.gravity !== null}
             {@const g = card.gravity}
             <button disabled={saving} onclick={() => setGravity("fg", g.sg)}>
               Use {formatGravityIn(card.display.gravity, unit)} ({gravitySource(g)}, {age(g.ts)}) as FG
@@ -185,10 +193,6 @@
     border: 1px solid #333842;
     padding: 0.75rem 1rem;
     margin-bottom: 0.75rem;
-  }
-
-  h3 {
-    margin: 0 0 0.5rem;
   }
 
   dl {

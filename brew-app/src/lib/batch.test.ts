@@ -4,12 +4,14 @@ import {
 	byStatus,
 	editForm,
 	fromLocalDateTime,
+	headerFacts,
 	localDateTime,
 	recipeLabel,
 	toBatchEdit,
 	toBatchInput,
 	type BatchForm,
 } from "./batch";
+import { formatTimestamp } from "./units";
 
 const summary = (over: Partial<BatchSummary>): BatchSummary => ({
 	id: 1,
@@ -104,5 +106,27 @@ describe("list", () => {
 			["planned", [2]],
 			["packaged", [1, 3]],
 		]);
+	});
+});
+
+describe("screen", () => {
+	const pitched = 1_790_000_000;
+	it("names the vessel and volume, and the day while in the vessel", () => {
+		expect(headerFacts(summary({ volume_l: 19.456 }))).toEqual(["FV1", "19.46 L"]);
+		const fermenting = summary({ status: "fermenting", pitched_at: pitched });
+		expect(headerFacts(fermenting, pitched + 3_600)).toEqual(["FV1", "20 L", "day 1", `pitched ${formatTimestamp(pitched)}`]);
+		expect(headerFacts(fermenting, pitched + 2 * 86_400 + 1)[2]).toBe("day 3");
+	});
+	it("counts no days once packaged or archived, and leaves out what is not set", () => {
+		const after = pitched + 30 * 86_400;
+		expect(headerFacts(summary({ status: "packaged", pitched_at: pitched }), after)).toEqual([
+			"FV1",
+			"20 L",
+			`pitched ${formatTimestamp(pitched)}`,
+		]);
+		expect(
+			headerFacts(summary({ status: "fermenting", pitched_at: pitched, archived_at: after }), after),
+		).not.toContain("day 31");
+		expect(headerFacts(summary({ vessel_id: null, vessel_name: null, volume_l: null }))).toEqual([]);
 	});
 });

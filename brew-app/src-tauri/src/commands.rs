@@ -14,7 +14,7 @@ use brewcore::{
         Db, DbStatus, Metric, SourceKind,
         analytics::BatchMetrics,
         batch::{
-            self, BatchCost, BatchEdit, BatchIngredientRow, BatchRow, BatchStatus, BatchSummary,
+            self, BatchCost, BatchEdit, BatchIngredientRow, BatchStatus, BatchSummary,
             GravityField, NewBatch, NewBatchIngredient, PlanVsActualRow,
         },
         compare::{self, Comparison, RelRange, YAxis, YMode},
@@ -997,8 +997,8 @@ pub async fn list_batches(
 }
 
 #[tauri::command]
-pub async fn get_batch(db: tauri::State<'_, Db>, batch_id: i64) -> ApiResult<BatchRow> {
-    Ok(db.read(|conn| batch::get_batch(conn, batch_id))?)
+pub async fn get_batch(db: tauri::State<'_, Db>, batch_id: i64) -> ApiResult<BatchSummary> {
+    Ok(db.read(|conn| batch::get_batch_summary(conn, batch_id))?)
 }
 
 #[derive(Debug, serde::Serialize)]
