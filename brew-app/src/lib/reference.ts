@@ -86,7 +86,7 @@ const show = (v: number | null, f: (v: number) => number = (v) => v): string =>
 const text = (s: string): string | null => (s.trim() === "" ? null : s.trim());
 
 /** Collects unreadable fields by label, so the error names every one at once. */
-function reader() {
+export function reader() {
 	const bad: string[] = [];
 	return {
 		num(label: string, s: string, f: (v: number) => number = (v) => v): number | null {

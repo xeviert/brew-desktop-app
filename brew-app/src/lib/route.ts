@@ -5,6 +5,9 @@
 
 export type Route =
 	| { name: "home" }
+	| { name: "batches" }
+	/** `version` is a recipe_version id to start from, or `null` for a blank form. */
+	| { name: "batch-new"; version: number | null }
 	| { name: "batch"; id: number }
 	| { name: "compare"; ids: number[] }
 	| { name: "query"; id: number | null; preset?: QueryPreset }
@@ -25,6 +28,10 @@ export function parse(hash: string): Route {
 	const path = hash.replace(/^#/, "").replace(/\/+$/, "");
 	if (path === "/settings") return { name: "settings" };
 	if (path === "/recipes") return { name: "recipes" };
+	// U3: `#/batches`, `#/batches/new`, `#/batches/new/4` (from recipe_version 4).
+	if (path === "/batches") return { name: "batches" };
+	const batchNew = /^\/batches\/new(?:\/(\d+))?$/.exec(path);
+	if (batchNew) return { name: "batch-new", version: batchNew[1] ? Number(batchNew[1]) : null };
 	const batch = /^\/batch\/(\d+)$/.exec(path);
 	if (batch) return { name: "batch", id: Number(batch[1]) };
 	// 5b: `#/compare/3,7,12`, in pick order; `#/compare` is an empty pick.
@@ -54,6 +61,10 @@ export function href(route: Route): string {
 	switch (route.name) {
 		case "home":
 			return "#/";
+		case "batches":
+			return "#/batches";
+		case "batch-new":
+			return route.version === null ? "#/batches/new" : `#/batches/new/${route.version}`;
 		case "batch":
 			return `#/batch/${route.id}`;
 		case "compare":

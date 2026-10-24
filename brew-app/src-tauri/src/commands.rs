@@ -13,7 +13,7 @@ use brewcore::{
     db::{
         Db, DbStatus, Metric, SourceKind,
         analytics::BatchMetrics,
-        batch::{self, BatchRow},
+        batch::{self, BatchEdit, BatchRow, BatchStatus, BatchSummary, NewBatch},
         compare::{self, Comparison, RelRange, YAxis, YMode},
         dashboard::{self, BatchDashboard, DisplayGravity},
         health::DeviceHealth,
@@ -986,8 +986,8 @@ const CURVE_METRICS: [Metric; 7] = [
 pub async fn list_batches(
     db: tauri::State<'_, Db>,
     include_archived: bool,
-) -> ApiResult<Vec<BatchRow>> {
-    Ok(db.read(|conn| batch::list_batches(conn, include_archived))?)
+) -> ApiResult<Vec<BatchSummary>> {
+    Ok(db.read(|conn| batch::list_batch_summaries(conn, include_archived))?)
 }
 
 #[tauri::command]
@@ -1099,6 +1099,140 @@ pub async fn set_batch_og(db: tauri::State<'_, Db>, batch_id: i64, og: f64) -> A
         .into());
     }
     Ok(db.write(|conn| batch::set_batch_measurements(conn, batch_id, None, Some(og), None))?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U3: batch create and lifecycle
+// ---------------------------------------------------------------------------
+//
+// Times the user picks arrive as epoch seconds and default to now. A future one is
+// refused here, since only the command knows what now is.
+
+fn not_in_future(at: Option<Timestamp>, what: &'static str) -> brewcore::Result<Timestamp> {
+    let now = Timestamp::now();
+    match at {
+        Some(at) if at > now => Err(Error::InFuture { what }),
+        Some(at) => Ok(at),
+        None => Ok(now),
+    }
+}
+
+#[tauri::command]
+pub async fn suggest_batch_code(
+    db: tauri::State<'_, Db>,
+    beverage_type: BeverageType,
+) -> ApiResult<String> {
+    Ok(db.read(|conn| batch::suggest_batch_code(conn, beverage_type))?)
+}
+
+/// What the create form sends: OG in the display unit, like the recipe targets.
+#[derive(Debug, serde::Deserialize)]
+pub struct BatchInput {
+    pub code: String,
+    pub recipe_version_id: Option<i64>,
+    pub beverage_type: BeverageType,
+    pub vessel_id: Option<i64>,
+    pub volume_l: Option<f64>,
+    pub og: Option<f64>,
+    pub notes: Option<String>,
+}
+
+impl BatchInput {
+    fn into_new(self, display: GravityDisplay) -> brewcore::Result<NewBatch> {
+        Ok(NewBatch {
+            code: self.code,
+            recipe_version_id: self.recipe_version_id,
+            beverage_type: self.beverage_type,
+            vessel_id: self.vessel_id,
+            volume_l: self.volume_l.map(Litres::new).transpose()?,
+            og: self.og.map(|v| display_to_sg(v, display)).transpose()?,
+            notes: self.notes,
+        })
+    }
+}
+
+/// The batch and the lock on its recipe version, in one transaction.
+#[tauri::command]
+pub async fn create_batch(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch: BatchInput,
+) -> ApiResult<i64> {
+    let batch = batch.into_new(config.get().ui.gravity_display)?;
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let id = batch::create_batch(&tx, &batch, Timestamp::now())?;
+        tx.commit()?;
+        Ok(id)
+    })?)
+}
+
+#[tauri::command]
+pub async fn update_batch(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+    batch: BatchEdit,
+) -> ApiResult<()> {
+    Ok(db.write(|conn| batch::update_batch(conn, batch_id, &batch))?)
+}
+
+#[tauri::command]
+pub async fn archive_batch(db: tauri::State<'_, Db>, batch_id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let changed = batch::archive_batch(&tx, batch_id, Timestamp::now())?;
+        tx.commit()?;
+        Ok(changed)
+    })?)
+}
+
+#[tauri::command]
+pub async fn restore_batch(db: tauri::State<'_, Db>, batch_id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| batch::restore_batch(conn, batch_id))?)
+}
+
+/// The event, `pitched_at`, the move to fermenting and the vessel's sensor bindings
+/// commit together or not at all.
+#[tauri::command]
+pub async fn record_pitch(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+    at: Option<Timestamp>,
+    note: Option<String>,
+) -> ApiResult<i64> {
+    let at = not_in_future(at, "pitch")?;
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let id = timeline::record_pitch(&tx, batch_id, at, note.as_deref())?;
+        tx.commit()?;
+        Ok(id)
+    })?)
+}
+
+#[tauri::command]
+pub async fn undo_pitch(db: tauri::State<'_, Db>, batch_id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let removed = timeline::undo_pitch(&tx, batch_id)?;
+        tx.commit()?;
+        Ok(removed)
+    })?)
+}
+
+#[tauri::command]
+pub async fn transition_batch(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+    to: BatchStatus,
+    at: Option<Timestamp>,
+) -> ApiResult<bool> {
+    let at = not_in_future(at, "status change")?;
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let moved = batch::transition_batch(&tx, batch_id, to, at)?;
+        tx.commit()?;
+        Ok(moved)
+    })?)
 }
 
 // ---------------------------------------------------------------------------

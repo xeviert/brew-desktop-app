@@ -309,6 +309,27 @@ pub enum Error {
         recipe: crate::db::recipe::BeverageType,
     },
 
+    // Phase 3 UI pass, U3.
+    /// Checked before the partial unique index on `batch_event` does it, so a second
+    /// pitch names itself instead of arriving as a bare constraint failure.
+    #[error("batch {batch_id} is already pitched; undo the pitch to change its time")]
+    BatchAlreadyPitched { batch_id: i64 },
+
+    /// The pitch bound the vessel's sensors from t=0. Moving the batch afterwards
+    /// would leave those bindings on a vessel it is no longer in.
+    #[error("batch {batch_id} is pitched, so its vessel is fixed; undo the pitch to move it")]
+    BatchVesselLocked { batch_id: i64 },
+
+    /// A future t=0 empties every default range that runs `[pitched_at, now)`, and a
+    /// future packaging time leaves the sensors bound to a batch that has left.
+    #[error("the {what} time is in the future")]
+    InFuture { what: &'static str },
+
+    /// Packaging closes the sensor bindings at this time, and a binding cannot end
+    /// before the pitch that opened it.
+    #[error("batch {batch_id} cannot move before its own pitch time")]
+    BeforePitch { batch_id: i64 },
+
     // Phase 3d. `0005_timeline.sql` leaves `kind` and `channel` open like every
     // vocabulary before them.
     #[error("unknown event kind '{0}' in the database")]
@@ -557,6 +578,10 @@ impl Error {
             Error::BatchNotPitched { .. } => "db.batch_not_pitched",
             Error::BatchArchived { .. } => "db.batch_archived",
             Error::BeverageTypeMismatch { .. } => "db.beverage_type_mismatch",
+            Error::BatchAlreadyPitched { .. } => "db.batch_already_pitched",
+            Error::BatchVesselLocked { .. } => "db.batch_vessel_locked",
+            Error::InFuture { .. } => "db.in_future",
+            Error::BeforePitch { .. } => "db.before_pitch",
             Error::UnknownEventKind(_) => "db.unknown_event_kind",
             Error::UnknownAnnotationChannel(_) => "db.unknown_annotation_channel",
             Error::NoSuchBatchEvent { .. } => "db.no_such_batch_event",

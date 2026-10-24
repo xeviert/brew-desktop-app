@@ -707,7 +707,15 @@ export interface StabilityView {
 	spans: FlatSpan[];
 }
 
-export const listBatches = (includeArchived = false): Promise<Batch[]> =>
+/** Mirrors `brewcore::db::batch::BatchSummary`: a batch and the names a list shows. */
+export interface BatchSummary extends Batch {
+	recipe_id: number | null;
+	recipe_name: string | null;
+	version_no: number | null;
+	vessel_name: string | null;
+}
+
+export const listBatches = (includeArchived = false): Promise<BatchSummary[]> =>
 	call("list_batches", { includeArchived });
 
 export const getBatch = (batchId: number): Promise<Batch> => call("get_batch", { batchId });
@@ -791,6 +799,53 @@ export const batchDashboard = (batchId: number): Promise<Dashboard> =>
 /** `og` in SG: send back `og_candidate.sg`, not the display value. */
 export const setBatchOg = (batchId: number, og: number): Promise<void> =>
 	call("set_batch_og", { batchId, og });
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U3: batch create and lifecycle
+// ---------------------------------------------------------------------------
+
+/** Mirrors `src-tauri`'s `BatchInput`. `og` in the display gravity unit. */
+export interface BatchInput {
+	code: string;
+	recipe_version_id: number | null;
+	beverage_type: BeverageType;
+	vessel_id: number | null;
+	volume_l: number | null;
+	og: number | null;
+	notes: string | null;
+}
+
+/** Mirrors `brewcore::db::batch::BatchEdit`. Replaces all four; `null` clears. */
+export interface BatchEdit {
+	code: string;
+	vessel_id: number | null;
+	volume_l: number | null;
+	notes: string | null;
+}
+
+export const suggestBatchCode = (beverageType: BeverageType): Promise<string> =>
+	call("suggest_batch_code", { beverageType });
+
+/** Locks the recipe version, if any. */
+export const createBatch = (batch: BatchInput): Promise<number> => call("create_batch", { batch });
+
+export const updateBatch = (batchId: number, batch: BatchEdit): Promise<void> =>
+	call("update_batch", { batchId, batch });
+
+/** Closes the batch's open sensor bindings, so the vessel is free for the next pitch. */
+export const archiveBatch = (batchId: number): Promise<boolean> => call("archive_batch", { batchId });
+
+export const restoreBatch = (batchId: number): Promise<boolean> => call("restore_batch", { batchId });
+
+/** `at` in epoch seconds, `null` for now; a future time is refused. */
+export const recordPitch = (batchId: number, at: number | null, note: string | null): Promise<number> =>
+	call("record_pitch", { batchId, at, note });
+
+export const undoPitch = (batchId: number): Promise<boolean> => call("undo_pitch", { batchId });
+
+/** One step forward. `packaged` closes the sensor bindings at `at`. */
+export const transitionBatch = (batchId: number, to: BatchStatus, at: number | null): Promise<boolean> =>
+	call("transition_batch", { batchId, to, at });
 
 // ---------------------------------------------------------------------------
 // Phase 4f: home

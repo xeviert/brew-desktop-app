@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import BatchLifecycle from "$lib/components/BatchLifecycle.svelte";
   import Curve from "$lib/components/Curve.svelte";
   import StatusCard from "$lib/components/StatusCard.svelte";
   import {
@@ -7,14 +8,15 @@
     listBatches,
     toApiError,
     type ApiError,
-    type Batch,
+    type BatchSummary,
     type Config,
     type SourceStatus,
   } from "$lib/api";
   import { csvName, saveCsv } from "$lib/export";
   import { href } from "$lib/route";
 
-  // A stand-in host until the Phase 3 batch screen exists: a picker, the card and the curve.
+  // A stand-in host until U6's batch screen: a picker, the lifecycle panel, the card and
+  // the curve.
   // The batch is the route's; the picker navigates rather than holding its own.
   let {
     config,
@@ -22,23 +24,26 @@
     syncs,
   }: { config: Config; batchId: number; syncs: Record<number, SourceStatus> } = $props();
 
-  let batches = $state<Batch[]>([]);
+  let batches = $state<BatchSummary[]>([]);
   let loaded = $state(false);
   let error = $state<ApiError | null>(null);
   let exportError = $state<ApiError | null>(null);
 
   const batch = $derived(batches.find((b) => b.id === batchId) ?? null);
 
+  // Archived ones too: the route may name one, and restoring it happens here.
+  async function load() {
+    try {
+      batches = await listBatches(true);
+    } catch (e) {
+      error = toApiError(e);
+    } finally {
+      loaded = true;
+    }
+  }
+
   onMount(() => {
-    void (async () => {
-      try {
-        batches = await listBatches();
-      } catch (e) {
-        error = toApiError(e);
-      } finally {
-        loaded = true;
-      }
-    })();
+    void load();
   });
 
   /** Every reading bound to the batch, not the curve's zoom. */
@@ -64,11 +69,11 @@
   {#if error}
     <p role="alert">{error.message}</p>
   {:else if loaded && batches.length === 0}
-    <p class="empty">No batches yet.</p>
+    <p class="empty">No batches yet. <a href={href({ name: "batch-new", version: null })}>Create one</a>.</p>
   {:else if loaded}
     <select value={batchId} onchange={pick}>
       {#each batches as b (b.id)}
-        <option value={b.id}>{b.code} — {b.status}</option>
+        <option value={b.id}>{b.code} — {b.status}{b.archived_at !== null ? " (archived)" : ""}</option>
       {/each}
     </select>
     <a class="compare" href={href({ name: "compare", ids: [batchId] })}>Compare with…</a>
@@ -76,8 +81,10 @@
     {#if exportError}<p role="alert">{exportError.message}</p>{/if}
 
     {#if batch}
-      <!-- Keyed: a curve's zoom and cached data belong to one batch. -->
-      {#key batch.id}
+      <BatchLifecycle {batch} onchanged={load} />
+      <!-- Keyed: a curve's zoom and cached data belong to one batch, and a pitch or a
+           status move changes what the card and curve read. -->
+      {#key `${batch.id}:${batch.pitched_at}:${batch.status}:${batch.archived_at}`}
         <StatusCard batchId={batch.id} code={batch.code} ui={config.ui} {syncs} />
         <Curve batchId={batch.id} pitchedAt={batch.pitched_at} ui={config.ui} />
       {/key}

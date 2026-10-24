@@ -1162,3 +1162,179 @@ fn a_refused_recipe_write_comes_back_with_a_code() {
     );
     assert_eq!(err["code"], "units.dimension_mismatch");
 }
+
+// ---------------------------------------------------------------------------
+// U3: batches
+
+fn batch_input(code: &str, version: Value, beverage_type: &str, og: Value) -> Value {
+    json!({
+        "code": code, "recipe_version_id": version, "beverage_type": beverage_type,
+        "vessel_id": null, "volume_l": 20.0, "og": og, "notes": null,
+    })
+}
+
+#[test]
+fn a_batch_is_created_from_a_version_in_the_display_unit_and_locks_it() {
+    let app = Harness::new();
+    let created = app
+        .invoke(
+            "create_recipe",
+            json!({ "recipe": { "name": "Citron", "beverage_type": "seltzer", "notes": null } }),
+        )
+        .unwrap();
+    let v1 = created["version_id"].clone();
+
+    let mut config = app.invoke("get_config", json!({})).unwrap();
+    config["ui"]["gravity_display"] = json!("plato");
+    app.invoke("set_config", json!({ "config": config }))
+        .unwrap();
+
+    let code = app
+        .invoke("suggest_batch_code", json!({ "beverageType": "seltzer" }))
+        .unwrap();
+    assert_eq!(code, "SELTZER-001");
+    let id = app
+        .invoke(
+            "create_batch",
+            json!({ "batch": batch_input("SELTZER-001", v1.clone(), "seltzer", json!(10.0)) }),
+        )
+        .unwrap();
+
+    let list = app
+        .invoke("list_batches", json!({ "includeArchived": false }))
+        .unwrap();
+    assert_eq!(list[0]["id"], id);
+    assert_eq!(list[0]["recipe_name"], "Citron");
+    assert_eq!(list[0]["version_no"], 1);
+    assert_eq!(list[0]["status"], "planned");
+    // Stored as SG regardless of the display.
+    assert!(
+        (list[0]["og"].as_f64().unwrap() - 1.040).abs() < 0.001,
+        "{list}"
+    );
+
+    let view = app
+        .invoke("get_recipe_version", json!({ "id": v1 }))
+        .unwrap();
+    assert_eq!(view["batch_count"], 1);
+    assert!(view["locked_at"].is_number(), "{view}");
+
+    let refused = [
+        (
+            batch_input("SELTZER-001", Value::Null, "seltzer", Value::Null),
+            "db.duplicate",
+        ),
+        (
+            batch_input("BEER-001", v1, "beer", Value::Null),
+            "db.beverage_type_mismatch",
+        ),
+        (
+            batch_input("SELTZER-002", Value::Null, "seltzer", json!(250.0)),
+            "calc.out_of_range",
+        ),
+    ];
+    for (batch, code) in refused {
+        assert_eq!(
+            app.api_error("create_batch", json!({ "batch": batch }))["code"],
+            code
+        );
+    }
+}
+
+#[test]
+fn a_batch_is_pitched_moved_along_archived_and_restored() {
+    let app = Harness::new();
+    let id = app
+        .invoke(
+            "create_batch",
+            json!({ "batch": batch_input("SELTZER-001", Value::Null, "seltzer", Value::Null) }),
+        )
+        .unwrap();
+    let pitch = Timestamp::now().as_secs() - 86_400;
+    let tomorrow = Timestamp::now().as_secs() + 86_400;
+
+    let err = app.api_error(
+        "record_pitch",
+        json!({ "batchId": id, "at": tomorrow, "note": null }),
+    );
+    assert_eq!(err["code"], "db.in_future");
+
+    app.invoke(
+        "record_pitch",
+        json!({ "batchId": id, "at": pitch, "note": "EC-1118" }),
+    )
+    .unwrap();
+    let row = app.invoke("get_batch", json!({ "batchId": id })).unwrap();
+    assert_eq!(row["pitched_at"], pitch);
+    assert_eq!(row["status"], "fermenting");
+    let err = app.api_error(
+        "record_pitch",
+        json!({ "batchId": id, "at": pitch, "note": null }),
+    );
+    assert_eq!(err["code"], "db.batch_already_pitched");
+
+    assert_eq!(
+        app.invoke("undo_pitch", json!({ "batchId": id })).unwrap(),
+        true
+    );
+    app.invoke(
+        "record_pitch",
+        json!({ "batchId": id, "at": pitch, "note": null }),
+    )
+    .unwrap();
+
+    let moved = app
+        .invoke(
+            "transition_batch",
+            json!({ "batchId": id, "to": "conditioning", "at": pitch + 3_600 }),
+        )
+        .unwrap();
+    assert_eq!(moved, true);
+    let err = app.api_error("undo_pitch", json!({ "batchId": id }));
+    assert_eq!(err["code"], "db.pitch_event_locked");
+    let err = app.api_error(
+        "transition_batch",
+        json!({ "batchId": id, "to": "packaged", "at": pitch - 60 }),
+    );
+    assert_eq!(err["code"], "db.before_pitch");
+    app.invoke(
+        "transition_batch",
+        json!({ "batchId": id, "to": "packaged", "at": null }),
+    )
+    .unwrap();
+
+    app.invoke(
+        "update_batch",
+        json!({ "batchId": id, "batch": {
+            "code": "SELTZER-001b", "vessel_id": null, "volume_l": 19.5, "notes": "dry",
+        }}),
+    )
+    .unwrap();
+    let row = app.invoke("get_batch", json!({ "batchId": id })).unwrap();
+    assert_eq!(
+        (row["code"].clone(), row["volume_l"].clone()),
+        (json!("SELTZER-001b"), json!(19.5))
+    );
+
+    assert_eq!(
+        app.invoke("archive_batch", json!({ "batchId": id }))
+            .unwrap(),
+        true
+    );
+    let active = app
+        .invoke("list_batches", json!({ "includeArchived": false }))
+        .unwrap();
+    assert_eq!(active, json!([]));
+    let err = app.api_error(
+        "update_batch",
+        json!({ "batchId": id, "batch": {
+            "code": "SELTZER-001", "vessel_id": null, "volume_l": null, "notes": null,
+        }}),
+    );
+    assert_eq!(err["code"], "db.batch_archived");
+    assert_eq!(
+        app.invoke("restore_batch", json!({ "batchId": id }))
+            .unwrap(),
+        true
+    );
+}

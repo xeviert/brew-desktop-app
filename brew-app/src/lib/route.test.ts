@@ -30,6 +30,12 @@ describe("parse", () => {
 		expect(parse("#/recipe/3/v")).toEqual({ name: "home" });
 		expect(parse("#/recipe/3/diff/1")).toEqual({ name: "home" });
 	});
+	it("reads the batch list and a new batch, blank or from a version", () => {
+		expect(parse("#/batches")).toEqual({ name: "batches" });
+		expect(parse("#/batches/new")).toEqual({ name: "batch-new", version: null });
+		expect(parse("#/batches/new/4")).toEqual({ name: "batch-new", version: 4 });
+		expect(parse("#/batches/new/x")).toEqual({ name: "home" });
+	});
 	it("reads the two ingredient tabs", () => {
 		expect(parse("#/ingredients")).toEqual({ name: "ingredients", tab: "ingredients" });
 		expect(parse("#/ingredients/strains")).toEqual({ name: "ingredients", tab: "strains" });
@@ -47,6 +53,9 @@ describe("parse", () => {
 		const routes: Route[] = [
 			{ name: "home" },
 			{ name: "batch", id: 3 },
+			{ name: "batches" },
+			{ name: "batch-new", version: null },
+			{ name: "batch-new", version: 4 },
 			{ name: "compare", ids: [] },
 			{ name: "compare", ids: [4, 2] },
 			{ name: "query", id: null },

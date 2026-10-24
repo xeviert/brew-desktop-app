@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import BatchNew from "$lib/components/BatchNew.svelte";
   import BatchView from "$lib/components/BatchView.svelte";
+  import BatchesView from "$lib/components/BatchesView.svelte";
   import CompareView from "$lib/components/CompareView.svelte";
   import HomeView from "$lib/components/HomeView.svelte";
   import IngredientsView from "$lib/components/IngredientsView.svelte";
@@ -104,6 +106,10 @@
     <h1>Brew</h1>
     <nav>
       <a href={href({ name: "home" })} class:active={route.name === "home"}>Home</a>
+      <a
+        href={href({ name: "batches" })}
+        class:active={route.name === "batches" || route.name === "batch-new" || route.name === "batch"}>Batches</a
+      >
       <a href={href({ name: "compare", ids: [] })} class:active={route.name === "compare"}>Compare</a>
       <a href={href({ name: "query", id: null })} class:active={route.name === "query"}>Queries</a>
       <a href={href({ name: "recipes" })} class:active={route.name === "recipes" || route.name === "recipe" || route.name === "recipe-diff"}
@@ -119,6 +125,12 @@
   {#if config}
     {#if route.name === "home"}
       <HomeView ui={config.ui} syncs={settled} />
+    {:else if route.name === "batches"}
+      <BatchesView />
+    {:else if route.name === "batch-new"}
+      {#key route.version}
+        <BatchNew version={route.version} gravity={config.ui.gravity_display} />
+      {/key}
     {:else if route.name === "batch"}
       <BatchView {config} batchId={route.id} syncs={settled} />
     {:else if route.name === "compare"}

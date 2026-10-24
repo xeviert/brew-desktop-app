@@ -858,7 +858,7 @@ covered by tests until U3 can create one from the UI.
       is truthy, so `if (!confirm(...)) return` never returned — **Rebuild** in Sources
       deleted a source's readings without asking. Both call sites now use
       `lib/confirm.ts` (`plugin-dialog`'s `ask`), with `dialog:allow-ask` granted.
-      Type-checked; the dialog itself is not yet confirmed blocking in the running app
+      Confirmed blocking in the running app in U3, on "Undo pitch"
 - [ ] Calculators (sugar for a target OG, YAN dose and stagger, pitch rate) — **deferred**
       to after U6, once real batches show which ones earn a place
 
@@ -872,6 +872,58 @@ showing one *Changed* line plus the FG target; a draft v3 deleted.
 
 **U3. Batch create and lifecycle** — from a version or none, pitch / undo pitch,
 transitions, archive (3c, 3d)
+- [x] `create_batch` checks before it locks: code trimmed and required
+      (`db.name_empty`), a duplicate is `db.duplicate` (was a bare `db.sqlite`), OG
+      plausible (`set_batch_og`'s rule), volume positive. A refused batch leaves its
+      version editable
+- [x] `update_batch` (code, vessel, volume, notes) replaces rather than patches, so a
+      volume or a note can be cleared. The vessel is fixed once pitched
+      (`db.batch_vessel_locked`): the pitch bound that vessel's sensors. Recipe version and
+      beverage type are fixed at create — the version was locked against the type, and
+      the way out of a wrong pick is archive and recreate. `restore_batch` beside
+      `archive_batch`, which now names an unknown id instead of returning `false`
+- [x] **Archiving closes the batch's open sensor bindings**, as packaging does. A batch
+      abandoned mid-ferment otherwise held its vessel's sensors forever, and the next pitch
+      into that vessel failed with `db.stream_already_bound`. Restore does not reopen
+      them: the sensors may have moved on. A pitch backdated to before the archive time
+      still overlaps and is still refused — that is the rule working
+- [x] A second pitch is `db.batch_already_pitched`, checked before the partial unique
+      index, which stays as the backstop. A transition dated before the pitch is
+      `db.before_pitch` — `close_sensor_bindings` skips a binding starting after `at`, so
+      packaging "before" the pitch would have left the sensors bound. A pitch or status
+      time in the future is `db.in_future`, checked in the command, which is the only
+      layer that knows what now is
+- [x] Commands: `suggest_batch_code`, `create_batch` (OG in `ui.gravity_display`, the
+      version lock in the same transaction), `update_`/`archive_`/`restore_batch`,
+      `record_pitch(batch_id, at?, note)`, `undo_pitch`, `transition_batch(batch_id, to,
+      at?)` — each multi-row write in one transaction. `list_batches` returns
+      `BatchSummary`: the row plus recipe name, version number and vessel name, from
+      `db::batch::list_batch_summaries`
+- [x] Screens: `#/batches` (nav: "Batches"; grouped by status, show archived, archive /
+      restore), `#/batches/new` and `#/batches/new/<versionId>` (recipe → version or "no
+      recipe"; type from the recipe; code suggested per type until typed over; vessel with
+      "the pitch binds N sensor streams"; volume from the version's target; a note when
+      creating locks the version). The recipe screen links "Start a batch from vN" from
+      every version. `BatchLifecycle.svelte` sits above `BatchView`'s card: status, recipe
+      link, edit, pitch with a `datetime-local` and a note, undo pitch (asked), start
+      conditioning, mark packaged at a time, archive (asked while fermenting or
+      conditioning) / restore. A stale-state code reloads the panel. Form shaping pure in
+      `lib/batch.ts`, with vitest; `reference.ts`'s `reader` is now exported for it
+- [x] **Refined:** `BatchView` lists archived batches too, marked, so an archived batch
+      opens and can be restored; the card and curve are keyed on pitch and status, so a
+      pitch redraws them
+
+**Done when:** a batch is created from a recipe version and from none; its version
+locks; it is pitched, undone, re-pitched, conditioned, packaged, edited, archived and
+restored from the UI; each refusal shows by its message. **Status:** driven in the
+running app (WebView2 over CDP) on a `demo-db` file with a vessel mapped to stream 1:
+Citron-Verveine forked to v2 and "Start a batch from v2" prefilled SELTZER-008, 20 L and
+the lock note; refusals for OG 2.5, the duplicate SELTZER-001, a pitch tomorrow, a pitch
+while SELTZER-001 still held the sensor, and packaging before the pitch. Archiving
+SELTZER-001 freed the sensor and the pitch bound it; `1,045` stored as 1.045. The undo
+dialog **does block** — the batch stayed fermenting with it open, Cancel left it so, OK
+returned it to planned and dropped the binding — closing U2's open question. v2's badge
+reads locked; CIDER-006 created with no recipe.
 
 **U4. Timeline and quick-entry** — events and manual measurements in one list,
 quick-entry form, "use as FG" (3d, 3e)

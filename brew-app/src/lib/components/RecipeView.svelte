@@ -316,6 +316,7 @@
             used by a batch
           {/if}
         </span>
+        <a href={href({ name: "batch-new", version: current.id })}>Start a batch from v{current.version_no}</a>
         <button onclick={fork} disabled={busy}>Fork to v{(detail?.versions.at(-1)?.version_no ?? 0) + 1}</button>
       </div>
       <p class="hint">A version a batch was made from never changes. Edit a fork instead.</p>
@@ -445,6 +446,9 @@
       {:else}
         <div class="actions">
           <button onclick={() => editLine(null)}>Add a line</button>
+          <a class="start" href={href({ name: "batch-new", version: current.id })}
+            >Start a batch from v{current.version_no}</a
+          >
           {#if newest && (detail?.versions.length ?? 0) > 1}
             <button class="link" onclick={deleteDraft} disabled={busy}>Delete draft v{current.version_no}</button>
           {/if}
@@ -483,7 +487,8 @@
   }
 
   .crumbs a,
-  .badge a {
+  .badge a,
+  .start {
     color: #7ba7d4;
   }
 

@@ -24,7 +24,10 @@ use super::{
         BeverageType, RecipeItemRow, Stage, get_recipe_version, list_recipe_items,
         lock_recipe_version,
     },
-    reference::{CanonicalQty, canonical_for_ingredient, canonical_from_columns},
+    reference::{
+        CanonicalQty, canonical_for_ingredient, canonical_from_columns, duplicate, required_name,
+        restore_row,
+    },
 };
 use crate::{
     Error, Result, calc,
@@ -123,6 +126,15 @@ pub(crate) fn batch_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BatchR
 /// fact, and a seltzer batch of a beer recipe is a typo that would otherwise decide
 /// which side tables apply in Phase 4.
 pub fn create_batch(conn: &Connection, batch: &NewBatch, at: Timestamp) -> Result<i64> {
+    let code = required_name("batch code", &batch.code)?;
+    check_volume(batch.volume_l)?;
+    if let Some(og) = batch.og.filter(|og| !og.is_plausible()) {
+        return Err(Error::MeasurementImplausible {
+            metric: crate::db::Metric::Sg,
+            value: og.get(),
+        });
+    }
+
     if let Some(version_id) = batch.recipe_version_id {
         let version = get_recipe_version(conn, version_id)?;
         let recipe: BeverageType = conn.query_row(
@@ -144,7 +156,7 @@ pub fn create_batch(conn: &Connection, batch: &NewBatch, at: Timestamp) -> Resul
          (code, recipe_version_id, beverage_type, vessel_id, status, volume_l, og, notes) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         params![
-            batch.code,
+            code,
             batch.recipe_version_id,
             batch.beverage_type,
             batch.vessel_id,
@@ -153,8 +165,48 @@ pub fn create_batch(conn: &Connection, batch: &NewBatch, at: Timestamp) -> Resul
             batch.og,
             batch.notes,
         ],
-    )?;
+    )
+    .map_err(duplicate("batch", code))?;
     Ok(conn.last_insert_rowid())
+}
+
+fn check_volume(volume_l: Option<Litres>) -> Result<()> {
+    match volume_l.filter(|v| v.get() <= 0.0) {
+        Some(v) => Err(Error::NotPositive {
+            field: "volume_l",
+            value: v.get(),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// What can change about a batch after it is created. The recipe version and the
+/// beverage type cannot: the version was locked against this batch's type, and the way
+/// out of a wrong pick is to archive the batch and create another.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct BatchEdit {
+    pub code: String,
+    pub vessel_id: Option<i64>,
+    pub volume_l: Option<Litres>,
+    pub notes: Option<String>,
+}
+
+/// Replaces all four fields, so a volume or a note can be cleared — unlike
+/// [`set_batch_measurements`], which patches.
+pub fn update_batch(conn: &Connection, batch_id: i64, edit: &BatchEdit) -> Result<()> {
+    let batch = get_batch(conn, batch_id)?;
+    ensure_open(&batch)?;
+    let code = required_name("batch code", &edit.code)?;
+    check_volume(edit.volume_l)?;
+    if batch.pitched_at.is_some() && edit.vessel_id != batch.vessel_id {
+        return Err(Error::BatchVesselLocked { batch_id });
+    }
+    conn.execute(
+        "UPDATE batch SET code = ?, vessel_id = ?, volume_l = ?, notes = ? WHERE id = ?",
+        params![code, edit.vessel_id, edit.volume_l, edit.notes, batch_id],
+    )
+    .map_err(duplicate("batch", code))?;
+    Ok(())
 }
 
 /// The next unused code in this beverage type's series, as a suggestion.
@@ -193,6 +245,46 @@ pub fn list_batches(conn: &Connection, include_archived: bool) -> Result<Vec<Bat
         "SELECT {BATCH_COLUMNS} FROM batch WHERE ?1 OR archived_at IS NULL ORDER BY code"
     ))?;
     let rows = stmt.query_map([include_archived], batch_from_row)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// A batch with the names a list shows beside it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct BatchSummary {
+    #[serde(flatten)]
+    pub batch: BatchRow,
+    pub recipe_id: Option<i64>,
+    pub recipe_name: Option<String>,
+    pub version_no: Option<i64>,
+    pub vessel_name: Option<String>,
+}
+
+pub fn list_batch_summaries(
+    conn: &Connection,
+    include_archived: bool,
+) -> Result<Vec<BatchSummary>> {
+    let columns = BATCH_COLUMNS
+        .split(',')
+        .map(|c| format!("b.{}", c.trim()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {columns}, r.id, r.name, v.version_no, ves.name \
+         FROM batch b \
+         LEFT JOIN recipe_version v ON v.id = b.recipe_version_id \
+         LEFT JOIN recipe r ON r.id = v.recipe_id \
+         LEFT JOIN vessel ves ON ves.id = b.vessel_id \
+         WHERE ?1 OR b.archived_at IS NULL ORDER BY b.code"
+    ))?;
+    let rows = stmt.query_map([include_archived], |row| {
+        Ok(BatchSummary {
+            batch: batch_from_row(row)?,
+            recipe_id: row.get(12)?,
+            recipe_name: row.get(13)?,
+            version_no: row.get(14)?,
+            vessel_name: row.get(15)?,
+        })
+    })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
@@ -264,8 +356,10 @@ pub fn transition_batch(
             to,
         });
     }
-    if to == BatchStatus::Fermenting && batch.pitched_at.is_none() {
-        return Err(Error::BatchNotPitched { batch_id });
+    match batch.pitched_at {
+        None if to == BatchStatus::Fermenting => return Err(Error::BatchNotPitched { batch_id }),
+        Some(pitched_at) if at < pitched_at => return Err(Error::BeforePitch { batch_id }),
+        _ => {}
     }
 
     conn.execute(
@@ -280,12 +374,27 @@ pub fn transition_batch(
 
 /// Returns whether a row changed. A batch is never hard-deleted: it is the record of
 /// something that physically happened, and its readings are bound to it.
+///
+/// Closes the batch's open sensor bindings at `at`, as packaging does. A batch
+/// abandoned mid-ferment would otherwise hold its vessel's sensors forever, and the
+/// next pitch into that vessel would fail on them.
 pub fn archive_batch(conn: &Connection, batch_id: i64, at: Timestamp) -> Result<bool> {
+    get_batch(conn, batch_id)?;
     let changed = conn.execute(
         "UPDATE batch SET archived_at = ? WHERE id = ? AND archived_at IS NULL",
         params![at, batch_id],
     )?;
+    if changed == 1 {
+        super::timeline::close_sensor_bindings(conn, batch_id, at)?;
+    }
     Ok(changed == 1)
+}
+
+/// The bindings archiving closed stay closed: the sensors may have moved on to the
+/// next batch in the meantime.
+pub fn restore_batch(conn: &Connection, batch_id: i64) -> Result<bool> {
+    get_batch(conn, batch_id)?;
+    restore_row(conn, "batch", batch_id)
 }
 
 // ------------------------------------------------------ batch_ingredient
@@ -845,12 +954,123 @@ mod tests {
     }
 
     #[test]
-    fn a_duplicate_batch_code_is_refused_by_the_schema() {
+    fn a_duplicate_batch_code_is_refused_by_name() {
         let conn = db();
         create_batch(&conn, &new_batch("SELTZER-001", None), T0).unwrap();
-        let err =
-            create_batch(&conn, &new_batch("SELTZER-001", None), T0).expect_err("codes are unique");
-        assert!(err.to_string().contains("UNIQUE"), "unexpected: {err}");
+        let err = create_batch(&conn, &new_batch(" SELTZER-001 ", None), T0)
+            .expect_err("codes are unique");
+        assert_eq!(err.code(), "db.duplicate");
+        assert!(err.to_string().contains("SELTZER-001"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn a_new_batch_is_checked_before_its_version_is_locked() {
+        let conn = db();
+        let version = seltzer_recipe(&conn);
+        let refused = [
+            (new_batch("  ", Some(version)), "db.name_empty"),
+            (
+                NewBatch {
+                    og: Some(Sg::new(1040.0).unwrap()),
+                    ..new_batch("SELTZER-001", Some(version))
+                },
+                "db.measurement_implausible",
+            ),
+            (
+                NewBatch {
+                    volume_l: Some(Litres::new(0.0).unwrap()),
+                    ..new_batch("SELTZER-001", Some(version))
+                },
+                "units.not_positive",
+            ),
+        ];
+        for (batch, code) in refused {
+            assert_eq!(create_batch(&conn, &batch, T0).unwrap_err().code(), code);
+        }
+        assert!(!get_recipe_version(&conn, version).unwrap().is_locked());
+    }
+
+    #[test]
+    fn an_edit_replaces_the_fields_and_keeps_the_code_unique() {
+        let conn = db();
+        create_batch(&conn, &new_batch("SELTZER-001", None), T0).unwrap();
+        let batch = create_batch(
+            &conn,
+            &NewBatch {
+                volume_l: Some(Litres::new(20.0).unwrap()),
+                notes: Some("first try".into()),
+                ..new_batch("SELTZER-002", None)
+            },
+            T0,
+        )
+        .unwrap();
+        let edit = |code: &str| BatchEdit {
+            code: code.into(),
+            vessel_id: None,
+            volume_l: None,
+            notes: None,
+        };
+
+        let err = update_batch(&conn, batch, &edit("SELTZER-001")).unwrap_err();
+        assert_eq!(err.code(), "db.duplicate");
+
+        update_batch(&conn, batch, &edit(" SELTZER-003 ")).unwrap();
+        let row = get_batch(&conn, batch).unwrap();
+        assert_eq!(row.code, "SELTZER-003");
+        assert_eq!((row.volume_l, row.notes), (None, None));
+    }
+
+    #[test]
+    fn a_pitched_batch_keeps_its_vessel() {
+        let conn = db();
+        let vessel = |name| {
+            crate::db::reference::create_vessel(
+                &conn,
+                name,
+                crate::db::reference::VesselKind::Fermenter,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let (fv1, fv2) = (vessel("FV1"), vessel("FV2"));
+        let batch = create_batch(
+            &conn,
+            &NewBatch {
+                vessel_id: Some(fv1),
+                ..new_batch("SELTZER-001", None)
+            },
+            T0,
+        )
+        .unwrap();
+        let edit = |vessel_id| BatchEdit {
+            code: "SELTZER-001".into(),
+            vessel_id,
+            volume_l: None,
+            notes: None,
+        };
+
+        update_batch(&conn, batch, &edit(Some(fv2))).unwrap();
+        crate::db::timeline::record_pitch(&conn, batch, T0, None).unwrap();
+        let err = update_batch(&conn, batch, &edit(Some(fv1))).unwrap_err();
+        assert_eq!(err.code(), "db.batch_vessel_locked");
+        // The rest of the batch is still editable.
+        update_batch(&conn, batch, &edit(Some(fv2))).unwrap();
+    }
+
+    #[test]
+    fn an_archived_batch_comes_back() {
+        let conn = db();
+        let batch = create_batch(&conn, &new_batch("SELTZER-001", None), T0).unwrap();
+        archive_batch(&conn, batch, T0).unwrap();
+
+        assert!(restore_batch(&conn, batch).unwrap());
+        assert!(!restore_batch(&conn, batch).unwrap());
+        assert_eq!(get_batch(&conn, batch).unwrap().archived_at, None);
+        assert_eq!(
+            archive_batch(&conn, 404, T0).unwrap_err().code(),
+            "db.no_such_batch"
+        );
     }
 
     #[test]

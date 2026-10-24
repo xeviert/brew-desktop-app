@@ -161,7 +161,11 @@ pub fn record_pitch(
     at: Timestamp,
     note: Option<&str>,
 ) -> Result<i64> {
-    ensure_open(&get_batch(conn, batch_id)?)?;
+    let batch = get_batch(conn, batch_id)?;
+    ensure_open(&batch)?;
+    if batch.pitched_at.is_some() {
+        return Err(Error::BatchAlreadyPitched { batch_id });
+    }
     let id = insert_event(
         conn,
         batch_id,
@@ -680,8 +684,72 @@ mod tests {
         record_pitch(&conn, batch_id, at(0), None).unwrap();
 
         let err = record_pitch(&conn, batch_id, at(600), None).unwrap_err();
-        assert_eq!(err.code(), "db.sqlite");
+        assert_eq!(err.code(), "db.batch_already_pitched");
+
+        // The index stays the backstop under a caller that skips the check.
+        let err = insert_event(
+            &conn,
+            batch_id,
+            &NewBatchEvent {
+                ts: at(600),
+                kind: EventKind::Pitch,
+                payload: None,
+                note: None,
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("UNIQUE"), "{err}");
+    }
+
+    /// The other half of the turnaround: an abandoned batch must not keep its vessel's
+    /// sensors from the next one.
+    #[test]
+    fn archiving_a_fermenting_batch_frees_its_vessels_sensors() {
+        let mut conn = db();
+        let (_, probe) = stream(&mut conn, "FV1");
+        let abandoned = in_vessel(&conn, "FV1", &[probe]);
+        record_pitch(&conn, abandoned, at(0), None).unwrap();
+        assert!(archive_batch(&conn, abandoned, at(1_000)).unwrap());
+
+        let vessel_id = get_batch(&conn, abandoned).unwrap().vessel_id;
+        let next = create_batch(
+            &conn,
+            &NewBatch {
+                code: "SELTZER-018".into(),
+                recipe_version_id: None,
+                beverage_type: BeverageType::Seltzer,
+                vessel_id,
+                volume_l: None,
+                og: None,
+                notes: None,
+            },
+            T0,
+        )
+        .unwrap();
+        record_pitch(&conn, next, at(1_000), None).unwrap();
+        assert_eq!(
+            batch_for_stream_at(&conn, probe, at(999)).unwrap(),
+            Some(abandoned)
+        );
+        assert_eq!(
+            batch_for_stream_at(&conn, probe, at(1_000)).unwrap(),
+            Some(next)
+        );
+    }
+
+    #[test]
+    fn packaging_dated_before_the_pitch_is_refused() {
+        let conn = db();
+        let batch_id = batch(&conn, "SELTZER-001");
+        record_pitch(&conn, batch_id, at(1_000), None).unwrap();
+        transition_batch(&conn, batch_id, BatchStatus::Conditioning, at(2_000)).unwrap();
+
+        let err = transition_batch(&conn, batch_id, BatchStatus::Packaged, at(500)).unwrap_err();
+        assert_eq!(err.code(), "db.before_pitch");
+        assert_eq!(
+            get_batch(&conn, batch_id).unwrap().status,
+            BatchStatus::Conditioning
+        );
     }
 
     #[test]
