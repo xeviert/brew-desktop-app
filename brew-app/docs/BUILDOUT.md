@@ -477,10 +477,10 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
       **Dormant under v2**: no v2 source writes `annotation`, so
       `suggest_events_for_batch` returns nothing. The table and function stay; they
       cost nothing and would be revived by a Fermentrack fallback
-- [ ] Timeline UI: events + manual measurements on one vertical list —
+- [x] Timeline UI: events + manual measurements on one vertical list —
       **deferred to the Phase 3 UI pass**, with 3b's recipe screen and a batch
       screen. Half of what this list renders is 3e's manual measurements, so it
-      lands once they exist
+      lands once they exist. **Landed in U4**
 
 **3e. Manual measurements**
 - [x] One `source` with `kind='manual'` per batch; its streams bound via `batch_stream`.
@@ -927,6 +927,53 @@ reads locked; CIDER-006 created with no recipe.
 
 **U4. Timeline and quick-entry** — events and manual measurements in one list,
 quick-entry form, "use as FG" (3d, 3e)
+- [x] `set_batch_gravity(batch, og|fg, Option<Sg>)` sets or **clears** exactly —
+      `set_batch_measurements` patches, so a mistaken OG could only ever be replaced.
+      Plausible SG, FG ≤ OG either way round (`units.range_inverted`). **An OG that
+      post-pitch refractometer readings were corrected against does not move**
+      (`db.og_in_use`, naming how many): `derive_gravity` stored values computed from
+      it and nothing would recompute them. Delete those readings first. The same OG
+      again is not a change. `set_batch_og` goes through it now and takes `null`;
+      `set_batch_fg` is new
+- [x] `update_event` (time, kind, note), refusing the pitch in both directions — its
+      time is `batch.pitched_at` too. `delete_event` and `delete_measurement` now refuse
+      an archived batch, as every write before them did. A quick entry with no reading
+      and no note is `db.entry_empty`
+- [x] `measurement::batch_timeline`: events and manual measurements, oldest first; at
+      one `ts` the readings before the events, so a quick entry reads as its numbers
+      then its note. The `batch_timeline` command adds each gravity in
+      `ui.gravity_display` beside the SG (4d's rule) and the pitch time.
+      `BatchDashboard` gains `fg`
+- [x] Commands: `batch_timeline`, `record_quick_entry(batch_id, entry)` (`ts` optional,
+      a future one `db.in_future`, one transaction), `delete_measurement`,
+      `add_`/`update_`/`delete_event` (an edit keeps the stored payload),
+      `set_batch_og`/`set_batch_fg` with `null` to clear
+- [x] `Timeline.svelte` under the curve: one entry per moment, newest first, with
+      "t+N h" from pitch; each gravity says its instrument and, when it differs from the
+      value shown, what was typed and which correction ran. Add reading, add event,
+      edit event, delete (asked), and "Use as OG" / "Use as FG" on every gravity.
+      `QuickEntry.svelte`: time, gravity with hydrometer (scale, sample and calibration
+      temp in the display unit, calibration prefilled from config) or refractometer
+      (Brix and the wort factor from config), pH, temp, TA, taste note.
+      `EventEditor.svelte` for events. Shaping and wording pure in `lib/timeline.ts`,
+      with vitest. The card gets an FG row with "Use … as FG" from the current gravity,
+      and "clear" on OG and FG
+- [x] **Refined:** a manual write raises no `sync://status`, so `BatchView` keys the
+      card and curve on a revision counter every write from the screen bumps. The
+      duplicate-reading message is reworded in the form — the backend's carries a raw
+      epoch
+
+**Done when:** a quick entry with gravity, pH and a note lands as one moment; a
+refractometer reading after pitch is refused without an OG and corrected with one; an
+OG it depends on cannot be changed until it is deleted; an event is added, corrected
+and deleted; a gravity is used as OG and FG and the card shows both. **Status:** driven
+in the running app (WebView2 over CDP) on a `demo-db` file: refractometer 6,0 °Bx
+refused with no OG, "Use as OG" on the first hydrometer (1.0460), then accepted as
+1.0115; "clear" on the OG refused naming the one reading; a quick entry of 1.002 at
+25 °C (→ 1.0031), pH 3,2 and "dry, lemony" as one moment; the same minute again
+refused in words; 1.0031 used as FG; a cold crash added, edited to fining (marker on
+the curve) and the refractometer reading deleted through the dialog, after which the
+OG cleared.
 
 **U5. Actuals** — `batch_ingredient` from lots, `plan_vs_actual`, `batch_cost` (3c, 3f)
 

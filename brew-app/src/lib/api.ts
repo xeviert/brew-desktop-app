@@ -774,6 +774,8 @@ export interface Dashboard {
 	og: number | null;
 	/** The earliest gravity, offered while `og` is null. */
 	og_candidate: DashboardGravity | null;
+	/** `batch.fg`, set deliberately. */
+	fg: number | null;
 	gravity: DashboardGravity | null;
 	estimate: Estimate;
 	ph: DashboardReading | null;
@@ -786,6 +788,7 @@ export interface Dashboard {
 	display: {
 		og: number | null;
 		og_candidate: number | null;
+		fg: number | null;
 		gravity: number | null;
 		expected_fg_lo: number | null;
 		expected_fg_hi: number | null;
@@ -796,9 +799,14 @@ export interface Dashboard {
 export const batchDashboard = (batchId: number): Promise<Dashboard> =>
 	call("batch_dashboard", { batchId });
 
-/** `og` in SG: send back `og_candidate.sg`, not the display value. */
-export const setBatchOg = (batchId: number, og: number): Promise<void> =>
+/** `og` in SG: send back `og_candidate.sg`, not the display value. `null` clears it; an OG
+ * that post-pitch refractometer readings were corrected against is refused. */
+export const setBatchOg = (batchId: number, og: number | null): Promise<void> =>
 	call("set_batch_og", { batchId, og });
+
+/** `fg` in SG; `null` clears it. Must not be above the OG. */
+export const setBatchFg = (batchId: number, fg: number | null): Promise<void> =>
+	call("set_batch_fg", { batchId, fg });
 
 // ---------------------------------------------------------------------------
 // Phase 3 UI pass, U3: batch create and lifecycle
@@ -1193,3 +1201,91 @@ export const exportComparison = (
 
 export const exportBatchReadings = (batchId: number, path: string): Promise<void> =>
 	call("export_batch_readings", { batchId, path });
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U4: timeline and quick entry
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::measurement::Instrument`. */
+export type Instrument = "hydrometer" | "refractometer" | "ph_meter" | "thermometer" | "titration";
+
+/** Mirrors `brewcore::db::measurement::EntryUnit`: the scale typed in. */
+export type EntryUnit = "sg" | "plato" | "brix" | "c" | "f" | "ph" | "g_per_l";
+
+/** The four metrics a person measures by hand. */
+export type ManualMetric = "sg" | "temp_c" | "ph" | "ta";
+
+/** Mirrors `brewcore::db::measurement::NewMeasurement`. Temperatures °C. */
+export interface NewMeasurement {
+	metric: ManualMetric;
+	entry_value: number;
+	entry_unit: EntryUnit;
+	instrument: Instrument | null;
+	sample_temp_c: number | null;
+	calibration_temp_c: number | null;
+	wort_correction: number | null;
+}
+
+/** Mirrors `brewcore::db::measurement::MeasurementRow`. `value` is canonical and corrected. */
+export interface Measurement {
+	id: number;
+	batch_id: number;
+	stream_id: number;
+	ts: number;
+	metric: ManualMetric;
+	value: number;
+	entry_value: number;
+	entry_unit: EntryUnit;
+	instrument: Instrument | null;
+	sample_temp_c: number | null;
+	calibration_temp_c: number | null;
+	wort_correction: number | null;
+}
+
+/** Mirrors `src-tauri`'s `TimelineItemView`. `display` is a gravity in `gravity_unit`. */
+export type TimelineItem =
+	| ({ type: "event" } & BatchEvent)
+	| ({ type: "measurement"; display: number | null } & Measurement);
+
+/** Mirrors `src-tauri`'s `TimelineView`. Oldest first. */
+export interface Timeline {
+	pitched_at: number | null;
+	gravity_unit: string;
+	items: TimelineItem[];
+}
+
+/** Mirrors `src-tauri`'s `QuickEntryInput`. `ts: null` is now. */
+export interface QuickEntryInput {
+	ts: number | null;
+	measurements: NewMeasurement[];
+	note: string | null;
+}
+
+/** Mirrors `src-tauri`'s `EventInput`. `ts: null` is now. */
+export interface EventInput {
+	ts: number | null;
+	kind: EventKind;
+	note: string | null;
+}
+
+export const batchTimeline = (batchId: number): Promise<Timeline> => call("batch_timeline", { batchId });
+
+/** All at one `ts`; a note becomes a `note` event. All or nothing. */
+export const recordQuickEntry = (
+	batchId: number,
+	entry: QuickEntryInput,
+): Promise<{ measurements: Measurement[]; event_id: number | null }> =>
+	call("record_quick_entry", { batchId, entry });
+
+/** Takes its reading off the curve too. */
+export const deleteMeasurement = (measurementId: number): Promise<boolean> =>
+	call("delete_measurement", { measurementId });
+
+/** Not `pitch`: that is `recordPitch`. */
+export const addEvent = (batchId: number, event: EventInput): Promise<number> =>
+	call("add_event", { batchId, event });
+
+export const updateEvent = (eventId: number, event: EventInput): Promise<void> =>
+	call("update_event", { eventId, event });
+
+export const deleteEvent = (eventId: number): Promise<boolean> => call("delete_event", { eventId });

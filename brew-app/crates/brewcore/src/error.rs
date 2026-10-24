@@ -330,6 +330,18 @@ pub enum Error {
     #[error("batch {batch_id} cannot move before its own pitch time")]
     BeforePitch { batch_id: i64 },
 
+    // Phase 3 UI pass, U4.
+    /// A post-pitch refractometer reading was corrected against the OG it was entered
+    /// under, and stored that way. Changing the OG under it would leave those values
+    /// silently wrong, so they go first.
+    #[error(
+        "batch {batch_id} has {readings} refractometer reading(s) corrected against its OG; delete them to change it"
+    )]
+    OgInUse { batch_id: i64, readings: i64 },
+
+    #[error("nothing to record: no reading and no note")]
+    EntryEmpty,
+
     // Phase 3d. `0005_timeline.sql` leaves `kind` and `channel` open like every
     // vocabulary before them.
     #[error("unknown event kind '{0}' in the database")]
@@ -582,6 +594,8 @@ impl Error {
             Error::BatchVesselLocked { .. } => "db.batch_vessel_locked",
             Error::InFuture { .. } => "db.in_future",
             Error::BeforePitch { .. } => "db.before_pitch",
+            Error::OgInUse { .. } => "db.og_in_use",
+            Error::EntryEmpty => "db.entry_empty",
             Error::UnknownEventKind(_) => "db.unknown_event_kind",
             Error::UnknownAnnotationChannel(_) => "db.unknown_annotation_channel",
             Error::NoSuchBatchEvent { .. } => "db.no_such_batch_event",

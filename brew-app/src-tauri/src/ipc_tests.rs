@@ -1338,3 +1338,185 @@ fn a_batch_is_pitched_moved_along_archived_and_restored() {
         true
     );
 }
+
+// ---------------------------------------------------------------------------
+// U4: timeline and quick entry
+
+fn pitched_by_ipc(app: &Harness) -> (Value, i64) {
+    let id = app
+        .invoke(
+            "create_batch",
+            json!({ "batch": batch_input("SELTZER-001", Value::Null, "seltzer", Value::Null) }),
+        )
+        .unwrap();
+    let pitch = Timestamp::now().as_secs() - 86_400;
+    app.invoke(
+        "record_pitch",
+        json!({ "batchId": id, "at": pitch, "note": null }),
+    )
+    .unwrap();
+    (id, pitch)
+}
+
+#[test]
+fn a_quick_entry_lands_on_the_timeline_in_the_display_unit() {
+    let app = Harness::new();
+    let (id, pitch) = pitched_by_ipc(&app);
+    let mut config = app.invoke("get_config", json!({})).unwrap();
+    config["ui"]["gravity_display"] = json!("plato");
+    app.invoke("set_config", json!({ "config": config }))
+        .unwrap();
+
+    let entry = |ts: i64, measurements: Value, note: Value| json!({ "batchId": id, "entry": { "ts": ts, "measurements": measurements, "note": note } });
+    let hydrometer = json!({
+        "metric": "sg", "entry_value": 1.010, "entry_unit": "sg", "instrument": "hydrometer",
+        "sample_temp_c": 25.0, "calibration_temp_c": 20.0,
+    });
+    let ph = json!({ "metric": "ph", "entry_value": 3.3, "entry_unit": "ph" });
+    let result = app
+        .invoke(
+            "record_quick_entry",
+            entry(pitch + 3_600, json!([hydrometer, ph]), json!("dry, lemony")),
+        )
+        .unwrap();
+    assert!(result["event_id"].is_number(), "{result}");
+
+    let view = app
+        .invoke("batch_timeline", json!({ "batchId": id }))
+        .unwrap();
+    assert_eq!(view["gravity_unit"], "°P");
+    assert_eq!(view["pitched_at"], pitch);
+    let kinds: Vec<String> = view["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            format!(
+                "{}:{}",
+                i["type"].as_str().unwrap(),
+                i["kind"].as_str().or(i["metric"].as_str()).unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "event:pitch",
+            "measurement:sg",
+            "measurement:ph",
+            "event:note"
+        ]
+    );
+    let sg = &view["items"][1];
+    // Temperature-corrected above the 1.010 typed, then shown in °P.
+    assert!(sg["value"].as_f64().unwrap() > 1.010, "{sg}");
+    assert!((sg["display"].as_f64().unwrap() - 2.8).abs() < 0.5, "{sg}");
+    assert_eq!(view["items"][2]["display"], Value::Null);
+
+    let refused = [
+        (
+            entry(
+                pitch + 3_600,
+                json!([{ "metric": "sg", "entry_value": 1.009, "entry_unit": "sg" }]),
+                Value::Null,
+            ),
+            "db.measurement_exists",
+        ),
+        (
+            entry(
+                Timestamp::now().as_secs() + 86_400,
+                json!([ph]),
+                Value::Null,
+            ),
+            "db.in_future",
+        ),
+        (
+            entry(
+                pitch + 7_200,
+                json!([{
+                    "metric": "sg", "entry_value": 6.0, "entry_unit": "brix",
+                    "instrument": "refractometer", "wort_correction": 1.0,
+                }]),
+                Value::Null,
+            ),
+            "db.no_original_gravity",
+        ),
+        (
+            entry(
+                pitch + 7_200,
+                json!([{ "metric": "ph", "entry_value": 47.0, "entry_unit": "ph" }]),
+                Value::Null,
+            ),
+            "db.measurement_implausible",
+        ),
+        (
+            entry(pitch + 7_200, json!([]), json!(" ")),
+            "db.entry_empty",
+        ),
+    ];
+    for (args, code) in refused {
+        assert_eq!(app.api_error("record_quick_entry", args)["code"], code);
+    }
+
+    let removed = app
+        .invoke("delete_measurement", json!({ "measurementId": sg["id"] }))
+        .unwrap();
+    assert_eq!(removed, true);
+    let view = app
+        .invoke("batch_timeline", json!({ "batchId": id }))
+        .unwrap();
+    assert_eq!(view["items"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn events_are_added_corrected_and_deleted_and_og_fg_set_and_cleared() {
+    let app = Harness::new();
+    let (id, pitch) = pitched_by_ipc(&app);
+
+    let event = app
+        .invoke(
+            "add_event",
+            json!({ "batchId": id, "event": { "ts": pitch + 600, "kind": "cold_crash", "note": "2 °C" } }),
+        )
+        .unwrap();
+    app.invoke(
+        "update_event",
+        json!({ "eventId": event, "event": { "ts": pitch + 1_200, "kind": "fining", "note": "gelatin" } }),
+    )
+    .unwrap();
+    let events = app
+        .invoke("list_batch_events", json!({ "batchId": id }))
+        .unwrap();
+    assert_eq!(events[1]["kind"], "fining");
+    assert_eq!(events[1]["ts"], pitch + 1_200);
+    let err = app.api_error(
+        "add_event",
+        json!({ "batchId": id, "event": { "ts": null, "kind": "pitch", "note": null } }),
+    );
+    assert_eq!(err["code"], "db.use_pitch_recorder");
+    assert_eq!(
+        app.invoke("delete_event", json!({ "eventId": event }))
+            .unwrap(),
+        true
+    );
+
+    app.invoke("set_batch_og", json!({ "batchId": id, "og": 1.040 }))
+        .unwrap();
+    app.invoke("set_batch_fg", json!({ "batchId": id, "fg": 0.998 }))
+        .unwrap();
+    let err = app.api_error("set_batch_fg", json!({ "batchId": id, "fg": 1.050 }));
+    assert_eq!(err["code"], "units.range_inverted");
+    let card = app
+        .invoke("batch_dashboard", json!({ "batchId": id }))
+        .unwrap();
+    assert_eq!(card["fg"], 0.998);
+    assert_eq!(card["display"]["fg"], 0.998);
+
+    app.invoke("set_batch_og", json!({ "batchId": id, "og": null }))
+        .unwrap();
+    let row = app.invoke("get_batch", json!({ "batchId": id })).unwrap();
+    assert_eq!(
+        (row["og"].clone(), row["fg"].clone()),
+        (Value::Null, json!(0.998))
+    );
+}

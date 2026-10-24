@@ -3,6 +3,7 @@
   import BatchLifecycle from "$lib/components/BatchLifecycle.svelte";
   import Curve from "$lib/components/Curve.svelte";
   import StatusCard from "$lib/components/StatusCard.svelte";
+  import Timeline from "$lib/components/Timeline.svelte";
   import {
     exportBatchReadings,
     listBatches,
@@ -28,6 +29,15 @@
   let loaded = $state(false);
   let error = $state<ApiError | null>(null);
   let exportError = $state<ApiError | null>(null);
+
+  // Bumped by every write from this screen. A manual reading or an event raises no
+  // `sync://status`, so without it the card, the curve and the timeline would not see it.
+  let revision = $state(0);
+
+  async function changed() {
+    await load();
+    revision++;
+  }
 
   const batch = $derived(batches.find((b) => b.id === batchId) ?? null);
 
@@ -81,12 +91,21 @@
     {#if exportError}<p role="alert">{exportError.message}</p>{/if}
 
     {#if batch}
-      <BatchLifecycle {batch} onchanged={load} />
-      <!-- Keyed: a curve's zoom and cached data belong to one batch, and a pitch or a
-           status move changes what the card and curve read. -->
-      {#key `${batch.id}:${batch.pitched_at}:${batch.status}:${batch.archived_at}`}
+      <BatchLifecycle {batch} onchanged={changed} />
+      <!-- Keyed: a curve's zoom and cached data belong to one batch, and any write from
+           this screen changes what the card and curve read. -->
+      {#key `${batch.id}:${revision}`}
         <StatusCard batchId={batch.id} code={batch.code} ui={config.ui} {syncs} />
         <Curve batchId={batch.id} pitchedAt={batch.pitched_at} ui={config.ui} />
+      {/key}
+      {#key batch.id}
+        <Timeline
+          batchId={batch.id}
+          {config}
+          readonly={batch.archived_at !== null}
+          {revision}
+          onchanged={() => void changed()}
+        />
       {/key}
     {:else}
       <p class="empty">No batch {batchId}.</p>

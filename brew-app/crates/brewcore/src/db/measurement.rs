@@ -33,7 +33,10 @@ use super::{
     batch::{BatchRow, ensure_open, get_batch},
     enums::db_enum,
     tier1::{SourceKind, create_source, create_stream, insert_readings},
-    timeline::{EventKind, NewBatchEvent, add_event, bind_stream, set_binding_start},
+    timeline::{
+        BatchEventRow, EventKind, NewBatchEvent, add_event, bind_stream, list_batch_events,
+        set_binding_start,
+    },
 };
 use crate::{
     Error, Result,
@@ -473,17 +476,21 @@ pub fn record_quick_entry(
     batch_id: i64,
     entry: &QuickEntry,
 ) -> Result<QuickEntryResult> {
+    let note = entry
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if entry.measurements.is_empty() && note.is_none() {
+        return Err(Error::EntryEmpty);
+    }
+
     let mut measurements = Vec::with_capacity(entry.measurements.len());
     for measurement in &entry.measurements {
         measurements.push(record_measurement(tx, batch_id, entry.ts, measurement)?);
     }
 
-    let event_id = match entry
-        .note
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    let event_id = match note {
         Some(note) => Some(add_event(
             tx,
             batch_id,
@@ -513,6 +520,7 @@ pub fn record_quick_entry(
 /// has, and an empty series is not a wrong one.
 pub fn delete_measurement(tx: &Transaction<'_>, measurement_id: i64) -> Result<bool> {
     let row = get_measurement(tx, measurement_id)?;
+    ensure_open(&get_batch(tx, row.batch_id)?)?;
     tx.execute(
         "DELETE FROM reading WHERE stream_id = ? AND ts = ?",
         params![row.stream_id, row.ts],
@@ -543,6 +551,41 @@ pub fn list_measurements(conn: &Connection, batch_id: i64) -> Result<Vec<Measure
     ))?;
     let rows = stmt.query_map([batch_id], measurement_from_row)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// One line of a batch's timeline: something done to it, or something measured.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TimelineItem {
+    Event(BatchEventRow),
+    Measurement(MeasurementRow),
+}
+
+impl TimelineItem {
+    pub fn ts(&self) -> Timestamp {
+        match self {
+            TimelineItem::Event(e) => e.ts,
+            TimelineItem::Measurement(m) => m.ts,
+        }
+    }
+}
+
+/// Events and manual measurements in one list, oldest first. At one `ts` the readings
+/// come before the events, so a quick entry reads as its numbers and then its note.
+pub fn batch_timeline(conn: &Connection, batch_id: i64) -> Result<Vec<TimelineItem>> {
+    get_batch(conn, batch_id)?;
+    let mut items: Vec<TimelineItem> = list_measurements(conn, batch_id)?
+        .into_iter()
+        .map(TimelineItem::Measurement)
+        .chain(
+            list_batch_events(conn, batch_id)?
+                .into_iter()
+                .map(TimelineItem::Event),
+        )
+        .collect();
+    // Stable, so each list's own `(ts, id)` order survives within a tie.
+    items.sort_by_key(|item| (item.ts(), matches!(item, TimelineItem::Event(_))));
+    Ok(items)
 }
 
 pub fn list_measurements_for_metric(
@@ -1330,5 +1373,153 @@ mod tests {
         let batch_row = get_batch(&conn, batch_id).unwrap();
         assert_eq!(batch_row.og.map(Sg::get), Some(og.value));
         assert_eq!(batch_row.fg, None);
+    }
+
+    // ------------------------------------------------------------------- U4
+
+    #[test]
+    fn an_og_a_refractometer_reading_was_corrected_against_does_not_move() {
+        use crate::db::batch::{GravityField, set_batch_gravity};
+        let mut conn = db();
+        let batch_id = batch(&conn, "SELTZER-017");
+        record_pitch(&conn, batch_id, at(0), None).unwrap();
+        let og = Sg::new(1.048).unwrap();
+        set_batch_gravity(&conn, batch_id, GravityField::Og, Some(og)).unwrap();
+        let reading = record(&mut conn, batch_id, at(3_600), &refracto(8.0)).unwrap();
+
+        for value in [Some(Sg::new(1.050).unwrap()), None] {
+            let err = set_batch_gravity(&conn, batch_id, GravityField::Og, value).unwrap_err();
+            assert_eq!(err.code(), "db.og_in_use");
+        }
+        // The same OG again is not a change.
+        set_batch_gravity(&conn, batch_id, GravityField::Og, Some(og)).unwrap();
+
+        let tx = conn.transaction().unwrap();
+        delete_measurement(&tx, reading.id).unwrap();
+        tx.commit().unwrap();
+        set_batch_gravity(&conn, batch_id, GravityField::Og, None).unwrap();
+        assert_eq!(get_batch(&conn, batch_id).unwrap().og, None);
+    }
+
+    #[test]
+    fn an_fg_above_the_og_is_refused_either_way_round() {
+        use crate::db::batch::{GravityField, set_batch_gravity};
+        let conn = db();
+        let batch_id = batch(&conn, "SELTZER-017");
+        let sg = |v| Some(Sg::new(v).unwrap());
+        set_batch_gravity(&conn, batch_id, GravityField::Og, sg(1.040)).unwrap();
+
+        let err = set_batch_gravity(&conn, batch_id, GravityField::Fg, sg(1.050)).unwrap_err();
+        assert_eq!(err.code(), "units.range_inverted");
+        set_batch_gravity(&conn, batch_id, GravityField::Fg, sg(0.998)).unwrap();
+        let err = set_batch_gravity(&conn, batch_id, GravityField::Og, sg(0.990)).unwrap_err();
+        assert_eq!(err.code(), "units.range_inverted");
+        let err = set_batch_gravity(&conn, batch_id, GravityField::Fg, sg(2.5)).unwrap_err();
+        assert_eq!(err.code(), "db.measurement_implausible");
+
+        set_batch_gravity(&conn, batch_id, GravityField::Fg, None).unwrap();
+        assert_eq!(get_batch(&conn, batch_id).unwrap().fg, None);
+    }
+
+    #[test]
+    fn the_timeline_reads_a_quick_entry_as_its_numbers_then_its_note() {
+        let mut conn = db();
+        let batch_id = batch(&conn, "SELTZER-017");
+        add_event(
+            &conn,
+            batch_id,
+            &NewBatchEvent {
+                ts: at(7_200),
+                kind: EventKind::ColdCrash,
+                payload: None,
+                note: None,
+            },
+        )
+        .unwrap();
+        let tx = conn.transaction().unwrap();
+        record_quick_entry(
+            &tx,
+            batch_id,
+            &QuickEntry {
+                ts: at(3_600),
+                measurements: vec![
+                    gravity(1.010, EntryUnit::Sg),
+                    simple(Metric::Ph, 3.3, EntryUnit::Ph),
+                ],
+                note: Some("dry, lemony".into()),
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let kinds: Vec<String> = batch_timeline(&conn, batch_id)
+            .unwrap()
+            .iter()
+            .map(|item| match item {
+                TimelineItem::Event(e) => e.kind.as_str().to_owned(),
+                TimelineItem::Measurement(m) => m.metric.as_str().to_owned(),
+            })
+            .collect();
+        assert_eq!(kinds, ["sg", "ph", "note", "cold_crash"]);
+        assert_eq!(
+            batch_timeline(&conn, 404).unwrap_err().code(),
+            "db.no_such_batch"
+        );
+    }
+
+    #[test]
+    fn a_quick_entry_with_nothing_in_it_is_refused() {
+        let mut conn = db();
+        let batch_id = batch(&conn, "SELTZER-017");
+        let tx = conn.transaction().unwrap();
+        let entry = QuickEntry {
+            ts: at(0),
+            measurements: vec![],
+            note: Some("   ".into()),
+        };
+        let err = record_quick_entry(&tx, batch_id, &entry).unwrap_err();
+        assert_eq!(err.code(), "db.entry_empty");
+    }
+
+    #[test]
+    fn an_archived_batch_keeps_its_measurements_and_events() {
+        let mut conn = db();
+        let batch_id = batch(&conn, "SELTZER-017");
+        let reading = record(&mut conn, batch_id, at(0), &gravity(1.040, EntryUnit::Sg)).unwrap();
+        let note = add_event(
+            &conn,
+            batch_id,
+            &NewBatchEvent {
+                ts: at(0),
+                kind: EventKind::Note,
+                payload: None,
+                note: Some("x".into()),
+            },
+        )
+        .unwrap();
+        archive_batch(&conn, batch_id, at(60)).unwrap();
+
+        let tx = conn.transaction().unwrap();
+        assert_eq!(
+            delete_measurement(&tx, reading.id).unwrap_err().code(),
+            "db.batch_archived"
+        );
+        drop(tx);
+        for err in [
+            crate::db::timeline::delete_event(&conn, note).unwrap_err(),
+            crate::db::timeline::update_event(
+                &conn,
+                note,
+                &NewBatchEvent {
+                    ts: at(0),
+                    kind: EventKind::Note,
+                    payload: None,
+                    note: Some("y".into()),
+                },
+            )
+            .unwrap_err(),
+        ] {
+            assert_eq!(err.code(), "db.batch_archived");
+        }
     }
 }

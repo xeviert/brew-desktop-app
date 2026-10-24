@@ -4,6 +4,7 @@
   import {
     batchDashboard,
     onSyncStatus,
+    setBatchFg,
     setBatchOg,
     toApiError,
     type ApiError,
@@ -52,10 +53,11 @@
     }
   }
 
-  async function useAsOg(sg: number) {
+  /** OG or FG, in SG, or `null` to clear it. */
+  async function setGravity(which: "og" | "fg", sg: number | null) {
     saving = true;
     try {
-      await setBatchOg(batchId, sg);
+      await (which === "og" ? setBatchOg(batchId, sg) : setBatchFg(batchId, sg));
       await refresh();
     } catch (e) {
       error = toApiError(e);
@@ -92,11 +94,12 @@
       <dd>
         {#if card.display.og !== null}
           {formatGravityIn(card.display.og, unit)}
+          <button class="clear" disabled={saving} onclick={() => setGravity("og", null)}>clear</button>
         {:else}
           <span class="muted">no OG</span>
           {#if card.og_candidate && card.display.og_candidate !== null}
             {@const c = card.og_candidate}
-            <button disabled={saving} onclick={() => useAsOg(c.sg)}>
+            <button disabled={saving} onclick={() => setGravity("og", c.sg)}>
               Use {formatGravityIn(card.display.og_candidate, unit)} ({gravitySource(c)}, {age(c.ts)}) as OG
             </button>
           {/if}
@@ -110,6 +113,22 @@
           <span class="muted">{gravitySource(card.gravity)}, {age(card.gravity.ts)}</span>
         {:else}
           <span class="muted">—</span>
+        {/if}
+      </dd>
+
+      <dt>FG</dt>
+      <dd>
+        {#if card.display.fg !== null}
+          {formatGravityIn(card.display.fg, unit)}
+          <button class="clear" disabled={saving} onclick={() => setGravity("fg", null)}>clear</button>
+        {:else}
+          <span class="muted">not set</span>
+          {#if card.gravity && card.display.gravity !== null}
+            {@const g = card.gravity}
+            <button disabled={saving} onclick={() => setGravity("fg", g.sg)}>
+              Use {formatGravityIn(card.display.gravity, unit)} ({gravitySource(g)}, {age(g.ts)}) as FG
+            </button>
+          {/if}
         {/if}
       </dd>
 
@@ -197,5 +216,10 @@
     color: #9aa0a6;
     border: 1px solid #333842;
     padding: 0.1rem 0.5rem;
+  }
+
+  button.clear {
+    border: none;
+    color: #6f757d;
   }
 </style>

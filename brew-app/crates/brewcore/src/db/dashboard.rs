@@ -45,6 +45,8 @@ pub struct BatchDashboard {
     /// The earliest gravity, offered as the OG while there is none: a manual reading,
     /// else the judged sensor stream's first since pitch. `None` once `og` is set.
     pub og_candidate: Option<Gravity>,
+    /// `batch.fg`: set deliberately, never from the detector.
+    pub fg: Option<Sg>,
     /// The judged sensor stream's newest smoothed value, else the newest manual reading.
     pub gravity: Option<Gravity>,
     pub estimate: Estimate,
@@ -107,6 +109,7 @@ pub enum Estimate {
 pub struct DisplayGravity {
     pub og: Option<f64>,
     pub og_candidate: Option<f64>,
+    pub fg: Option<f64>,
     pub gravity: Option<f64>,
     pub expected_fg_lo: Option<f64>,
     pub expected_fg_hi: Option<f64>,
@@ -118,6 +121,7 @@ impl BatchDashboard {
         DisplayGravity {
             og: self.og.map(fit),
             og_candidate: self.og_candidate.as_ref().map(|g| fit(g.sg)),
+            fg: self.fg.map(fit),
             gravity: self.gravity.as_ref().map(|g| fit(g.sg)),
             expected_fg_lo: self.expected_fg.map(|e| fit(e.lo)),
             expected_fg_hi: self.expected_fg.map(|e| fit(e.hi)),
@@ -197,6 +201,7 @@ pub(crate) fn dashboard_at(
         batch_id,
         og: batch.og,
         og_candidate,
+        fg: batch.fg,
         estimate: estimate(batch.og, gravity.as_ref()),
         gravity,
         ph: ph.map(reading).transpose()?,

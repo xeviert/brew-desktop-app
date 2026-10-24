@@ -126,6 +126,24 @@ pub fn get_event(conn: &Connection, event_id: i64) -> Result<BatchEventRow> {
     .ok_or(Error::NoSuchBatchEvent { event_id })
 }
 
+/// Correct an event's time, kind or note. The pitch is refused in both directions: an
+/// event cannot become one, and the pitch's time is `batch.pitched_at` too, which only
+/// [`undo_pitch`] and [`record_pitch`] move together.
+pub fn update_event(conn: &Connection, event_id: i64, event: &NewBatchEvent) -> Result<()> {
+    let current = get_event(conn, event_id)?;
+    ensure_open(&get_batch(conn, current.batch_id)?)?;
+    if current.kind == EventKind::Pitch || event.kind == EventKind::Pitch {
+        return Err(Error::UsePitchRecorder {
+            batch_id: current.batch_id,
+        });
+    }
+    conn.execute(
+        "UPDATE batch_event SET ts = ?, kind = ?, payload = ?, note = ? WHERE id = ?",
+        params![event.ts, event.kind, event.payload, event.note, event_id],
+    )?;
+    Ok(())
+}
+
 /// Returns whether a row was removed. A mis-typed event is a mistake, not a record of
 /// anything, so unlike a batch this is a real delete.
 ///
@@ -133,6 +151,7 @@ pub fn get_event(conn: &Connection, event_id: i64) -> Result<BatchEventRow> {
 /// its reverse.
 pub fn delete_event(conn: &Connection, event_id: i64) -> Result<bool> {
     let event = get_event(conn, event_id)?;
+    ensure_open(&get_batch(conn, event.batch_id)?)?;
     if event.kind == EventKind::Pitch {
         return Err(Error::UsePitchRecorder {
             batch_id: event.batch_id,
@@ -750,6 +769,38 @@ mod tests {
             get_batch(&conn, batch_id).unwrap().status,
             BatchStatus::Conditioning
         );
+    }
+
+    #[test]
+    fn an_event_is_corrected_in_place_but_never_into_or_out_of_a_pitch() {
+        let conn = db();
+        let batch_id = batch(&conn, "SELTZER-001");
+        let pitch = record_pitch(&conn, batch_id, at(0), None).unwrap();
+        let event = add_event(&conn, batch_id, &note(at(60), "fining")).unwrap();
+
+        let fixed = NewBatchEvent {
+            ts: at(120),
+            kind: EventKind::Fining,
+            payload: None,
+            note: Some("bentonite".into()),
+        };
+        update_event(&conn, event, &fixed).unwrap();
+        let row = get_event(&conn, event).unwrap();
+        assert_eq!(
+            (row.ts, row.kind, row.note),
+            (at(120), EventKind::Fining, fixed.note.clone())
+        );
+
+        let as_pitch = NewBatchEvent {
+            kind: EventKind::Pitch,
+            ..fixed.clone()
+        };
+        for err in [
+            update_event(&conn, event, &as_pitch).unwrap_err(),
+            update_event(&conn, pitch, &fixed).unwrap_err(),
+        ] {
+            assert_eq!(err.code(), "db.use_pitch_recorder");
+        }
     }
 
     #[test]

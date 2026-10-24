@@ -320,6 +320,76 @@ pub fn set_batch_measurements(
     Ok(())
 }
 
+/// Which of the batch's two decided gravities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GravityField {
+    Og,
+    Fg,
+}
+
+/// Set or clear `batch.og` / `batch.fg` exactly, unlike [`set_batch_measurements`]'s
+/// patch: a mistaken OG has to be removable, not only replaceable.
+///
+/// Checked here: the value is a plausible SG and FG ≤ OG. And an OG that post-pitch
+/// refractometer readings were corrected against does not move — those readings stored
+/// a value derived from it, and nothing would recompute them. [`Error::OgInUse`] says
+/// how many to delete first.
+pub fn set_batch_gravity(
+    conn: &Connection,
+    batch_id: i64,
+    field: GravityField,
+    value: Option<Sg>,
+) -> Result<()> {
+    let batch = get_batch(conn, batch_id)?;
+    ensure_open(&batch)?;
+    if let Some(sg) = value.filter(|sg| !sg.is_plausible()) {
+        return Err(Error::MeasurementImplausible {
+            metric: crate::db::Metric::Sg,
+            value: sg.get(),
+        });
+    }
+    let (og, fg) = match field {
+        GravityField::Og => (value, batch.fg),
+        GravityField::Fg => (batch.og, value),
+    };
+    if let (Some(og), Some(fg)) = (og, fg) {
+        if fg.get() > og.get() {
+            return Err(Error::RangeInverted { field: "gravity" });
+        }
+    }
+    if field == GravityField::Og && value != batch.og {
+        let readings = corrected_against_og(conn, &batch)?;
+        if readings > 0 {
+            return Err(Error::OgInUse { batch_id, readings });
+        }
+    }
+
+    let column = match field {
+        GravityField::Og => "og",
+        GravityField::Fg => "fg",
+    };
+    conn.execute(
+        &format!("UPDATE batch SET {column} = ? WHERE id = ?"),
+        params![value, batch_id],
+    )?;
+    Ok(())
+}
+
+/// The refractometer readings `derive_gravity` ran through Terrill's cubic with this
+/// batch's OG: on or after the pitch.
+fn corrected_against_og(conn: &Connection, batch: &BatchRow) -> Result<i64> {
+    let Some(pitched_at) = batch.pitched_at else {
+        return Ok(0);
+    };
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM manual_measurement \
+         WHERE batch_id = ? AND instrument = 'refractometer' AND ts >= ?",
+        params![batch.id, pitched_at],
+        |row| row.get(0),
+    )?)
+}
+
 pub(crate) fn ensure_open(batch: &BatchRow) -> Result<()> {
     match batch.archived_at {
         None => Ok(()),

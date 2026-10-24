@@ -13,11 +13,14 @@ use brewcore::{
     db::{
         Db, DbStatus, Metric, SourceKind,
         analytics::BatchMetrics,
-        batch::{self, BatchEdit, BatchRow, BatchStatus, BatchSummary, NewBatch},
+        batch::{self, BatchEdit, BatchRow, BatchStatus, BatchSummary, GravityField, NewBatch},
         compare::{self, Comparison, RelRange, YAxis, YMode},
         dashboard::{self, BatchDashboard, DisplayGravity},
         health::DeviceHealth,
         home::{self, HomeBatch},
+        measurement::{
+            self, MeasurementRow, NewMeasurement, QuickEntry, QuickEntryResult, TimelineItem,
+        },
         query::{
             self, BatchFilter, QueryOptions, QueryResult, SavedQuery, SavedQuerySummary,
             Unevaluated,
@@ -34,7 +37,7 @@ use brewcore::{
         series::{self, BatchSeries, SeriesRange},
         stability,
         tier1::{self, StreamRow},
-        timeline::{self, BatchEventRow},
+        timeline::{self, BatchEventRow, EventKind, NewBatchEvent},
     },
     export::{self, QueryTable},
     fermentrack::{self, Client, LogProbe, SourceSummary, discovery},
@@ -1087,18 +1090,26 @@ pub async fn batch_dashboard(
 }
 
 /// 3e's "use this as the OG". SG, not the display unit: the card sends back the
-/// candidate's canonical value.
+/// candidate's canonical value. `None` clears it.
 #[tauri::command]
-pub async fn set_batch_og(db: tauri::State<'_, Db>, batch_id: i64, og: f64) -> ApiResult<()> {
-    let og = Sg::new(og)?;
-    if !og.is_plausible() {
-        return Err(Error::MeasurementImplausible {
-            metric: Metric::Sg,
-            value: og.get(),
-        }
-        .into());
-    }
-    Ok(db.write(|conn| batch::set_batch_measurements(conn, batch_id, None, Some(og), None))?)
+pub async fn set_batch_og(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+    og: Option<f64>,
+) -> ApiResult<()> {
+    let og = og.map(Sg::new).transpose()?;
+    Ok(db.write(|conn| batch::set_batch_gravity(conn, batch_id, GravityField::Og, og))?)
+}
+
+/// U4's "use as FG", the same way round: SG in, `None` clears.
+#[tauri::command]
+pub async fn set_batch_fg(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+    fg: Option<f64>,
+) -> ApiResult<()> {
+    let fg = fg.map(Sg::new).transpose()?;
+    Ok(db.write(|conn| batch::set_batch_gravity(conn, batch_id, GravityField::Fg, fg))?)
 }
 
 // ---------------------------------------------------------------------------
@@ -1233,6 +1244,151 @@ pub async fn transition_batch(
         tx.commit()?;
         Ok(moved)
     })?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U4: timeline and quick entry
+// ---------------------------------------------------------------------------
+//
+// Readings are typed in their instrument's own scale (`entry_unit`) and converted by
+// `db::measurement`; gravities come back in `ui.gravity_display` beside the SG.
+
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TimelineItemView {
+    Event(BatchEventRow),
+    Measurement {
+        #[serde(flatten)]
+        row: MeasurementRow,
+        /// A gravity in `gravity_unit`; `None` for every other metric.
+        display: Option<f64>,
+    },
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TimelineView {
+    pub pitched_at: Option<Timestamp>,
+    pub gravity_unit: &'static str,
+    pub items: Vec<TimelineItemView>,
+}
+
+#[tauri::command]
+pub async fn batch_timeline(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_id: i64,
+) -> ApiResult<TimelineView> {
+    let display = config.get().ui.gravity_display;
+    let (pitched_at, items) = db.read(|conn| {
+        Ok((
+            batch::get_batch(conn, batch_id)?.pitched_at,
+            measurement::batch_timeline(conn, batch_id)?,
+        ))
+    })?;
+    let items = items
+        .into_iter()
+        .map(|item| {
+            Ok(match item {
+                TimelineItem::Event(e) => TimelineItemView::Event(e),
+                TimelineItem::Measurement(row) => TimelineItemView::Measurement {
+                    display: (row.metric == Metric::Sg)
+                        .then(|| Sg::new(row.value).map(|sg| sg_to_display(sg, display)))
+                        .transpose()?,
+                    row,
+                },
+            })
+        })
+        .collect::<brewcore::Result<_>>()?;
+    Ok(TimelineView {
+        pitched_at,
+        gravity_unit: display.unit(),
+        items,
+    })
+}
+
+/// What the quick-entry form sends. `ts` defaults to now.
+#[derive(Debug, serde::Deserialize)]
+pub struct QuickEntryInput {
+    pub ts: Option<Timestamp>,
+    pub measurements: Vec<NewMeasurement>,
+    pub note: Option<String>,
+}
+
+#[tauri::command]
+pub async fn record_quick_entry(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+    entry: QuickEntryInput,
+) -> ApiResult<QuickEntryResult> {
+    let entry = QuickEntry {
+        ts: not_in_future(entry.ts, "reading")?,
+        measurements: entry.measurements,
+        note: entry.note,
+    };
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let result = measurement::record_quick_entry(&tx, batch_id, &entry)?;
+        tx.commit()?;
+        Ok(result)
+    })?)
+}
+
+#[tauri::command]
+pub async fn delete_measurement(db: tauri::State<'_, Db>, measurement_id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let removed = measurement::delete_measurement(&tx, measurement_id)?;
+        tx.commit()?;
+        Ok(removed)
+    })?)
+}
+
+/// What the event form sends. `ts` defaults to now; the payload is not the form's.
+#[derive(Debug, serde::Deserialize)]
+pub struct EventInput {
+    pub ts: Option<Timestamp>,
+    pub kind: EventKind,
+    pub note: Option<String>,
+}
+
+impl EventInput {
+    fn into_new(self) -> brewcore::Result<NewBatchEvent> {
+        Ok(NewBatchEvent {
+            ts: not_in_future(self.ts, "event")?,
+            kind: self.kind,
+            payload: None,
+            note: self.note,
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn add_event(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+    event: EventInput,
+) -> ApiResult<i64> {
+    let event = event.into_new()?;
+    Ok(db.write(|conn| timeline::add_event(conn, batch_id, &event))?)
+}
+
+/// Keeps an existing payload: an accepted suggestion's origin is not the form's to drop.
+#[tauri::command]
+pub async fn update_event(
+    db: tauri::State<'_, Db>,
+    event_id: i64,
+    event: EventInput,
+) -> ApiResult<()> {
+    let mut event = event.into_new()?;
+    Ok(db.write(|conn| {
+        event.payload = timeline::get_event(conn, event_id)?.payload;
+        timeline::update_event(conn, event_id, &event)
+    })?)
+}
+
+#[tauri::command]
+pub async fn delete_event(db: tauri::State<'_, Db>, event_id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| timeline::delete_event(conn, event_id))?)
 }
 
 // ---------------------------------------------------------------------------
