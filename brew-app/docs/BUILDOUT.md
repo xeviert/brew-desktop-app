@@ -746,66 +746,82 @@ opening the app backfills a gap-free curve bound to the pitched batch.
 > a misspelt `Option` argument arrives as `None` rather than failing.
 
 **U1. Reference data screens** — ingredients, yeast strains, lots
-- [ ] Migration `0010_reference_archive.sql`: `archived_at` on `yeast_strain` and
+- [x] Migration `0010_reference_archive.sql`: `archived_at` on `yeast_strain` and
       `ingredient_lot`. `ADD COLUMN`, no rebuild. A discontinued strain and a used-up
       lot must leave the pickers while every batch that used them still reads them —
       3a's rule, which these two tables were missed by. Lot consumption is Phase 7;
       until then archiving is how a lot is marked empty
-- [ ] Edits in `db::reference`: `update_ingredient`, `update_yeast_strain`,
+- [x] Edits in `db::reference`: `update_ingredient`, `update_yeast_strain`,
       `update_lot`, plus `restore_*` beside each `archive_*`. Without them a typo is
       permanent — `ingredient.name` is `UNIQUE` across archived rows too, so
       archive-and-recreate under the same name fails
-- [ ] `update_ingredient` refuses a `default_unit` of another **dimension** once
+- [x] `update_ingredient` refuses a `default_unit` of another **dimension** once
       any `ingredient_lot`, `recipe_item` or `batch_ingredient` references it — their
       canonical column was chosen by the old dimension, and every `SUM` would read
       grams as litres. Same dimension (`g` → `kg`) is free: the canonical column is
       unchanged. New error code, tested against all three tables
-- [ ] `update_lot` re-derives the canonical column from the new entry through
+- [x] `update_lot` re-derives the canonical column from the new entry through
       `canonical_for_ingredient`, as `create_lot` does. Allowed on a used lot: cost
       and quantity are read at query time, so a corrected receipt fixes every
       `batch_cost` at once — which is the point of fixing it
-- [ ] Yeast ↔ strain: an ingredient of category `yeast` requires a
+- [x] Yeast ↔ strain: an ingredient of category `yeast` requires a
       `yeast_strain_id`, and any other category refuses one. Enforced at the write
       path, not the form: a yeast with no strain is a batch 5a/5d report as
       `no_yeast`, invisible to every strain query. Check the five existing
       `Category::Yeast` call sites in tests before landing
-- [ ] Strain fractions validated in Rust before the `CHECK` does it: each of
+- [x] Strain fractions validated in Rust before the `CHECK` does it: each of
       `attenuation_min`/`max`, `alcohol_tolerance` in 0–1, and `min ≤ max`, with
       their own codes. Today a `78` comes back as a bare `db.sqlite`. The form types
-      **percent** and divides by 100 at the edge; the field label says `%`
-- [ ] `UNIQUE` violations map to `db.duplicate` naming the column, not `db.sqlite`.
+      **percent** and divides by 100 at the edge; the field label says `%`.
+      **Refined:** `units.not_a_fraction` and `units.range_inverted`; temps are
+      range-checked too
+- [x] `UNIQUE` violations map to `db.duplicate` naming the column, not `db.sqlite`.
       The forms say "an ingredient called X already exists" from the code, not by
-      parsing the message
-- [ ] YAN without the frontend writing JSON: commands take `mg_yan_per_g:
+      parsing the message. **Refined:** `UNIQUE (lab, name)` never fires with no lab
+      — SQLite treats NULLs as distinct — so strains are checked in Rust with `IS`,
+      and a blank lab is stored as NULL. Names are trimmed and required
+      (`db.name_empty`); vessels get `db.duplicate` too
+- [x] YAN without the frontend writing JSON: commands take `mg_yan_per_g:
       Option<f64>` and merge it into `attrs` in Rust under `YAN_ATTR`, keeping any
       other key. Shown for `nutrient` only, with `calc::yan`'s DAP / Fermaid K /
       Fermaid O consts offered as presets from a command — `api.ts` gets no copy of
-      the numbers
-- [ ] Lot cost typed as text (`12,50`) plus a currency, parsed by `Money::parse` in
+      the numbers. **Refined:** `calc::yan::PRESETS`, Fermaid O twice and labelled —
+      datasheet 160, TOSNA 40 — rather than one picked quietly. Edits merge into the
+      stored `attrs` in one transaction, so a key the form can't show survives
+- [x] Lot cost typed as text (`12,50`) plus a currency, parsed by `Money::parse` in
       the command — one parser, the one with the tests. New config
       `money.default_currency` (`EUR`), in Settings, prefilling the field. Dates as
       whole local days, reusing 5c's day handling in `query.ts`. Unit picker filtered
       to the ingredient's dimension; the server's `DimensionMismatch` stays the
-      enforcement
-- [ ] Strain temp range typed in the display unit via `fromDisplayTemp`, stored °C
-- [ ] Commands: `list_ingredients(include_archived)` → row + strain name + YAN + lot
+      enforcement. **Added:** a lot's quantity must be positive — a lot of nothing
+      has no cost per gram
+- [x] Strain temp range typed in the display unit via `fromDisplayTemp`, stored °C
+- [x] Commands: `list_ingredients(include_archived)` → row + strain name + YAN + lot
       count; `create_`/`update_`/`archive_`/`restore_ingredient`; the same four for
       yeast strains and lots; `list_lots(ingredient_id, include_archived)` → row +
       `cost_per_canonical_unit` + how many batches used it. That count links to
-      `#/query` with the lot filter, 5c's traceability screen
-- [ ] Screen `#/ingredients` (nav: "Ingredients"), tabs Ingredients | Yeast
+      `#/query` with the lot filter, 5c's traceability screen. **Refined:**
+      `#/query/lot/<id>`, a fresh query preset to that lot. The list prices a lot per
+      kg / L / unit, since per gram reads €0.00
+- [x] Screen `#/ingredients` (nav: "Ingredients"), tabs Ingredients | Yeast
       strains (`#/ingredients/strains`). Ingredients grouped by category, each
       expanding to its lots and an add-lot form; edit in place; "show archived"
       toggle. A yeast ingredient's form offers "new strain" inline, so the
       requirement above costs no screen change. Vessels stay in Settings. Water
       profiles stay **deferred** — nothing references `water_profile` yet
-- [ ] Form → payload shaping (percent → fraction, display temp → °C, local day →
+- [x] Form → payload shaping (percent → fraction, display temp → °C, local day →
       epoch, YAN preset) pure in `lib/reference.ts`, with vitest
 
 **Done when:** from an empty database, a yeast strain, a yeast ingredient linked to
 it, sucrose in kg and DAP with its YAN can be created; each gets a lot with a cost
 typed as `12,50`; a typo in each is fixed; a used-up lot is archived and leaves the
 picker — and 5c's lot filter and 5a's YAN total see all of it.
+**Status:** driven in the running app (WebView2 over CDP, Playwright) from an
+empty database: strain, linked yeast, sucrose, DAP from its preset, two lots
+(`12,50` → €12.50, €2.50/kg), an edit to `2,5` kg, an archive and a restore; each
+refusal (150 %, yeast with no strain, duplicate name, kg → L on a used ingredient)
+shown by its message. The lot-filter and YAN-total halves need a batch, so they are
+covered by tests until U3 can create one from the UI.
 
 **U2. Recipe screen** — list → versions → item editor, lock badge, fork, diff (3b)
 

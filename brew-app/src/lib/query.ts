@@ -42,7 +42,7 @@ export interface FilterForm extends Picks {
 	pitched_to: string;
 }
 
-function dayStart(date: string): number | null {
+export function dayStart(date: string): number | null {
 	const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
 	if (!m) return null;
 	return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() / 1000;

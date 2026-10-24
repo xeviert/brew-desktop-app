@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use brewcore::{
     Error,
@@ -6,6 +6,7 @@ use brewcore::{
     calc::{
         gravity::sg_to_display,
         stability::{ExpectedFg, FlatSpan, Stability, flat_spans},
+        yan,
     },
     config::{Config, ConfigStore},
     db::{
@@ -20,7 +21,10 @@ use brewcore::{
             self, BatchFilter, QueryOptions, QueryResult, SavedQuery, SavedQuerySummary,
             Unevaluated,
         },
-        reference::{self, VesselKind, VesselRow},
+        reference::{
+            self, Category, IngredientRow, LotRow, NewIngredient, NewLot, NewYeastStrain,
+            VesselKind, VesselRow, YeastStrainRow,
+        },
         rollup::{self, Rollup},
         series::{self, BatchSeries, SeriesRange},
         stability,
@@ -31,7 +35,7 @@ use brewcore::{
     fermentrack::{self, Client, LogProbe, SourceSummary, discovery},
     journal::JournalEntry,
     sync::{ReadingSource, SourceStatus, SyncManager},
-    units::{GravityDisplay, Litres, Sg, Timestamp},
+    units::{Currency, GravityDisplay, Litres, Money, Quantity, Sg, Timestamp, Unit},
 };
 
 use crate::error::{ApiError, ApiResult};
@@ -294,6 +298,258 @@ pub async fn create_vessel(
 ) -> ApiResult<i64> {
     let capacity_l = capacity_l.map(Litres::new).transpose()?;
     Ok(db.write(|conn| reference::create_vessel(conn, name.trim(), kind, capacity_l, None))?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U1: ingredients, yeast strains, lots
+// ---------------------------------------------------------------------------
+
+/// An ingredient as the list shows it: the strain's label and the YAN figure read out
+/// here, so the frontend never parses `attrs`.
+#[derive(Debug, serde::Serialize)]
+pub struct IngredientView {
+    #[serde(flatten)]
+    pub ingredient: IngredientRow,
+    pub yeast_strain: Option<String>,
+    pub mg_yan_per_g: Option<f64>,
+    /// Active lots only: what is in stock, not what ever was.
+    pub lot_count: i64,
+}
+
+#[tauri::command]
+pub async fn list_ingredients(
+    db: tauri::State<'_, Db>,
+    include_archived: bool,
+) -> ApiResult<Vec<IngredientView>> {
+    Ok(db.read(|conn| {
+        let strains: HashMap<i64, String> = reference::list_yeast_strains(conn, true)?
+            .into_iter()
+            .map(|s| {
+                let label = match s.lab {
+                    Some(lab) => format!("{} ({lab})", s.name),
+                    None => s.name,
+                };
+                (s.id, label)
+            })
+            .collect();
+        let lots = reference::active_lot_counts(conn)?;
+        Ok(reference::list_ingredients(conn, include_archived)?
+            .into_iter()
+            .map(|ingredient| IngredientView {
+                yeast_strain: ingredient
+                    .yeast_strain_id
+                    .and_then(|id| strains.get(&id).cloned()),
+                mg_yan_per_g: ingredient.mg_yan_per_g(),
+                lot_count: lots.get(&ingredient.id).copied().unwrap_or(0),
+                ingredient,
+            })
+            .collect())
+    })?)
+}
+
+/// What the ingredient form sends. No `attrs`: the YAN figure is merged into the
+/// stored JSON in Rust, keeping any other key.
+#[derive(Debug, serde::Deserialize)]
+pub struct IngredientInput {
+    pub name: String,
+    pub category: Category,
+    pub default_unit: Unit,
+    pub yeast_strain_id: Option<i64>,
+    pub mg_yan_per_g: Option<f64>,
+    pub notes: Option<String>,
+}
+
+impl IngredientInput {
+    fn into_new(self, attrs: Option<&str>) -> brewcore::Result<NewIngredient> {
+        Ok(NewIngredient {
+            attrs: reference::attrs_with_yan(attrs, self.mg_yan_per_g)?,
+            name: self.name,
+            category: self.category,
+            default_unit: self.default_unit,
+            yeast_strain_id: self.yeast_strain_id,
+            notes: self.notes,
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn create_ingredient(
+    db: tauri::State<'_, Db>,
+    ingredient: IngredientInput,
+) -> ApiResult<i64> {
+    let ingredient = ingredient.into_new(None)?;
+    Ok(db.write(|conn| reference::create_ingredient(conn, &ingredient))?)
+}
+
+/// Read-merge-write in one transaction, so a key someone else put in `attrs` survives.
+#[tauri::command]
+pub async fn update_ingredient(
+    db: tauri::State<'_, Db>,
+    id: i64,
+    ingredient: IngredientInput,
+) -> ApiResult<()> {
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let current = reference::get_ingredient(&tx, id)?;
+        let ingredient = ingredient.into_new(current.attrs.as_deref())?;
+        reference::update_ingredient(&tx, id, &ingredient)?;
+        tx.commit()?;
+        Ok(())
+    })?)
+}
+
+#[tauri::command]
+pub async fn archive_ingredient(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| reference::archive_ingredient(conn, id, Timestamp::now()))?)
+}
+
+#[tauri::command]
+pub async fn restore_ingredient(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| reference::restore_ingredient(conn, id))?)
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct YanPreset {
+    pub label: &'static str,
+    pub mg_yan_per_g: f64,
+}
+
+/// `calc::yan`'s figures, so `api.ts` carries no copy of the numbers.
+#[tauri::command]
+pub async fn yan_presets() -> ApiResult<Vec<YanPreset>> {
+    Ok(yan::PRESETS
+        .iter()
+        .map(|&(label, mg_yan_per_g)| YanPreset {
+            label,
+            mg_yan_per_g,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn list_yeast_strains(
+    db: tauri::State<'_, Db>,
+    include_archived: bool,
+) -> ApiResult<Vec<YeastStrainRow>> {
+    Ok(db.read(|conn| reference::list_yeast_strains(conn, include_archived))?)
+}
+
+#[tauri::command]
+pub async fn create_yeast_strain(
+    db: tauri::State<'_, Db>,
+    strain: NewYeastStrain,
+) -> ApiResult<i64> {
+    Ok(db.write(|conn| reference::create_yeast_strain(conn, &strain))?)
+}
+
+#[tauri::command]
+pub async fn update_yeast_strain(
+    db: tauri::State<'_, Db>,
+    id: i64,
+    strain: NewYeastStrain,
+) -> ApiResult<()> {
+    Ok(db.write(|conn| reference::update_yeast_strain(conn, id, &strain))?)
+}
+
+#[tauri::command]
+pub async fn archive_yeast_strain(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| reference::archive_yeast_strain(conn, id, Timestamp::now()))?)
+}
+
+#[tauri::command]
+pub async fn restore_yeast_strain(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| reference::restore_yeast_strain(conn, id))?)
+}
+
+/// A lot with what the list derives from it.
+#[derive(Debug, serde::Serialize)]
+pub struct LotView {
+    #[serde(flatten)]
+    pub lot: LotRow,
+    /// Minor units per gram / litre / unit — a float, see `LotRow::cost_per_canonical_unit`.
+    pub cost_per_canonical_unit: Option<f64>,
+    /// Distinct batches that drew from it: the count that links to 5c's lot filter.
+    pub batch_count: i64,
+}
+
+#[tauri::command]
+pub async fn list_lots(
+    db: tauri::State<'_, Db>,
+    ingredient_id: i64,
+    include_archived: bool,
+) -> ApiResult<Vec<LotView>> {
+    Ok(db.read(|conn| {
+        let used = reference::lot_batch_counts(conn, ingredient_id)?;
+        Ok(
+            reference::list_lots_for(conn, ingredient_id, include_archived)?
+                .into_iter()
+                .map(|lot| LotView {
+                    cost_per_canonical_unit: lot.cost_per_canonical_unit(),
+                    batch_count: used.get(&lot.id).copied().unwrap_or(0),
+                    lot,
+                })
+                .collect(),
+        )
+    })?)
+}
+
+/// What the lot form sends. The cost arrives as typed (`12,50`) and is parsed by
+/// `Money::parse`, the one parser with the tests; an empty one is no cost.
+#[derive(Debug, serde::Deserialize)]
+pub struct LotInput {
+    pub ingredient_id: i64,
+    pub supplier: Option<String>,
+    pub lot_code: Option<String>,
+    pub entry: Quantity,
+    pub cost: Option<String>,
+    pub currency: Option<String>,
+    pub purchased_at: Option<Timestamp>,
+    pub expires_at: Option<Timestamp>,
+    pub notes: Option<String>,
+}
+
+impl LotInput {
+    fn into_new(self) -> brewcore::Result<NewLot> {
+        let cost = match self.cost.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(text) => {
+                let currency = Currency::new(self.currency.as_deref().unwrap_or(""))?;
+                Some(Money::parse(text, currency)?)
+            }
+        };
+        Ok(NewLot {
+            ingredient_id: self.ingredient_id,
+            supplier: self.supplier,
+            lot_code: self.lot_code,
+            entry: self.entry,
+            cost,
+            purchased_at: self.purchased_at,
+            expires_at: self.expires_at,
+            notes: self.notes,
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn create_lot(db: tauri::State<'_, Db>, lot: LotInput) -> ApiResult<i64> {
+    let lot = lot.into_new()?;
+    Ok(db.write(|conn| reference::create_lot(conn, &lot))?)
+}
+
+#[tauri::command]
+pub async fn update_lot(db: tauri::State<'_, Db>, id: i64, lot: LotInput) -> ApiResult<()> {
+    let lot = lot.into_new()?;
+    Ok(db.write(|conn| reference::update_lot(conn, id, &lot))?)
+}
+
+#[tauri::command]
+pub async fn archive_lot(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| reference::archive_lot(conn, id, Timestamp::now()))?)
+}
+
+#[tauri::command]
+pub async fn restore_lot(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| reference::restore_lot(conn, id))?)
 }
 
 #[tauri::command]
@@ -695,9 +951,12 @@ pub async fn export_comparison(
     range: Option<RelRange>,
     path: PathBuf,
 ) -> ApiResult<()> {
-    let table =
-        db.read(|conn| export::comparison(conn, &batch_ids, y_mode, with_temp, range))?;
-    Ok(export::write_file(&path, &table, config.get().export.dialect)?)
+    let table = db.read(|conn| export::comparison(conn, &batch_ids, y_mode, with_temp, range))?;
+    Ok(export::write_file(
+        &path,
+        &table,
+        config.get().export.dialect,
+    )?)
 }
 
 /// Every reading bound to the batch.
@@ -709,5 +968,9 @@ pub async fn export_batch_readings(
     path: PathBuf,
 ) -> ApiResult<()> {
     let table = db.read(|conn| export::readings(conn, batch_id))?;
-    Ok(export::write_file(&path, &table, config.get().export.dialect)?)
+    Ok(export::write_file(
+        &path,
+        &table,
+        config.get().export.dialect,
+    )?)
 }

@@ -202,6 +202,44 @@ pub enum Error {
     #[error("ingredient {ingredient_id} does not exist")]
     NoSuchIngredient { ingredient_id: i64 },
 
+    // Phase 3 UI pass, U1. The forms branch on these codes, not on SQLite's text.
+    #[error("yeast strain {yeast_strain_id} does not exist")]
+    NoSuchYeastStrain { yeast_strain_id: i64 },
+
+    #[error("a {what} needs a name")]
+    NameEmpty { what: &'static str },
+
+    /// A `UNIQUE` violation, named. `what` is the kind of row, `name` what collided.
+    #[error("{what} '{name}' already exists")]
+    Duplicate { what: &'static str, name: String },
+
+    /// Every lot, plan line and actual of this ingredient filled its canonical column by
+    /// the old dimension. Switching it would have every `SUM` read grams as litres.
+    #[error("ingredient {ingredient_id} is in use, so its unit cannot change from {from} to {to}")]
+    IngredientDimensionLocked {
+        ingredient_id: i64,
+        from: Dimension,
+        to: Dimension,
+    },
+
+    /// A yeast with no strain is invisible to every strain query — 4c's expected FG,
+    /// 5c's strain filter, 5d's rollup.
+    #[error("a yeast ingredient needs a yeast strain")]
+    YeastNeedsStrain,
+
+    #[error("only a yeast ingredient has a yeast strain, not a {category}")]
+    StrainNotYeast {
+        category: crate::db::reference::Category,
+    },
+
+    /// A lot's canonical column was chosen by its ingredient's dimension, and its
+    /// actuals point at it as that ingredient.
+    #[error("lot {lot_id} cannot move to another ingredient")]
+    LotIngredientChanged { lot_id: i64 },
+
+    #[error("ingredient attrs are not a JSON object: {0}")]
+    InvalidAttrs(String),
+
     // Phase 3b. Same story as the three above: `0003_recipe.sql` leaves both columns
     // open, so the enum is the only thing standing between a typo and an unreadable row.
     #[error("unknown beverage type '{0}' in the database")]
@@ -397,6 +435,14 @@ pub enum Error {
     #[error("{field} must be greater than zero: {value}")]
     NotPositive { field: &'static str, value: f64 },
 
+    /// Checked before the schema's `CHECK` does it, so a `78` meant as 78 % comes back
+    /// naming the field rather than as a bare constraint failure.
+    #[error("{field} must be a fraction between 0 and 1: {value}")]
+    NotAFraction { field: &'static str, value: f64 },
+
+    #[error("{field}: the minimum is above the maximum")]
+    RangeInverted { field: &'static str },
+
     #[error("unknown unit '{0}'")]
     UnknownUnit(String),
 
@@ -471,6 +517,14 @@ impl Error {
             Error::UnknownCategory(_) => "db.unknown_category",
             Error::UnknownYeastForm(_) => "db.unknown_yeast_form",
             Error::NoSuchIngredient { .. } => "db.no_such_ingredient",
+            Error::NoSuchYeastStrain { .. } => "db.no_such_yeast_strain",
+            Error::NameEmpty { .. } => "db.name_empty",
+            Error::Duplicate { .. } => "db.duplicate",
+            Error::IngredientDimensionLocked { .. } => "db.ingredient_dimension_locked",
+            Error::YeastNeedsStrain => "db.yeast_needs_strain",
+            Error::StrainNotYeast { .. } => "db.strain_not_yeast",
+            Error::LotIngredientChanged { .. } => "db.lot_ingredient_changed",
+            Error::InvalidAttrs(_) => "db.invalid_attrs",
             Error::UnknownBeverageType(_) => "db.unknown_beverage_type",
             Error::UnknownStage(_) => "db.unknown_stage",
             Error::NoSuchRecipeVersion { .. } => "db.no_such_recipe_version",
@@ -511,6 +565,8 @@ impl Error {
             Error::DimensionMismatch { .. } => "units.dimension_mismatch",
             Error::NotFinite { .. } => "units.not_finite",
             Error::NotPositive { .. } => "units.not_positive",
+            Error::NotAFraction { .. } => "units.not_a_fraction",
+            Error::RangeInverted { .. } => "units.range_inverted",
             Error::UnknownUnit(_) => "units.unknown_unit",
             Error::CalcOutOfRange { .. } => "calc.out_of_range",
             Error::CurrencyMismatch { .. } => "money.currency_mismatch",

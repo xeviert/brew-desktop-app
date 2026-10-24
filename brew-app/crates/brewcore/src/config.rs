@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Error, Result,
     calc::{health::HealthParams, stability::StabilityParams},
-    units::{GravityDisplay, TempDisplay},
+    units::{Currency, GravityDisplay, TempDisplay},
 };
 
 /// Environment override for the config file location. Mirrors
@@ -105,6 +105,7 @@ pub struct Config {
     pub stability: Stability,
     pub health: Health,
     pub export: Export,
+    pub money: MoneyConfig,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,6 +270,23 @@ pub enum ExportDialect {
     /// `;` separator, `,` decimal, UTF-8 BOM: French Excel opens a comma CSV as one
     /// column, and without the BOM reads UTF-8 as Windows-1252.
     ExcelFr,
+}
+
+/// Phase 3 UI pass, U1. The currency a new lot's cost starts in — a prefill, not a
+/// conversion: the app never converts between currencies. Named `MoneyConfig` so it
+/// does not shadow `units::Money`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MoneyConfig {
+    pub default_currency: Currency,
+}
+
+impl Default for MoneyConfig {
+    fn default() -> Self {
+        Self {
+            default_currency: Currency::EUR,
+        }
+    }
 }
 
 /// `f64::clamp` propagates NaN, and TOML has `nan` and `inf` literals — so a

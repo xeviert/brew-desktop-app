@@ -41,7 +41,8 @@
   import { formatMoney, formatTemp, formatTimestamp } from "$lib/units";
   import RollupTable from "./RollupTable.svelte";
 
-  let { id, ui }: { id: number | null; ui: Config["ui"] } = $props();
+  // `lot`: U1's "used by N batches" link, a fresh query preset to that lot.
+  let { id, lot, ui }: { id: number | null; lot?: number; ui: Config["ui"] } = $props();
 
   const TYPES: BeverageType[] = ["seltzer", "beer", "cider", "wine", "mead", "kombucha", "other"];
   const STATUSES: BatchStatus[] = ["planned", "fermenting", "conditioning", "packaged"];
@@ -103,12 +104,14 @@
     }
   }
 
-  async function load(queryId: number | null) {
+  async function load(queryId: number | null, lotId: number | undefined) {
     saveError = null;
     if (queryId === null) {
       open = null;
       name = "";
-      form = toForm(emptyFilter(), formTemp);
+      const filter = emptyFilter();
+      if (lotId !== undefined) filter.lot_ids = [lotId];
+      form = toForm(filter, formTemp);
       return;
     }
     try {
@@ -261,7 +264,8 @@
 
   $effect(() => {
     const queryId = id;
-    untrack(() => void load(queryId));
+    const lotId = lot;
+    untrack(() => void load(queryId, lotId));
   });
   // Every edit reruns, as the comparison does; `shown` drops the no-op ones.
   $effect(() => {

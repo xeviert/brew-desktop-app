@@ -238,7 +238,7 @@ fn a_refused_vessel_write_comes_back_with_a_code() {
         "create_vessel",
         json!({ "name": " FV1 ", "kind": "keg", "capacityL": null }),
     );
-    assert_eq!(err["code"], "db.sqlite");
+    assert_eq!(err["code"], "db.duplicate");
 
     let err = app.api_error(
         "create_vessel",
@@ -683,4 +683,247 @@ fn exports_write_the_screens_query_in_the_configured_dialect() {
         json!({ "batchId": a, "path": bad }),
     );
     assert_eq!(err["code"], "export.write");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U1
+// ---------------------------------------------------------------------------
+
+/// Top-level arguments are camelCase (`includeArchived`); the fields inside
+/// `ingredient` and `strain` are serde's, so snake_case.
+#[test]
+fn a_yeast_and_a_nutrient_are_created_and_listed() {
+    let app = Harness::new();
+    let strain = app
+        .invoke(
+            "create_yeast_strain",
+            json!({ "strain": {
+                "name": "EC-1118", "lab": "Lallemand", "form": "dry",
+                "temp_min_c": 10.0, "temp_max_c": 30.0,
+                "attenuation_min": 0.9, "attenuation_max": 1.0,
+                "alcohol_tolerance": 0.18, "notes": null,
+            }}),
+        )
+        .unwrap();
+
+    let yeast = app
+        .invoke(
+            "create_ingredient",
+            json!({ "ingredient": {
+                "name": "EC-1118", "category": "yeast", "default_unit": "g",
+                "yeast_strain_id": strain, "mg_yan_per_g": null, "notes": null,
+            }}),
+        )
+        .unwrap();
+    let dap = app
+        .invoke(
+            "create_ingredient",
+            json!({ "ingredient": {
+                "name": "DAP", "category": "nutrient", "default_unit": "g",
+                "yeast_strain_id": null, "mg_yan_per_g": 212.0, "notes": null,
+            }}),
+        )
+        .unwrap();
+
+    let list = app
+        .invoke("list_ingredients", json!({ "includeArchived": false }))
+        .unwrap();
+    let by_id = |id: &Value| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == *id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(by_id(&yeast)["yeast_strain"], "EC-1118 (Lallemand)");
+    assert_eq!(by_id(&dap)["mg_yan_per_g"], 212.0);
+    assert_eq!(by_id(&dap)["lot_count"], 0);
+
+    let presets = app.invoke("yan_presets", json!({})).unwrap();
+    assert_eq!(presets[0], json!({ "label": "DAP", "mg_yan_per_g": 212.0 }));
+
+    // The archived flag is the argument here that would silently default.
+    app.invoke("archive_ingredient", json!({ "id": dap }))
+        .unwrap();
+    let active = app
+        .invoke("list_ingredients", json!({ "includeArchived": false }))
+        .unwrap();
+    assert_eq!(active.as_array().unwrap().len(), 1);
+    let all = app
+        .invoke("list_ingredients", json!({ "includeArchived": true }))
+        .unwrap();
+    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert_eq!(
+        app.invoke("restore_ingredient", json!({ "id": dap }))
+            .unwrap(),
+        true
+    );
+}
+
+/// The form never sees `attrs`, so an edit must not drop a key it could not show.
+#[test]
+fn an_ingredient_edit_keeps_attrs_the_form_does_not_show() {
+    let app = Harness::new();
+    let id = app
+        .invoke(
+            "create_ingredient",
+            json!({ "ingredient": {
+                "name": "Fermaid O", "category": "nutrient", "default_unit": "g",
+                "yeast_strain_id": null, "mg_yan_per_g": 160.0, "notes": null,
+            }}),
+        )
+        .unwrap();
+    let id = id.as_i64().unwrap();
+    app.db
+        .write(|conn| {
+            conn.execute(
+                "UPDATE ingredient SET attrs = json_set(attrs, '$.organic', 1) WHERE id = ?",
+                [id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    app.invoke(
+        "update_ingredient",
+        json!({ "id": id, "ingredient": {
+            "name": "Fermaid O", "category": "nutrient", "default_unit": "kg",
+            "yeast_strain_id": null, "mg_yan_per_g": 40.0, "notes": "TOSNA figure",
+        }}),
+    )
+    .unwrap();
+
+    let attrs: String = app
+        .db
+        .read(|conn| {
+            Ok(
+                conn.query_row("SELECT attrs FROM ingredient WHERE id = ?", [id], |row| {
+                    row.get(0)
+                })?,
+            )
+        })
+        .unwrap();
+    let attrs: Value = serde_json::from_str(&attrs).unwrap();
+    assert_eq!(attrs, json!({ "mg_yan_per_g": 40.0, "organic": 1 }));
+}
+
+#[test]
+fn a_lot_cost_is_parsed_from_what_was_typed() {
+    let app = Harness::new();
+    let sucrose = app
+        .invoke(
+            "create_ingredient",
+            json!({ "ingredient": {
+                "name": "Sucrose", "category": "sugar", "default_unit": "kg",
+                "yeast_strain_id": null, "mg_yan_per_g": null, "notes": null,
+            }}),
+        )
+        .unwrap();
+    let lot = |entry: Value, cost: Value, currency: Value| {
+        json!({ "lot": {
+            "ingredient_id": sucrose, "supplier": "Metro", "lot_code": null,
+            "entry": entry, "cost": cost, "currency": currency,
+            "purchased_at": 1_700_000_000, "expires_at": null, "notes": null,
+        }})
+    };
+    let lots = |include_archived: bool| {
+        app.invoke(
+            "list_lots",
+            json!({ "ingredientId": sucrose, "includeArchived": include_archived }),
+        )
+        .unwrap()
+    };
+    let five_kg = json!({ "value": 5.0, "unit": "kg" });
+
+    let id = app
+        .invoke(
+            "create_lot",
+            lot(five_kg.clone(), json!("12,50"), json!("eur")),
+        )
+        .unwrap();
+    let listed = lots(false);
+    assert_eq!(
+        listed[0]["cost"],
+        json!({ "minor": 1250, "currency": "EUR" })
+    );
+    assert_eq!(listed[0]["cost_per_canonical_unit"], 0.25);
+    assert_eq!(listed[0]["entry"], five_kg);
+    assert_eq!(listed[0]["batch_count"], 0);
+
+    // A blank cost is no cost, whatever the currency box says.
+    let mut edit = lot(
+        json!({ "value": 2.5, "unit": "kg" }),
+        json!(" "),
+        json!("EUR"),
+    );
+    edit["id"] = id.clone();
+    app.invoke("update_lot", edit).unwrap();
+    let listed = lots(false);
+    assert_eq!(listed[0]["cost"], Value::Null);
+    assert_eq!(listed[0]["qty"], json!({ "mass": 2500.0 }));
+
+    let err = app.api_error(
+        "create_lot",
+        lot(five_kg.clone(), json!("12,50"), Value::Null),
+    );
+    assert_eq!(err["code"], "money.invalid_currency");
+    let err = app.api_error(
+        "create_lot",
+        lot(five_kg.clone(), json!("twelve"), json!("EUR")),
+    );
+    assert_eq!(err["code"], "money.invalid");
+    let err = app.api_error(
+        "create_lot",
+        lot(
+            json!({ "value": 5.0, "unit": "L" }),
+            Value::Null,
+            Value::Null,
+        ),
+    );
+    assert_eq!(err["code"], "units.dimension_mismatch");
+
+    app.invoke("archive_lot", json!({ "id": id })).unwrap();
+    assert_eq!(lots(false), json!([]));
+    assert_eq!(lots(true).as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_refused_reference_write_comes_back_with_a_code() {
+    let app = Harness::new();
+    let ingredient = |name: &str, category: &str, strain: Value| {
+        json!({ "ingredient": {
+            "name": name, "category": category, "default_unit": "g",
+            "yeast_strain_id": strain, "mg_yan_per_g": null, "notes": null,
+        }})
+    };
+
+    let err = app.api_error(
+        "create_ingredient",
+        ingredient("US-05", "yeast", Value::Null),
+    );
+    assert_eq!(err["code"], "db.yeast_needs_strain");
+
+    app.invoke(
+        "create_ingredient",
+        ingredient("Sucrose", "sugar", Value::Null),
+    )
+    .unwrap();
+    let err = app.api_error(
+        "create_ingredient",
+        ingredient("Sucrose", "sugar", Value::Null),
+    );
+    assert_eq!(err["code"], "db.duplicate");
+
+    let err = app.api_error(
+        "create_yeast_strain",
+        json!({ "strain": { "name": "US-05", "attenuation_min": 78.0 } }),
+    );
+    assert_eq!(err["code"], "units.not_a_fraction");
+
+    let err = app.api_error(
+        "update_yeast_strain",
+        json!({ "id": 404, "strain": { "name": "US-05" } }),
+    );
+    assert_eq!(err["code"], "db.no_such_yeast_strain");
 }

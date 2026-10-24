@@ -606,13 +606,24 @@ mod tests {
     }
 
     fn ingredient(conn: &Connection, name: &str, category: Category, unit: Unit) -> i64 {
+        // A yeast must name its strain; one of the same name stands in.
+        let yeast_strain_id = (category == Category::Yeast).then(|| {
+            crate::db::reference::create_yeast_strain(
+                conn,
+                &crate::db::reference::NewYeastStrain {
+                    name: name.into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        });
         create_ingredient(
             conn,
             &NewIngredient {
                 name: name.into(),
                 category,
                 default_unit: unit,
-                yeast_strain_id: None,
+                yeast_strain_id,
                 attrs: None,
                 notes: None,
             },

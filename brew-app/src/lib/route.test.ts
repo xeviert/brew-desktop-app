@@ -17,6 +17,15 @@ describe("parse", () => {
 		expect(parse("#/query/4")).toEqual({ name: "query", id: 4 });
 		expect(parse("#/query/x")).toEqual({ name: "home" });
 	});
+	it("reads a query preset to one lot", () => {
+		expect(parse("#/query/lot/12")).toEqual({ name: "query", id: null, lot: 12 });
+		expect(parse("#/query/lot")).toEqual({ name: "home" });
+	});
+	it("reads the two ingredient tabs", () => {
+		expect(parse("#/ingredients")).toEqual({ name: "ingredients", tab: "ingredients" });
+		expect(parse("#/ingredients/strains")).toEqual({ name: "ingredients", tab: "strains" });
+		expect(parse("#/ingredients/lots")).toEqual({ name: "home" });
+	});
 	it("treats an empty hash and a trailing slash as the same screen", () => {
 		expect(parse("")).toEqual({ name: "home" });
 		expect(parse("#/settings/")).toEqual({ name: "settings" });
@@ -33,6 +42,9 @@ describe("parse", () => {
 			{ name: "compare", ids: [4, 2] },
 			{ name: "query", id: null },
 			{ name: "query", id: 9 },
+			{ name: "query", id: null, lot: 5 },
+			{ name: "ingredients", tab: "ingredients" },
+			{ name: "ingredients", tab: "strains" },
 			{ name: "settings" },
 		];
 		for (const r of routes) {

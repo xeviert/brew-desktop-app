@@ -37,6 +37,8 @@
   const intervalMissing = $derived(!Number.isFinite(draft.sync.poll_interval_secs));
   const batteryMissing = $derived(!Number.isFinite(draft.health.battery_warn_v));
   const rssiMissing = $derived(!Number.isFinite(draft.health.rssi_warn_dbm));
+  // The Rust side refuses anything but three letters, and refuses it in serde, as a raw string.
+  const currencyInvalid = $derived(!/^[A-Za-z]{3}$/.test(draft.money.default_currency.trim()));
 
   // Re-seed from the stored value whenever it changes, so a save's normalised result
   // (trimmed URL, clamped interval) lands in the fields. Reads only `config`, so the
@@ -169,6 +171,16 @@
   </label>
 
   <label>
+    <span>Default currency</span>
+    <input type="text" maxlength="3" bind:value={draft.money.default_currency} />
+    {#if currencyInvalid}
+      <small class="warn">a three-letter code, e.g. EUR</small>
+    {:else}
+      <small>prefills a new lot's cost — never converted</small>
+    {/if}
+  </label>
+
+  <label>
     <span>iSpindle outputs</span>
     <!-- No default: the device publishes a bare number, and SG and °P both look plausible. -->
     <select bind:value={draft.gravity.ispindel_unit}>
@@ -200,7 +212,7 @@
   </label>
 
   <div class="actions">
-    <button onclick={save} disabled={!dirty || saving || intervalMissing || batteryMissing || rssiMissing}>
+    <button onclick={save} disabled={!dirty || saving || intervalMissing || batteryMissing || rssiMissing || currencyInvalid}>
       {saving ? "Saving…" : "Save"}
     </button>
     {#if saved && !dirty}

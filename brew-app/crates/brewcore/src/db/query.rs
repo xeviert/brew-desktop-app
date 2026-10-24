@@ -534,7 +534,7 @@ pub fn query_options(conn: &Connection) -> Result<QueryOptions> {
         }
     }
 
-    let strains = list_yeast_strains(conn)?
+    let strains = list_yeast_strains(conn, true)?
         .into_iter()
         .map(|s| StrainOption {
             id: s.id,

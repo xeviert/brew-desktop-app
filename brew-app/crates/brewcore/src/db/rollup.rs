@@ -86,7 +86,7 @@ pub struct Rollup {
 
 /// [`group`] with each strain's band read from its record.
 pub fn strain_rollup(conn: &Connection, rows: &[BatchMetrics]) -> Result<Rollup> {
-    let bands = list_yeast_strains(conn)?
+    let bands = list_yeast_strains(conn, true)?
         .into_iter()
         .filter_map(|s| s.attenuation_band().map(|b| (s.id, b)))
         .collect();

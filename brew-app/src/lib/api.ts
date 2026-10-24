@@ -4,7 +4,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { GravityDisplay, Money, TempDisplay } from "$lib/units";
+import type { Currency, GravityDisplay, Money, TempDisplay } from "$lib/units";
 
 /** Mirrors `src-tauri/src/error.rs`. `code` is stable; `message` is for humans. */
 export interface ApiError {
@@ -24,6 +24,7 @@ export interface Config {
 	stability: { window_hours: number; slope_sg_per_day: number; fg_band: number };
 	health: { battery_warn_v: number; rssi_warn_dbm: number };
 	export: { dialect: ExportDialect };
+	money: { default_currency: Currency };
 }
 
 /** Mirrors `brewcore::config::IspindelUnit`. `null` in `Config` means not recorded yet. */
@@ -267,6 +268,163 @@ export const listStreams = (): Promise<Stream[]> => call("list_streams");
 /** Replaces the whole set. Batches already pitched keep what they were bound to. */
 export const setVesselStreams = (vesselId: number, streamIds: number[]): Promise<void> =>
 	call("set_vessel_streams", { vesselId, streamIds });
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U1: ingredients, yeast strains, lots
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::reference::Category`. */
+export type Category =
+	| "fermentable"
+	| "sugar"
+	| "yeast"
+	| "nutrient"
+	| "acid"
+	| "salt"
+	| "flavoring"
+	| "fining"
+	| "gas"
+	| "water";
+
+/** Mirrors `brewcore::units::Unit::symbol`. */
+export type Unit = "mg" | "g" | "kg" | "oz" | "lb" | "mL" | "L" | "hL" | "gal" | "ea";
+
+/** Mirrors `brewcore::db::reference::YeastForm`. */
+export type YeastForm = "dry" | "liquid" | "slurry";
+
+/** Mirrors `brewcore::units::Quantity`: a number as it was typed. */
+export interface Quantity {
+	value: number;
+	unit: Unit;
+}
+
+/** Mirrors `brewcore::db::reference::CanonicalQty`: grams, litres or a count. */
+export type CanonicalQty = { mass: number } | { volume: number } | { count: number };
+
+/** Mirrors `src-tauri`'s `IngredientView`. */
+export interface Ingredient {
+	id: number;
+	name: string;
+	category: Category;
+	default_unit: Unit;
+	yeast_strain_id: number | null;
+	attrs: string | null;
+	notes: string | null;
+	archived_at: number | null;
+	/** "EC-1118 (Lallemand)". */
+	yeast_strain: string | null;
+	mg_yan_per_g: number | null;
+	/** Active lots only. */
+	lot_count: number;
+}
+
+/** Mirrors `src-tauri`'s `IngredientInput`. No `attrs`: the YAN figure is merged in Rust. */
+export interface IngredientInput {
+	name: string;
+	category: Category;
+	default_unit: Unit;
+	yeast_strain_id: number | null;
+	mg_yan_per_g: number | null;
+	notes: string | null;
+}
+
+/** Mirrors `brewcore::db::reference::NewYeastStrain`. Attenuation and tolerance are fractions. */
+export interface YeastStrainInput {
+	name: string;
+	lab: string | null;
+	form: YeastForm | null;
+	temp_min_c: number | null;
+	temp_max_c: number | null;
+	attenuation_min: number | null;
+	attenuation_max: number | null;
+	alcohol_tolerance: number | null;
+	notes: string | null;
+}
+
+/** Mirrors `brewcore::db::reference::YeastStrainRow`. */
+export interface YeastStrain extends YeastStrainInput {
+	id: number;
+	form: YeastForm;
+	archived_at: number | null;
+}
+
+/** Mirrors `src-tauri`'s `YanPreset`, from `calc::yan::PRESETS`. */
+export interface YanPreset {
+	label: string;
+	mg_yan_per_g: number;
+}
+
+/** Mirrors `src-tauri`'s `LotView`. */
+export interface Lot {
+	id: number;
+	ingredient_id: number;
+	supplier: string | null;
+	lot_code: string | null;
+	qty: CanonicalQty;
+	entry: Quantity;
+	cost: Money | null;
+	purchased_at: number | null;
+	expires_at: number | null;
+	notes: string | null;
+	archived_at: number | null;
+	/** Minor units per gram / litre / unit. */
+	cost_per_canonical_unit: number | null;
+	batch_count: number;
+}
+
+/** Mirrors `src-tauri`'s `LotInput`. `cost` as typed (`12,50`); blank is no cost. */
+export interface LotInput {
+	ingredient_id: number;
+	supplier: string | null;
+	lot_code: string | null;
+	entry: Quantity;
+	cost: string | null;
+	currency: Currency | null;
+	purchased_at: number | null;
+	expires_at: number | null;
+	notes: string | null;
+}
+
+export const listIngredients = (includeArchived: boolean): Promise<Ingredient[]> =>
+	call("list_ingredients", { includeArchived });
+
+export const createIngredient = (ingredient: IngredientInput): Promise<number> =>
+	call("create_ingredient", { ingredient });
+
+export const updateIngredient = (id: number, ingredient: IngredientInput): Promise<void> =>
+	call("update_ingredient", { id, ingredient });
+
+export const archiveIngredient = (id: number): Promise<boolean> => call("archive_ingredient", { id });
+
+export const restoreIngredient = (id: number): Promise<boolean> => call("restore_ingredient", { id });
+
+export const yanPresets = (): Promise<YanPreset[]> => call("yan_presets");
+
+export const listYeastStrains = (includeArchived: boolean): Promise<YeastStrain[]> =>
+	call("list_yeast_strains", { includeArchived });
+
+export const createYeastStrain = (strain: YeastStrainInput): Promise<number> =>
+	call("create_yeast_strain", { strain });
+
+export const updateYeastStrain = (id: number, strain: YeastStrainInput): Promise<void> =>
+	call("update_yeast_strain", { id, strain });
+
+export const archiveYeastStrain = (id: number): Promise<boolean> =>
+	call("archive_yeast_strain", { id });
+
+export const restoreYeastStrain = (id: number): Promise<boolean> =>
+	call("restore_yeast_strain", { id });
+
+export const listLots = (ingredientId: number, includeArchived: boolean): Promise<Lot[]> =>
+	call("list_lots", { ingredientId, includeArchived });
+
+export const createLot = (lot: LotInput): Promise<number> => call("create_lot", { lot });
+
+export const updateLot = (id: number, lot: LotInput): Promise<void> => call("update_lot", { id, lot });
+
+export const archiveLot = (id: number): Promise<boolean> => call("archive_lot", { id });
+
+export const restoreLot = (id: number): Promise<boolean> => call("restore_lot", { id });
 
 // ---------------------------------------------------------------------------
 // Phase 4d: the batch curve

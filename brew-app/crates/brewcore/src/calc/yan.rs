@@ -65,6 +65,16 @@ pub const FERMAID_K_MG_YAN_PER_G: f64 = 100.0;
 /// should pass 40.0 explicitly.
 pub const FERMAID_O_MG_YAN_PER_G: f64 = 160.0;
 
+/// What the ingredient form offers to fill `mg_yan_per_g` with, by label. Fermaid O
+/// appears twice, labelled, for the disagreement above — the form shows both rather
+/// than pick one quietly.
+pub const PRESETS: [(&str, f64); 4] = [
+    ("DAP", DAP_MG_YAN_PER_G),
+    ("Fermaid K", FERMAID_K_MG_YAN_PER_G),
+    ("Fermaid O (datasheet)", FERMAID_O_MG_YAN_PER_G),
+    ("Fermaid O (TOSNA)", 40.0),
+];
+
 /// The TOSNA schedule: four equal doses, at 24 h, 48 h, 72 h and the ⅓ sugar break.
 ///
 /// Fractions rather than a schedule, because the *timing* belongs to

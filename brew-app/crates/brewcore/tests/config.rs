@@ -4,10 +4,10 @@
 use brewcore::{
     config::{
         self, Brewd, Config, Export, ExportDialect, Fermentrack, Gravity, Health, IspindelUnit,
-        MAX_POLL_INTERVAL_SECS,
-        MIN_POLL_INTERVAL_SECS, Measurement, Stability, SyncConfig, Ui,
+        MAX_POLL_INTERVAL_SECS, MIN_POLL_INTERVAL_SECS, Measurement, MoneyConfig, Stability,
+        SyncConfig, Ui,
     },
-    units::{GravityDisplay, TempDisplay},
+    units::{Currency, GravityDisplay, TempDisplay},
 };
 
 fn write(dir: &std::path::Path, text: &str) -> std::path::PathBuf {
@@ -140,10 +140,26 @@ fn save_then_load_round_trips() {
         export: Export {
             dialect: ExportDialect::ExcelFr,
         },
+        money: MoneyConfig {
+            default_currency: Currency::GBP,
+        },
     };
 
     config::save(&path, &written).unwrap();
     assert_eq!(config::load(&path).unwrap(), written);
+}
+
+#[test]
+fn a_currency_code_is_read_case_insensitively_and_a_non_code_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write(tmp.path(), "[money]\ndefault_currency = \"usd\"\n");
+    assert_eq!(
+        config::load(&path).unwrap().money.default_currency,
+        Currency::USD
+    );
+
+    let path = write(tmp.path(), "[money]\ndefault_currency = \"euros\"\n");
+    assert!(config::load(&path).is_err());
 }
 
 #[test]
@@ -194,9 +210,14 @@ fn the_export_dialect_is_stored_snake_case() {
         (ExportDialect::Rfc4180, "rfc4180"),
         (ExportDialect::ExcelFr, "excel_fr"),
     ] {
-        let path = write(tmp.path(), &format!("[export]
+        let path = write(
+            tmp.path(),
+            &format!(
+                "[export]
 dialect = \"{text}\"
-"));
+"
+            ),
+        );
         assert_eq!(config::load(&path).unwrap().export.dialect, dialect);
     }
 }
