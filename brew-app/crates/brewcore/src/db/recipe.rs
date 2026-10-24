@@ -12,11 +12,16 @@
 //! transaction. `&Transaction` derefs to `&Connection`, so "create a version and its
 //! items" composes into one boundary at the call site.
 
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{
     enums::db_enum,
-    reference::{CanonicalQty, canonical_for_ingredient, canonical_from_columns},
+    reference::{
+        CanonicalQty, archive_row, canonical_from_columns, duplicate, positive_canonical,
+        required_name, restore_row,
+    },
 };
 use crate::{
     Error, Result,
@@ -63,17 +68,74 @@ pub struct RecipeRow {
     pub archived_at: Option<Timestamp>,
 }
 
+/// The name is trimmed and required, and unique among every recipe, archived ones
+/// included — an archived recipe's versions are still what old batches point at.
 pub fn create_recipe(
     conn: &Connection,
     name: &str,
     beverage_type: BeverageType,
     notes: Option<&str>,
 ) -> Result<i64> {
+    let name = required_name("recipe", name)?;
     conn.execute(
         "INSERT INTO recipe (name, beverage_type, notes) VALUES (?, ?, ?)",
         params![name, beverage_type, notes],
-    )?;
+    )
+    .map_err(duplicate("recipe", name))?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Renaming is always allowed. The type is not, once a version is locked: the batch
+/// that locked it was checked against the type it had then.
+pub fn update_recipe(
+    conn: &Connection,
+    id: i64,
+    name: &str,
+    beverage_type: BeverageType,
+    notes: Option<&str>,
+) -> Result<()> {
+    let name = required_name("recipe", name)?;
+    let current = get_recipe(conn, id)?;
+    if current.beverage_type != beverage_type {
+        let locked: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM recipe_version \
+             WHERE recipe_id = ? AND locked_at IS NOT NULL)",
+            [id],
+            |row| row.get(0),
+        )?;
+        if locked {
+            return Err(Error::RecipeTypeLocked {
+                recipe_id: id,
+                beverage_type: current.beverage_type,
+            });
+        }
+    }
+    conn.execute(
+        "UPDATE recipe SET name = ?, beverage_type = ?, notes = ? WHERE id = ?",
+        params![name, beverage_type, notes, id],
+    )
+    .map_err(duplicate("recipe", name))?;
+    Ok(())
+}
+
+fn recipe_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecipeRow> {
+    Ok(RecipeRow {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        beverage_type: row.get(2)?,
+        notes: row.get(3)?,
+        archived_at: row.get(4)?,
+    })
+}
+
+pub fn get_recipe(conn: &Connection, id: i64) -> Result<RecipeRow> {
+    conn.query_row(
+        "SELECT id, name, beverage_type, notes, archived_at FROM recipe WHERE id = ?",
+        [id],
+        recipe_from_row,
+    )
+    .optional()?
+    .ok_or(Error::NoSuchRecipe { recipe_id: id })
 }
 
 pub fn list_recipes(conn: &Connection, include_archived: bool) -> Result<Vec<RecipeRow>> {
@@ -81,26 +143,18 @@ pub fn list_recipes(conn: &Connection, include_archived: bool) -> Result<Vec<Rec
         "SELECT id, name, beverage_type, notes, archived_at FROM recipe \
          WHERE ?1 OR archived_at IS NULL ORDER BY beverage_type, name",
     )?;
-    let rows = stmt.query_map([include_archived], |row| {
-        Ok(RecipeRow {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            beverage_type: row.get(2)?,
-            notes: row.get(3)?,
-            archived_at: row.get(4)?,
-        })
-    })?;
+    let rows = stmt.query_map([include_archived], recipe_from_row)?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// Returns whether a row changed. A recipe is never hard-deleted: its versions are
 /// what old batches point at.
 pub fn archive_recipe(conn: &Connection, id: i64, at: Timestamp) -> Result<bool> {
-    let changed = conn.execute(
-        "UPDATE recipe SET archived_at = ? WHERE id = ? AND archived_at IS NULL",
-        params![at, id],
-    )?;
-    Ok(changed == 1)
+    archive_row(conn, "recipe", id, at)
+}
+
+pub fn restore_recipe(conn: &Connection, id: i64) -> Result<bool> {
+    restore_row(conn, "recipe", id)
 }
 
 // -------------------------------------------------------- recipe_version
@@ -163,11 +217,46 @@ fn next_version_no(conn: &Connection, recipe_id: i64) -> Result<i64> {
     )?)
 }
 
+/// `Sg` and `Litres` deserialise with only a finiteness check, so a target typed as
+/// `1040` or `-20` would otherwise reach the finish detector's expected FG and every
+/// cost per litre. Same plausibility rule as `set_batch_og`.
+fn validate_targets(version: &NewRecipeVersion) -> Result<()> {
+    for sg in [version.target_og, version.target_fg].into_iter().flatten() {
+        if !sg.is_plausible() {
+            return Err(Error::MeasurementImplausible {
+                metric: crate::db::Metric::Sg,
+                value: sg.get(),
+            });
+        }
+    }
+    if let (Some(og), Some(fg)) = (version.target_og, version.target_fg) {
+        if fg.get() > og.get() {
+            return Err(Error::RangeInverted { field: "gravity" });
+        }
+    }
+    if let Some(abv) = version.target_abv {
+        if !(0.0..=1.0).contains(&abv) {
+            return Err(Error::NotAFraction {
+                field: "target_abv",
+                value: abv,
+            });
+        }
+    }
+    if let Some(volume) = version.target_volume_l.filter(|v| v.get() <= 0.0) {
+        return Err(Error::NotPositive {
+            field: "target_volume_l",
+            value: volume.get(),
+        });
+    }
+    Ok(())
+}
+
 pub fn create_recipe_version(
     conn: &Connection,
     recipe_id: i64,
     version: &NewRecipeVersion,
 ) -> Result<i64> {
+    validate_targets(version)?;
     let version_no = next_version_no(conn, recipe_id)?;
     conn.execute(
         "INSERT INTO recipe_version \
@@ -243,6 +332,7 @@ fn version_of_item(conn: &Connection, item_id: i64) -> Result<i64> {
 
 pub fn update_recipe_version(conn: &Connection, id: i64, version: &NewRecipeVersion) -> Result<()> {
     ensure_unlocked(conn, id)?;
+    validate_targets(version)?;
     conn.execute(
         "UPDATE recipe_version SET target_volume_l = ?, target_og = ?, target_fg = ?, \
                 target_abv = ?, notes = ? \
@@ -301,6 +391,37 @@ pub fn fork_recipe_version(conn: &Connection, from_id: i64) -> Result<i64> {
     Ok(new_id)
 }
 
+/// Delete an unlocked draft and its items — the way out of a fork made by mistake.
+///
+/// Only the newest version, so numbers stay contiguous and a deleted v3 never leaves
+/// the next fork to reuse "v3" for something else. A locked version is never a
+/// draft: a batch points at it.
+pub fn delete_recipe_version(conn: &Connection, id: i64) -> Result<()> {
+    ensure_unlocked(conn, id)?;
+    let version = get_recipe_version(conn, id)?;
+    let newest = next_version_no(conn, version.recipe_id)? - 1;
+    if version.version_no != newest {
+        return Err(Error::RecipeVersionNotNewest {
+            version_no: version.version_no,
+        });
+    }
+    // Items go by the schema's ON DELETE CASCADE.
+    conn.execute("DELETE FROM recipe_version WHERE id = ?", [id])?;
+    Ok(())
+}
+
+/// Batches per version of one recipe, archived ones included — the lock badge's
+/// "used by N batches". A version no batch used is absent, not zero.
+pub fn version_batch_counts(conn: &Connection, recipe_id: i64) -> Result<HashMap<i64, i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT b.recipe_version_id, COUNT(*) FROM batch b \
+         JOIN recipe_version v ON v.id = b.recipe_version_id \
+         WHERE v.recipe_id = ? GROUP BY b.recipe_version_id",
+    )?;
+    let rows = stmt.query_map([recipe_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 // ----------------------------------------------------------- recipe_item
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -328,13 +449,26 @@ pub struct RecipeItemRow {
     pub notes: Option<String>,
 }
 
+/// Negative is allowed — a prep step hours before pitch — but not a NaN, which
+/// `ORDER BY offset_hours` would sort somewhere nobody expects.
+fn check_offset(item: &NewRecipeItem) -> Result<()> {
+    match item.offset_hours {
+        Some(value) if !value.is_finite() => Err(Error::NotFinite {
+            field: "offset_hours",
+            value,
+        }),
+        _ => Ok(()),
+    }
+}
+
 pub fn add_recipe_item(
     conn: &Connection,
     recipe_version_id: i64,
     item: &NewRecipeItem,
 ) -> Result<i64> {
     ensure_unlocked(conn, recipe_version_id)?;
-    let (qty_g, qty_l, qty_each) = canonical_for_ingredient(conn, item.ingredient_id, item.entry)?;
+    check_offset(item)?;
+    let (qty_g, qty_l, qty_each) = positive_canonical(conn, item.ingredient_id, item.entry)?;
 
     conn.execute(
         "INSERT INTO recipe_item \
@@ -359,7 +493,8 @@ pub fn add_recipe_item(
 
 pub fn update_recipe_item(conn: &Connection, id: i64, item: &NewRecipeItem) -> Result<()> {
     ensure_unlocked(conn, version_of_item(conn, id)?)?;
-    let (qty_g, qty_l, qty_each) = canonical_for_ingredient(conn, item.ingredient_id, item.entry)?;
+    check_offset(item)?;
+    let (qty_g, qty_l, qty_each) = positive_canonical(conn, item.ingredient_id, item.entry)?;
 
     conn.execute(
         "UPDATE recipe_item SET ingredient_id = ?, qty_g = ?, qty_l = ?, qty_each = ?, \
@@ -941,5 +1076,178 @@ mod tests {
         let err = get_recipe_version(&conn, 404).expect_err("no such version");
         assert_eq!(err.code(), "db.no_such_recipe_version");
         assert!(err.to_string().contains("404"), "unexpected: {err}");
+    }
+
+    /// A batch off `version`, which locks it — the way a version gets locked for real.
+    fn brew(conn: &Connection, version: i64, code: &str) -> i64 {
+        crate::db::batch::create_batch(
+            conn,
+            &crate::db::batch::NewBatch {
+                code: code.into(),
+                recipe_version_id: Some(version),
+                beverage_type: BeverageType::Seltzer,
+                vessel_id: None,
+                volume_l: None,
+                og: None,
+                notes: None,
+            },
+            Timestamp::from_secs(1_700_000_000),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_recipe_name_is_trimmed_required_and_unique() {
+        let conn = db();
+        let err = create_recipe(&conn, "  ", BeverageType::Seltzer, None).unwrap_err();
+        assert_eq!(err.code(), "db.name_empty");
+
+        let id = create_recipe(&conn, " Citron ", BeverageType::Seltzer, None).unwrap();
+        assert_eq!(get_recipe(&conn, id).unwrap().name, "Citron");
+        let err = create_recipe(&conn, "Citron", BeverageType::Cider, None).unwrap_err();
+        assert_eq!(err.to_string(), "recipe 'Citron' already exists");
+
+        let other = create_recipe(&conn, "Pomme", BeverageType::Cider, None).unwrap();
+        let err = update_recipe(&conn, other, "Citron", BeverageType::Cider, None).unwrap_err();
+        assert_eq!(err.code(), "db.duplicate");
+        let err = update_recipe(&conn, 404, "X", BeverageType::Cider, None).unwrap_err();
+        assert_eq!(err.code(), "db.no_such_recipe");
+    }
+
+    #[test]
+    fn a_locked_version_freezes_the_type_but_not_the_name() {
+        let conn = db();
+        let (recipe, version) = seltzer(&conn);
+        // Unlocked: anything goes.
+        update_recipe(&conn, recipe, "Citron", BeverageType::Cider, None).unwrap();
+        update_recipe(&conn, recipe, "Citron", BeverageType::Seltzer, None).unwrap();
+
+        brew(&conn, version, "SELTZER-001");
+        update_recipe(
+            &conn,
+            recipe,
+            "Citron-Verveine",
+            BeverageType::Seltzer,
+            Some("renamed"),
+        )
+        .unwrap();
+        let err =
+            update_recipe(&conn, recipe, "Citron-Verveine", BeverageType::Cider, None).unwrap_err();
+        assert_eq!(err.code(), "db.recipe_type_locked");
+        assert_eq!(
+            get_recipe(&conn, recipe).unwrap().beverage_type,
+            BeverageType::Seltzer
+        );
+    }
+
+    #[test]
+    fn version_targets_are_checked_before_they_are_stored() {
+        let conn = db();
+        let (recipe, version) = seltzer(&conn);
+        let targets = |og: f64, fg: f64| NewRecipeVersion {
+            target_og: Some(Sg::new_unchecked(og)),
+            target_fg: Some(Sg::new_unchecked(fg)),
+            ..Default::default()
+        };
+        for (bad, code) in [
+            (targets(1040.0, 1.000), "db.measurement_implausible"),
+            (targets(1.000, 1.040), "units.range_inverted"),
+            (
+                NewRecipeVersion {
+                    target_abv: Some(5.5),
+                    ..Default::default()
+                },
+                "units.not_a_fraction",
+            ),
+            (
+                NewRecipeVersion {
+                    target_volume_l: Some(Litres::new(0.0).unwrap()),
+                    ..Default::default()
+                },
+                "units.not_positive",
+            ),
+        ] {
+            assert_eq!(
+                update_recipe_version(&conn, version, &bad)
+                    .unwrap_err()
+                    .code(),
+                code
+            );
+            assert_eq!(
+                create_recipe_version(&conn, recipe, &bad)
+                    .unwrap_err()
+                    .code(),
+                code
+            );
+        }
+        // Equal OG and FG is not inverted: an unfermented sample says just that.
+        update_recipe_version(&conn, version, &targets(1.040, 1.040)).unwrap();
+        assert_eq!(list_recipe_versions(&conn, recipe).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_item_needs_a_positive_quantity_and_a_finite_offset() {
+        let conn = db();
+        let (_, version) = seltzer(&conn);
+        let sugar = sucrose(&conn);
+        let nutrient = fermaid(&conn);
+        let err = add_recipe_item(&conn, version, &sugar_item(sugar, 0.0)).unwrap_err();
+        assert_eq!(err.code(), "units.not_positive");
+        let err =
+            add_recipe_item(&conn, version, &nutrient_at(nutrient, 5.0, f64::NAN)).unwrap_err();
+        assert_eq!(err.code(), "units.not_finite");
+
+        // Before pitch is a real schedule, not a typo.
+        let id = add_recipe_item(&conn, version, &nutrient_at(nutrient, 5.0, -2.0)).unwrap();
+        let err = update_recipe_item(&conn, id, &nutrient_at(nutrient, -5.0, 24.0)).unwrap_err();
+        assert_eq!(err.code(), "units.not_positive");
+    }
+
+    #[test]
+    fn only_the_newest_unlocked_version_can_be_deleted() {
+        let conn = db();
+        let (recipe, v1) = seltzer(&conn);
+        let sugar = sucrose(&conn);
+        add_recipe_item(&conn, v1, &sugar_item(sugar, 4.0)).unwrap();
+        brew(&conn, v1, "SELTZER-001");
+
+        let v2 = fork_recipe_version(&conn, v1).unwrap();
+        let v3 = fork_recipe_version(&conn, v2).unwrap();
+        let err = delete_recipe_version(&conn, v2).unwrap_err();
+        assert_eq!(err.code(), "db.recipe_version_not_newest");
+
+        delete_recipe_version(&conn, v3).unwrap();
+        delete_recipe_version(&conn, v2).unwrap();
+        // The items went with the version, by the schema's cascade.
+        assert!(list_recipe_items(&conn, v2).unwrap().is_empty());
+        let err = delete_recipe_version(&conn, v1).unwrap_err();
+        assert_eq!(err.code(), "db.recipe_version_locked");
+
+        // The next fork is v2 again: numbers stay contiguous.
+        let again = fork_recipe_version(&conn, v1).unwrap();
+        assert_eq!(get_recipe_version(&conn, again).unwrap().version_no, 2);
+        assert_eq!(list_recipe_versions(&conn, recipe).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn batches_are_counted_per_version() {
+        let conn = db();
+        let (recipe, v1) = seltzer(&conn);
+        let v2 = fork_recipe_version(&conn, v1).unwrap();
+        brew(&conn, v1, "SELTZER-001");
+        brew(&conn, v1, "SELTZER-002");
+        let counts = version_batch_counts(&conn, recipe).unwrap();
+        assert_eq!(counts[&v1], 2);
+        assert!(!counts.contains_key(&v2));
+    }
+
+    #[test]
+    fn an_archived_recipe_comes_back() {
+        let conn = db();
+        let (recipe, _) = seltzer(&conn);
+        archive_recipe(&conn, recipe, Timestamp::from_secs(1)).unwrap();
+        assert!(restore_recipe(&conn, recipe).unwrap());
+        assert!(!restore_recipe(&conn, recipe).unwrap());
+        assert_eq!(list_recipes(&conn, false).unwrap().len(), 1);
     }
 }

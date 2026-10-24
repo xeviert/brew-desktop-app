@@ -17,9 +17,18 @@ describe("parse", () => {
 		expect(parse("#/query/4")).toEqual({ name: "query", id: 4 });
 		expect(parse("#/query/x")).toEqual({ name: "home" });
 	});
-	it("reads a query preset to one lot", () => {
-		expect(parse("#/query/lot/12")).toEqual({ name: "query", id: null, lot: 12 });
+	it("reads a query preset to one lot or one recipe version", () => {
+		expect(parse("#/query/lot/12")).toEqual({ name: "query", id: null, preset: { lot: 12 } });
+		expect(parse("#/query/version/4")).toEqual({ name: "query", id: null, preset: { version: 4 } });
 		expect(parse("#/query/lot")).toEqual({ name: "home" });
+	});
+	it("reads recipes, a version by its number, and a diff", () => {
+		expect(parse("#/recipes")).toEqual({ name: "recipes" });
+		expect(parse("#/recipe/3")).toEqual({ name: "recipe", id: 3, version: null });
+		expect(parse("#/recipe/3/v2")).toEqual({ name: "recipe", id: 3, version: 2 });
+		expect(parse("#/recipe/3/diff/1,2")).toEqual({ name: "recipe-diff", id: 3, from: 1, to: 2 });
+		expect(parse("#/recipe/3/v")).toEqual({ name: "home" });
+		expect(parse("#/recipe/3/diff/1")).toEqual({ name: "home" });
 	});
 	it("reads the two ingredient tabs", () => {
 		expect(parse("#/ingredients")).toEqual({ name: "ingredients", tab: "ingredients" });
@@ -42,7 +51,12 @@ describe("parse", () => {
 			{ name: "compare", ids: [4, 2] },
 			{ name: "query", id: null },
 			{ name: "query", id: 9 },
-			{ name: "query", id: null, lot: 5 },
+			{ name: "query", id: null, preset: { lot: 5 } },
+			{ name: "query", id: null, preset: { version: 6 } },
+			{ name: "recipes" },
+			{ name: "recipe", id: 3, version: null },
+			{ name: "recipe", id: 3, version: 2 },
+			{ name: "recipe-diff", id: 3, from: 1, to: 2 },
 			{ name: "ingredients", tab: "ingredients" },
 			{ name: "ingredients", tab: "strains" },
 			{ name: "settings" },

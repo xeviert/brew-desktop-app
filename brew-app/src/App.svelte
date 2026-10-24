@@ -4,6 +4,9 @@
   import CompareView from "$lib/components/CompareView.svelte";
   import HomeView from "$lib/components/HomeView.svelte";
   import IngredientsView from "$lib/components/IngredientsView.svelte";
+  import RecipeDiff from "$lib/components/RecipeDiff.svelte";
+  import RecipeView from "$lib/components/RecipeView.svelte";
+  import RecipesView from "$lib/components/RecipesView.svelte";
   import QueryView from "$lib/components/QueryView.svelte";
   import Settings from "$lib/components/Settings.svelte";
   import Sources from "$lib/components/Sources.svelte";
@@ -103,6 +106,9 @@
       <a href={href({ name: "home" })} class:active={route.name === "home"}>Home</a>
       <a href={href({ name: "compare", ids: [] })} class:active={route.name === "compare"}>Compare</a>
       <a href={href({ name: "query", id: null })} class:active={route.name === "query"}>Queries</a>
+      <a href={href({ name: "recipes" })} class:active={route.name === "recipes" || route.name === "recipe" || route.name === "recipe-diff"}
+        >Recipes</a
+      >
       <a href={href({ name: "ingredients", tab: "ingredients" })} class:active={route.name === "ingredients"}
         >Ingredients</a
       >
@@ -118,9 +124,15 @@
     {:else if route.name === "compare"}
       <CompareView ids={route.ids} ui={config.ui} />
     {:else if route.name === "query"}
-      <QueryView id={route.id} lot={route.lot} ui={config.ui} />
+      <QueryView id={route.id} preset={route.preset} ui={config.ui} />
     {:else if route.name === "ingredients"}
       <IngredientsView tab={route.tab} {config} />
+    {:else if route.name === "recipes"}
+      <RecipesView />
+    {:else if route.name === "recipe"}
+      <RecipeView id={route.id} version={route.version} />
+    {:else if route.name === "recipe-diff"}
+      <RecipeDiff id={route.id} from={route.from} to={route.to} />
     {:else}
       <Settings {config} onsaved={(c) => (config = c)} />
       <Sources {sources} {syncs} onchanged={(s) => (sources = s)} />

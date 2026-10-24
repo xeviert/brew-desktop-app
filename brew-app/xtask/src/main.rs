@@ -14,7 +14,10 @@ use brewcore::{
             set_batch_measurements,
         },
         measurement::{EntryUnit, Instrument, NewMeasurement, record_measurement},
-        recipe::{BeverageType, Stage},
+        recipe::{
+            BeverageType, NewRecipeItem, NewRecipeVersion, Stage, add_recipe_item, create_recipe,
+            create_recipe_version,
+        },
         reference::{
             Category, NewIngredient, NewLot, NewYeastStrain, create_ingredient, create_lot,
             create_yeast_strain,
@@ -22,7 +25,7 @@ use brewcore::{
         tier1::{create_source, create_stream, insert_readings},
         timeline::{EventKind, NewBatchEvent, add_event, bind_stream, record_pitch},
     },
-    units::{Quantity, Sg, Timestamp, Unit},
+    units::{Litres, Quantity, Sg, Timestamp, Unit},
 };
 use brewfixture::{
     JournalScenario, Kind, LogSpec, Scenario,
@@ -119,8 +122,8 @@ fn demo_db(path: Option<PathBuf>) {
 
     let written = db.write(|conn| {
         let tx = conn.transaction()?;
-        // A strain, its ingredient, and one lot; returns the lot.
-        let yeast_lot = |name: &str, lab: &str, band: (f64, f64)| -> brewcore::Result<i64> {
+        // A strain, its ingredient, and one lot; returns the ingredient and the lot.
+        let yeast_lot = |name: &str, lab: &str, band: (f64, f64)| -> brewcore::Result<(i64, i64)> {
             let strain = create_yeast_strain(
                 &tx,
                 &NewYeastStrain {
@@ -142,7 +145,7 @@ fn demo_db(path: Option<PathBuf>) {
                     notes: None,
                 },
             )?;
-            create_lot(
+            let lot = create_lot(
                 &tx,
                 &NewLot {
                     ingredient_id: ingredient,
@@ -154,7 +157,8 @@ fn demo_db(path: Option<PathBuf>) {
                     expires_at: None,
                     notes: None,
                 },
-            )
+            )?;
+            Ok((ingredient, lot))
         };
         let pitch_yeast = |batch_id: i64, lot: i64| {
             add_batch_ingredient(
@@ -171,13 +175,77 @@ fn demo_db(path: Option<PathBuf>) {
         };
         // A seltzer ferments past a band written for grape must, so EC-1118's row is
         // flagged; US-05's sits inside its datasheet.
-        let ec1118 = yeast_lot("EC-1118", "Lallemand", (0.90, 1.00))?;
-        let us05 = yeast_lot("US-05", "Fermentis", (0.78, 0.82))?;
+        let (ec1118_ingredient, ec1118) = yeast_lot("EC-1118", "Lallemand", (0.90, 1.00))?;
+        let (_, us05) = yeast_lot("US-05", "Fermentis", (0.78, 0.82))?;
+
+        // U2: the seltzers are brewed off v1 of a recipe, so v1 is locked and the
+        // recipe screen has something to fork. The nutrient lines match SELTZER-001's
+        // Fermaid-O events below.
+        let plain = |name: &str, category: Category, unit: Unit| {
+            create_ingredient(
+                &tx,
+                &NewIngredient {
+                    name: name.into(),
+                    category,
+                    default_unit: unit,
+                    yeast_strain_id: None,
+                    attrs: None,
+                    notes: None,
+                },
+            )
+        };
+        let sucrose = plain("Sucrose", Category::Sugar, Unit::Kg)?;
+        let fermaid = plain("Fermaid O", Category::Nutrient, Unit::G)?;
+        let recipe = create_recipe(&tx, "Citron-Verveine", BeverageType::Seltzer, None)?;
+        let v1 = create_recipe_version(
+            &tx,
+            recipe,
+            &NewRecipeVersion {
+                target_volume_l: Some(Litres::new(20.0)?),
+                target_og: Some(Sg::new(1.038)?),
+                target_fg: Some(Sg::new(0.998)?),
+                ..Default::default()
+            },
+        )?;
+        for (ingredient, qty, stage, offset_hours) in [
+            (sucrose, Quantity::new(4.0, Unit::Kg)?, Stage::Prep, None),
+            (
+                ec1118_ingredient,
+                Quantity::new(5.0, Unit::G)?,
+                Stage::Pitch,
+                None,
+            ),
+            (
+                fermaid,
+                Quantity::new(10.0, Unit::G)?,
+                Stage::Fermentation,
+                Some(24.0),
+            ),
+            (
+                fermaid,
+                Quantity::new(10.0, Unit::G)?,
+                Stage::Fermentation,
+                Some(48.0),
+            ),
+        ] {
+            add_recipe_item(
+                &tx,
+                v1,
+                &NewRecipeItem {
+                    ingredient_id: ingredient,
+                    entry: qty,
+                    stage,
+                    offset_hours,
+                    notes: None,
+                },
+            )?;
+        }
+
         let batch_id = create_batch(
             &tx,
             &NewBatch {
                 code: "SELTZER-001".into(),
-                recipe_version_id: None,
+                recipe_version_id: Some(v1),
                 beverage_type: BeverageType::Seltzer,
                 vessel_id: None,
                 volume_l: None,
@@ -381,7 +449,7 @@ fn demo_db(path: Option<PathBuf>) {
                 &tx,
                 &NewBatch {
                     code: code.into(),
-                    recipe_version_id: None,
+                    recipe_version_id: (kind == BeverageType::Seltzer).then_some(v1),
                     beverage_type: kind,
                     vessel_id: None,
                     volume_l: None,

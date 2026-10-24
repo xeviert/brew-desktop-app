@@ -135,7 +135,7 @@
             <td>{lot.expires_at !== null ? formatTimestamp(lot.expires_at, day) : "—"}</td>
             <td>
               {#if lot.batch_count > 0}
-                <a href={href({ name: "query", id: null, lot: lot.id })}
+                <a href={href({ name: "query", id: null, preset: { lot: lot.id } })}
                   >{lot.batch_count} batch{lot.batch_count === 1 ? "" : "es"}</a
                 >
               {:else}

@@ -14,7 +14,6 @@
     type ApiError,
     type BatchFilter,
     type BatchStatus,
-    type BeverageType,
     type Computed,
     type Config,
     type Criterion,
@@ -37,14 +36,18 @@
     type FilterForm,
     type SortKey,
   } from "$lib/query";
-  import { href } from "$lib/route";
+  import { BEVERAGE_TYPES } from "$lib/recipe";
+  import { href, type QueryPreset } from "$lib/route";
   import { formatMoney, formatTemp, formatTimestamp } from "$lib/units";
   import RollupTable from "./RollupTable.svelte";
 
-  // `lot`: U1's "used by N batches" link, a fresh query preset to that lot.
-  let { id, lot, ui }: { id: number | null; lot?: number; ui: Config["ui"] } = $props();
+  // `preset`: a fresh query started from a lot (U1) or a recipe version (U2).
+  let { id, preset, ui }: { id: number | null; preset?: QueryPreset; ui: Config["ui"] } = $props();
 
-  const TYPES: BeverageType[] = ["seltzer", "beer", "cider", "wine", "mead", "kombucha", "other"];
+  // Started here, not in `onMount`, so a version preset can wait for it in `load`.
+  const optionsLoaded = queryOptions();
+
+  const TYPES = BEVERAGE_TYPES;
   const STATUSES: BatchStatus[] = ["planned", "fermenting", "conditioning", "packaged"];
 
   let options = $state.raw<QueryOptions>({ recipes: [], strains: [], lots: [] });
@@ -104,13 +107,20 @@
     }
   }
 
-  async function load(queryId: number | null, lotId: number | undefined) {
+  async function load(queryId: number | null, from: QueryPreset | undefined) {
     saveError = null;
     if (queryId === null) {
       open = null;
       name = "";
       const filter = emptyFilter();
-      if (lotId !== undefined) filter.lot_ids = [lotId];
+      if (from && "lot" in from) filter.lot_ids = [from.lot];
+      if (from && "version" in from) {
+        // The version picker is scoped to a recipe, so the recipe comes along.
+        const loaded = await optionsLoaded.catch(() => null);
+        const recipe = loaded?.recipes.find((r) => r.versions.some((v) => v.id === from.version));
+        filter.recipe_id = recipe?.id ?? null;
+        filter.recipe_version_id = from.version;
+      }
       form = toForm(filter, formTemp);
       return;
     }
@@ -264,8 +274,8 @@
 
   $effect(() => {
     const queryId = id;
-    const lotId = lot;
-    untrack(() => void load(queryId, lotId));
+    const from = preset;
+    untrack(() => void load(queryId, from));
   });
   // Every edit reruns, as the comparison does; `shown` drops the no-op ones.
   $effect(() => {
@@ -286,7 +296,7 @@
     void listSaved();
     void (async () => {
       try {
-        options = await queryOptions();
+        options = await optionsLoaded;
       } catch (e) {
         error = toApiError(e);
       }

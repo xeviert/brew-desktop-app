@@ -57,6 +57,17 @@ pub fn sg_to_display(sg: Sg, display: GravityDisplay) -> f64 {
     }
 }
 
+/// The inverse of [`sg_to_display`]: a gravity typed in the `ui.gravity_display`
+/// scale, as SG. An SG typed outside [`Sg::PLAUSIBLE`] comes back as typed — the
+/// caller's plausibility check names it; the two fits refuse it themselves.
+pub fn display_to_sg(value: f64, display: GravityDisplay) -> Result<Sg> {
+    match display {
+        GravityDisplay::Sg => Sg::new(value),
+        GravityDisplay::Plato => plato_to_sg(value),
+        GravityDisplay::Brix => brix_to_sg(value),
+    }
+}
+
 /// The inverse of [`sg_to_plato`], by bisection over [`Sg::PLAUSIBLE`].
 ///
 /// A numeric inverse rather than de Clerck's closed form so that both directions are
@@ -159,6 +170,25 @@ mod tests {
             let back = brix_to_sg(sg_to_brix(Sg::new(sg).unwrap())).unwrap();
             assert!((back.get() - sg).abs() < 1e-9, "{sg} -> {back}");
         }
+    }
+
+    #[test]
+    fn a_display_gravity_round_trips_in_every_scale() {
+        for display in [
+            GravityDisplay::Sg,
+            GravityDisplay::Plato,
+            GravityDisplay::Brix,
+        ] {
+            let sg = Sg::new(1.040).unwrap();
+            let back = display_to_sg(sg_to_display(sg, display), display).unwrap();
+            assert!((back.get() - 1.040).abs() < 1e-9, "{display:?} -> {back}");
+        }
+        // SG is passed through for the caller to judge; the fits refuse on their own.
+        assert_eq!(
+            display_to_sg(1040.0, GravityDisplay::Sg).unwrap().get(),
+            1040.0
+        );
+        assert!(display_to_sg(400.0, GravityDisplay::Plato).is_err());
     }
 
     /// The error band in [`sg_to_plato`]'s doc, asserted rather than asserted-to.

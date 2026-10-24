@@ -17,6 +17,7 @@
     type SourceSummary,
   } from "$lib/api";
   import { age, bytes, until } from "$lib/format";
+  import { confirmAction } from "$lib/confirm";
 
   let {
     sources,
@@ -183,12 +184,13 @@
    */
   async function doRebuild(source: SourceSummary) {
     const n = source.reading_count;
-    const ok = confirm(
+    const ok = await confirmAction(
       `Rebuild “${source.name}”?
 
 ` +
         `This deletes ${n.toLocaleString()} reading${n === 1 ? "" : "s"} and re-reads the ` +
         `whole log from the beginning. Your brew logs and notes are not affected.`,
+      "Rebuild",
     );
     if (!ok) return;
 

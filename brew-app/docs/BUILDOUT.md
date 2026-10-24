@@ -389,7 +389,7 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
       `fork_recipe_version` and `diff_recipe_versions`, the latter over a pure
       `diff_items` keyed on (ingredient, stage, occurrence) and *not* `offset_hours`,
       so a nutrient addition moved 24 h → 36 h reads as one change, not a re-add
-- [ ] The same two in the UI, **deferred to the Phase 3 UI pass** (U2): a recipe screen
+- [x] The same two in the UI, **deferred to the Phase 3 UI pass** (U2): a recipe screen
       with no batch screen is half a feature, so it lands once 3c exists
 - [x] Nutrient schedule as first-class `recipe_item` rows with `offset_hours` —
       for a sugar wash this is the process variable that decides the batch
@@ -824,6 +824,51 @@ shown by its message. The lot-filter and YAN-total halves need a batch, so they 
 covered by tests until U3 can create one from the UI.
 
 **U2. Recipe screen** — list → versions → item editor, lock badge, fork, diff (3b)
+- [x] Recipe names trimmed, required and unique (`db.name_empty`, `db.duplicate`),
+      sharing U1's helpers, now `pub(crate)` in `db::reference`. `update_recipe`,
+      `get_recipe`, `restore_recipe`. Renaming is always allowed; the **beverage type**
+      is not once any version is locked (`db.recipe_type_locked`) — `create_batch`
+      checked the batch's type against it when it locked the version
+- [x] Version targets checked at the write path: OG/FG plausible (as `set_batch_og`),
+      FG ≤ OG, ABV a fraction, volume positive. `Sg` deserialises with only a
+      finiteness check, so a target typed as `1040` would otherwise reach 4c's expected FG
+- [x] `delete_recipe_version`: the newest unlocked version only
+      (`db.recipe_version_not_newest`), items by the schema's cascade — the way out of a
+      mistaken fork, and numbers stay contiguous. `version_batch_counts` for the badge
+- [x] Lines: quantity positive (U1's lot check, now `positive_canonical` for both) and
+      `offset_hours` finite; negative is allowed — before pitch
+- [x] Commands: `list_recipes`, `create_recipe` (recipe **and** an empty v1, one
+      transaction), `update_`/`archive_`/`restore_recipe`, `get_recipe` (versions with
+      batch counts), `get_recipe_version` (named lines, `abv_alternate` from the target
+      OG/FG), `update_`/`fork_`/`delete_recipe_version`, `add_`/`update_`/
+      `delete_recipe_item`, `diff_recipe_versions`. Target gravities cross in
+      `ui.gravity_display`, converted by the new `calc::gravity::display_to_sg` — 4d's
+      rule, no fit in TS
+- [x] Screens: `#/recipes` (by beverage type, show archived), `#/recipe/<id>/v<n>`
+      (version tabs, targets, lines by stage, add/edit/delete line, delete draft,
+      compare), `#/recipe/<id>/diff/<a>,<b>`. A locked version is read-only with a badge
+      "locked · used by N batches" → `#/query/version/<id>` and **Fork to v{N+1}**; a
+      write refused as `db.recipe_version_locked` reloads into that state. Form shaping
+      pure in `lib/recipe.ts`, with vitest. **Refined:** U1's lot link and this badge
+      share one `QueryPreset` on the query route; U1's form styles moved to `app.css` as
+      `.ref`
+- [x] `xtask demo-db` brews its seltzers off "Citron-Verveine" v1 (sucrose, EC-1118,
+      Fermaid O at 24 h and 48 h), so v1 is locked and there is something to fork
+- [x] **Found while driving it:** in Tauri `window.confirm` returns a Promise, which
+      is truthy, so `if (!confirm(...)) return` never returned — **Rebuild** in Sources
+      deleted a source's readings without asking. Both call sites now use
+      `lib/confirm.ts` (`plugin-dialog`'s `ask`), with `dialog:allow-ask` granted.
+      Type-checked; the dialog itself is not yet confirmed blocking in the running app
+- [ ] Calculators (sugar for a target OG, YAN dose and stagger, pitch rate) — **deferred**
+      to after U6, once real batches show which ones earn a place
+
+**Done when:** a recipe is created, its targets set in the display unit, lines added
+and edited; a locked version refuses edits and forks; the diff of a moved nutrient reads
+as one change. **Status:** driven in the running app (WebView2 over CDP) on a
+`demo-db` file: each refusal (duplicate name, OG 2.5, FG above OG, zero quantity, type
+change on a locked recipe) shown by its message; `4,2` kg; the badge's "used by 3
+batches" opening the query preset to v1 (3 rows); fork → v2, 24 h → 36 h, and the diff
+showing one *Changed* line plus the FG target; a draft v3 deleted.
 
 **U3. Batch create and lifecycle** — from a version or none, pitch / undo pitch,
 transitions, archive (3c, 3d)

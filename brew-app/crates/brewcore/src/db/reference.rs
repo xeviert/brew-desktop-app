@@ -58,7 +58,10 @@ db_enum!(
 // ---------------------------------------------------------------- shared
 
 /// A `UNIQUE` violation as [`Error::Duplicate`]; any other error passes through.
-fn duplicate<'a>(what: &'static str, name: &'a str) -> impl FnOnce(rusqlite::Error) -> Error + 'a {
+pub(crate) fn duplicate<'a>(
+    what: &'static str,
+    name: &'a str,
+) -> impl FnOnce(rusqlite::Error) -> Error + 'a {
     move |e| match e {
         rusqlite::Error::SqliteFailure(f, _)
             if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
@@ -72,7 +75,7 @@ fn duplicate<'a>(what: &'static str, name: &'a str) -> impl FnOnce(rusqlite::Err
     }
 }
 
-fn required_name<'a>(what: &'static str, name: &'a str) -> Result<&'a str> {
+pub(crate) fn required_name<'a>(what: &'static str, name: &'a str) -> Result<&'a str> {
     let name = name.trim();
     if name.is_empty() {
         return Err(Error::NameEmpty { what });
@@ -80,8 +83,13 @@ fn required_name<'a>(what: &'static str, name: &'a str) -> Result<&'a str> {
     Ok(name)
 }
 
-/// `table` is always a literal from this module, never input.
-fn archive_row(conn: &Connection, table: &'static str, id: i64, at: Timestamp) -> Result<bool> {
+/// `table` is always a literal from this crate, never input.
+pub(crate) fn archive_row(
+    conn: &Connection,
+    table: &'static str,
+    id: i64,
+    at: Timestamp,
+) -> Result<bool> {
     let changed = conn.execute(
         &format!("UPDATE {table} SET archived_at = ? WHERE id = ? AND archived_at IS NULL"),
         params![at, id],
@@ -89,7 +97,7 @@ fn archive_row(conn: &Connection, table: &'static str, id: i64, at: Timestamp) -
     Ok(changed == 1)
 }
 
-fn restore_row(conn: &Connection, table: &'static str, id: i64) -> Result<bool> {
+pub(crate) fn restore_row(conn: &Connection, table: &'static str, id: i64) -> Result<bool> {
     let changed = conn.execute(
         &format!("UPDATE {table} SET archived_at = NULL WHERE id = ? AND archived_at IS NOT NULL"),
         [id],
@@ -604,6 +612,14 @@ pub fn restore_ingredient(conn: &Connection, id: i64) -> Result<bool> {
     restore_row(conn, "ingredient", id)
 }
 
+/// Every ingredient's name and whether it is archived, by id — what a recipe line or
+/// a diff row needs to say which ingredient it is.
+pub fn ingredient_names(conn: &Connection) -> Result<HashMap<i64, (String, bool)>> {
+    let mut stmt = conn.prepare("SELECT id, name, archived_at IS NOT NULL FROM ingredient")?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// Active lots per ingredient, for the list's "3 lots". An ingredient with none is
 /// absent, not zero.
 pub fn active_lot_counts(conn: &Connection) -> Result<HashMap<i64, i64>> {
@@ -756,8 +772,10 @@ impl LotRow {
     }
 }
 
-/// A lot of nothing has no cost per gram, and a negative one is a typo.
-fn lot_canonical(
+/// A positive amount, in the ingredient's canonical column. Lots and recipe lines both
+/// go through here: a lot of nothing has no cost per gram, and a line of nothing plans
+/// nothing — a negative one is a typo either way.
+pub(crate) fn positive_canonical(
     conn: &Connection,
     ingredient_id: i64,
     entry: Quantity,
@@ -773,7 +791,7 @@ fn lot_canonical(
 
 /// Insert a lot, converting the entered quantity to the ingredient's canonical unit.
 pub fn create_lot(conn: &Connection, lot: &NewLot) -> Result<i64> {
-    let (qty_g, qty_l, qty_each) = lot_canonical(conn, lot.ingredient_id, lot.entry)?;
+    let (qty_g, qty_l, qty_each) = positive_canonical(conn, lot.ingredient_id, lot.entry)?;
 
     conn.execute(
         "INSERT INTO ingredient_lot \
@@ -815,7 +833,7 @@ pub fn update_lot(conn: &Connection, lot_id: i64, lot: &NewLot) -> Result<()> {
     if ingredient_id != lot.ingredient_id {
         return Err(Error::LotIngredientChanged { lot_id });
     }
-    let (qty_g, qty_l, qty_each) = lot_canonical(conn, ingredient_id, lot.entry)?;
+    let (qty_g, qty_l, qty_each) = positive_canonical(conn, ingredient_id, lot.entry)?;
 
     conn.execute(
         "UPDATE ingredient_lot SET supplier = ?, lot_code = ?, qty_g = ?, qty_l = ?, \

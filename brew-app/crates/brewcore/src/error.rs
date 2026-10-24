@@ -259,6 +259,23 @@ pub enum Error {
     #[error("recipe version {recipe_version_id} is in use by a batch; fork it to edit")]
     RecipeVersionLocked { recipe_version_id: i64 },
 
+    // Phase 3 UI pass, U2.
+    #[error("recipe {recipe_id} does not exist")]
+    NoSuchRecipe { recipe_id: i64 },
+
+    /// `create_batch` checked the batch's type against the recipe's when it locked the
+    /// version. Changing it afterwards would make that check a lie.
+    #[error("recipe {recipe_id} has a version in use, so it stays {beverage_type}")]
+    RecipeTypeLocked {
+        recipe_id: i64,
+        beverage_type: crate::db::recipe::BeverageType,
+    },
+
+    /// Only the newest draft goes, so version numbers stay contiguous — "v3" never
+    /// silently means what "v4" did.
+    #[error("only the newest version can be deleted; v{version_no} is not")]
+    RecipeVersionNotNewest { version_no: i64 },
+
     // Phase 3c. `0004_batch.sql` leaves `status` open like every vocabulary before it.
     #[error("unknown batch status '{0}' in the database")]
     UnknownBatchStatus(String),
@@ -530,6 +547,9 @@ impl Error {
             Error::NoSuchRecipeVersion { .. } => "db.no_such_recipe_version",
             Error::NoSuchRecipeItem { .. } => "db.no_such_recipe_item",
             Error::RecipeVersionLocked { .. } => "db.recipe_version_locked",
+            Error::NoSuchRecipe { .. } => "db.no_such_recipe",
+            Error::RecipeTypeLocked { .. } => "db.recipe_type_locked",
+            Error::RecipeVersionNotNewest { .. } => "db.recipe_version_not_newest",
             Error::UnknownBatchStatus(_) => "db.unknown_batch_status",
             Error::NoSuchBatch { .. } => "db.no_such_batch",
             Error::NoSuchLot { .. } => "db.no_such_lot",

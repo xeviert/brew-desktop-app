@@ -29,3 +29,79 @@ dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
 }
+
+/* Phase 3 UI pass: the reference and recipe screens' forms. Global rather than per
+   component, because those forms are split across child components. */
+.ref .empty {
+  color: #6f757d;
+}
+
+.ref label {
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  margin-bottom: 0.6rem;
+  max-width: 36rem;
+}
+
+.ref label > span {
+  color: #9aa0a6;
+}
+
+.ref label small {
+  grid-column: 2;
+  color: #6f757d;
+}
+
+.ref input,
+.ref select {
+  padding: 0.35rem 0.5rem;
+  background: #1e2127;
+  color: inherit;
+  border: 1px solid #333842;
+  border-radius: 3px;
+  font: inherit;
+}
+
+.ref input[type="checkbox"] {
+  padding: 0;
+}
+
+.ref .actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.ref button {
+  padding: 0.4rem 1rem;
+  background: #2d5d8a;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ref button:disabled {
+  background: #2a2e36;
+  color: #6f757d;
+  cursor: default;
+}
+
+.ref button.link {
+  padding: 0;
+  background: none;
+  color: #7ba7d4;
+}
+
+.ref .row-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.ref p[role="alert"] {
+  color: #e06c5f;
+}

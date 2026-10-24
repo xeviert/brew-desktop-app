@@ -927,3 +927,238 @@ fn a_refused_reference_write_comes_back_with_a_code() {
     );
     assert_eq!(err["code"], "db.no_such_yeast_strain");
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U2
+// ---------------------------------------------------------------------------
+
+fn sugar(app: &Harness) -> Value {
+    app.invoke(
+        "create_ingredient",
+        json!({ "ingredient": {
+            "name": "Sucrose", "category": "sugar", "default_unit": "kg",
+            "yeast_strain_id": null, "mg_yan_per_g": null, "notes": null,
+        }}),
+    )
+    .unwrap()
+}
+
+fn item(ingredient: &Value, value: f64, unit: &str, stage: &str, hours: Value) -> Value {
+    json!({
+        "ingredient_id": ingredient, "entry": { "value": value, "unit": unit },
+        "stage": stage, "offset_hours": hours, "notes": null,
+    })
+}
+
+/// A recipe arrives with an empty v1; targets go in and come out in the display unit.
+#[test]
+fn a_recipe_is_created_with_v1_and_edited_in_the_display_unit() {
+    let app = Harness::new();
+    let created = app
+        .invoke(
+            "create_recipe",
+            json!({ "recipe": { "name": " Citron ", "beverage_type": "seltzer", "notes": null } }),
+        )
+        .unwrap();
+    let (recipe, v1) = (created["recipe_id"].clone(), created["version_id"].clone());
+
+    let list = app
+        .invoke("list_recipes", json!({ "includeArchived": false }))
+        .unwrap();
+    assert_eq!(list[0]["name"], "Citron");
+    assert_eq!(list[0]["version_count"], 1);
+    assert_eq!(list[0]["latest_version_no"], 1);
+
+    let mut config = app.invoke("get_config", json!({})).unwrap();
+    config["ui"]["gravity_display"] = json!("plato");
+    app.invoke("set_config", json!({ "config": config }))
+        .unwrap();
+
+    app.invoke(
+        "update_recipe_version",
+        json!({ "id": v1, "version": {
+            "target_volume_l": 20.0, "target_og": 10.0, "target_fg": 0.0,
+            "target_abv": 0.055, "notes": "first go",
+        }}),
+    )
+    .unwrap();
+    let sucrose = sugar(&app);
+    app.invoke(
+        "add_recipe_item",
+        json!({ "versionId": v1, "item": item(&sucrose, 4.0, "kg", "prep", Value::Null) }),
+    )
+    .unwrap();
+
+    let view = app
+        .invoke("get_recipe_version", json!({ "id": v1 }))
+        .unwrap();
+    assert_eq!(view["gravity_unit"], "°P");
+    assert!(
+        (view["target_og"].as_f64().unwrap() - 10.0).abs() < 1e-6,
+        "{view}"
+    );
+    assert!(view["abv_alternate"].as_f64().unwrap() > 0.05, "{view}");
+    assert_eq!(view["items"][0]["ingredient"], "Sucrose");
+    assert_eq!(view["items"][0]["qty"], json!({ "mass": 4000.0 }));
+    assert_eq!(view["batch_count"], 0);
+
+    // Stored as SG regardless of the display.
+    let og: f64 = app
+        .db
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT target_og FROM recipe_version WHERE id = ?",
+                [v1.as_i64().unwrap()],
+                |row| row.get(0),
+            )?)
+        })
+        .unwrap();
+    assert!((og - 1.040).abs() < 0.001, "{og}");
+
+    let detail = app.invoke("get_recipe", json!({ "id": recipe })).unwrap();
+    assert_eq!(detail["recipe"]["name"], "Citron");
+    assert_eq!(detail["versions"][0]["version_no"], 1);
+}
+
+/// The lock, the fork out of it, and a diff that reads a moved nutrient as one change.
+#[test]
+fn a_locked_version_forks_and_the_diff_pairs_a_moved_addition() {
+    let app = Harness::new();
+    let created = app
+        .invoke(
+            "create_recipe",
+            json!({ "recipe": { "name": "Citron", "beverage_type": "seltzer", "notes": null } }),
+        )
+        .unwrap();
+    let (recipe, v1) = (created["recipe_id"].clone(), created["version_id"].clone());
+    let dap = app
+        .invoke(
+            "create_ingredient",
+            json!({ "ingredient": {
+                "name": "DAP", "category": "nutrient", "default_unit": "g",
+                "yeast_strain_id": null, "mg_yan_per_g": 212.0, "notes": null,
+            }}),
+        )
+        .unwrap();
+    app.invoke(
+        "add_recipe_item",
+        json!({ "versionId": v1, "item": item(&dap, 2.0, "g", "fermentation", json!(24.0)) }),
+    )
+    .unwrap();
+
+    app.db
+        .write(|conn| {
+            batch::create_batch(
+                conn,
+                &batch::NewBatch {
+                    code: "SELTZER-001".into(),
+                    recipe_version_id: v1.as_i64(),
+                    beverage_type: BeverageType::Seltzer,
+                    vessel_id: None,
+                    volume_l: None,
+                    og: None,
+                    notes: None,
+                },
+                T0,
+            )
+        })
+        .unwrap();
+
+    let view = app
+        .invoke("get_recipe_version", json!({ "id": v1 }))
+        .unwrap();
+    assert!(view["locked_at"].is_number());
+    assert_eq!(view["batch_count"], 1);
+    let line = view["items"][0]["id"].clone();
+    let err = app.api_error(
+        "update_recipe_item",
+        json!({ "id": line, "item": item(&dap, 2.0, "g", "fermentation", json!(36.0)) }),
+    );
+    assert_eq!(err["code"], "db.recipe_version_locked");
+    let err = app.api_error(
+        "update_recipe",
+        json!({ "id": recipe, "recipe": { "name": "Citron", "beverage_type": "cider", "notes": null } }),
+    );
+    assert_eq!(err["code"], "db.recipe_type_locked");
+
+    let v2 = app
+        .invoke("fork_recipe_version", json!({ "id": v1 }))
+        .unwrap();
+    assert_eq!(v2["version_no"], 2);
+    let forked = app
+        .invoke("get_recipe_version", json!({ "id": v2["id"] }))
+        .unwrap();
+    app.invoke(
+        "update_recipe_item",
+        json!({ "id": forked["items"][0]["id"], "item": item(&dap, 2.0, "g", "fermentation", json!(36.0)) }),
+    )
+    .unwrap();
+
+    let diff = app
+        .invoke(
+            "diff_recipe_versions",
+            json!({ "fromId": v1, "toId": v2["id"] }),
+        )
+        .unwrap();
+    assert_eq!(diff["from_version_no"], 1);
+    assert_eq!(diff["to_version_no"], 2);
+    assert_eq!(diff["targets"], json!([]));
+    let items = diff["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{diff}");
+    assert_eq!(items[0]["change"], "changed");
+    assert_eq!(items[0]["ingredient"], "DAP");
+    assert_eq!(items[0]["from"]["offset_hours"], 24.0);
+    assert_eq!(items[0]["to"]["offset_hours"], 36.0);
+
+    let err = app.api_error("delete_recipe_version", json!({ "id": v1 }));
+    assert_eq!(err["code"], "db.recipe_version_locked");
+    app.invoke("delete_recipe_version", json!({ "id": v2["id"] }))
+        .unwrap();
+    let detail = app.invoke("get_recipe", json!({ "id": recipe })).unwrap();
+    assert_eq!(detail["versions"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["versions"][0]["batch_count"], 1);
+}
+
+#[test]
+fn a_refused_recipe_write_comes_back_with_a_code() {
+    let app = Harness::new();
+    let recipe = |name: &str| json!({ "recipe": { "name": name, "beverage_type": "seltzer", "notes": null } });
+    let created = app.invoke("create_recipe", recipe("Citron")).unwrap();
+    let v1 = created["version_id"].clone();
+
+    assert_eq!(
+        app.api_error("create_recipe", recipe("Citron"))["code"],
+        "db.duplicate"
+    );
+    assert_eq!(
+        app.api_error("create_recipe", recipe(" "))["code"],
+        "db.name_empty"
+    );
+
+    let targets = |og: f64, fg: f64| {
+        json!({ "id": v1, "version": {
+            "target_volume_l": null, "target_og": og, "target_fg": fg,
+            "target_abv": null, "notes": null,
+        }})
+    };
+    assert_eq!(
+        app.api_error("update_recipe_version", targets(2.5, 1.0))["code"],
+        "db.measurement_implausible"
+    );
+    assert_eq!(
+        app.api_error("update_recipe_version", targets(1.000, 1.040))["code"],
+        "units.range_inverted"
+    );
+
+    let sucrose = sugar(&app);
+    let err = app.api_error(
+        "add_recipe_item",
+        json!({ "versionId": v1, "item": item(&sucrose, 0.0, "kg", "prep", Value::Null) }),
+    );
+    assert_eq!(err["code"], "units.not_positive");
+    let err = app.api_error(
+        "add_recipe_item",
+        json!({ "versionId": v1, "item": item(&sucrose, 1.0, "L", "prep", Value::Null) }),
+    );
+    assert_eq!(err["code"], "units.dimension_mismatch");
+}

@@ -4,7 +4,8 @@ use brewcore::{
     Error,
     brewd::{self, JournalProbe},
     calc::{
-        gravity::sg_to_display,
+        abv,
+        gravity::{display_to_sg, sg_to_display},
         stability::{ExpectedFg, FlatSpan, Stability, flat_spans},
         yan,
     },
@@ -20,6 +21,10 @@ use brewcore::{
         query::{
             self, BatchFilter, QueryOptions, QueryResult, SavedQuery, SavedQuerySummary,
             Unevaluated,
+        },
+        recipe::{
+            self, BeverageType, ItemChange, NewRecipeItem, NewRecipeVersion, RecipeItemRow,
+            RecipeRow, Stage,
         },
         reference::{
             self, Category, IngredientRow, LotRow, NewIngredient, NewLot, NewYeastStrain,
@@ -550,6 +555,394 @@ pub async fn archive_lot(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
 #[tauri::command]
 pub async fn restore_lot(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
     Ok(db.write(|conn| reference::restore_lot(conn, id))?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U2: recipes
+// ---------------------------------------------------------------------------
+//
+// Target gravities cross this boundary in `ui.gravity_display`, converted here by
+// `calc::gravity` — 4d's rule: `api.ts` has no copy of the fits.
+
+#[derive(Debug, serde::Serialize)]
+pub struct RecipeSummary {
+    #[serde(flatten)]
+    pub recipe: RecipeRow,
+    pub version_count: i64,
+    pub latest_version_no: Option<i64>,
+}
+
+#[tauri::command]
+pub async fn list_recipes(
+    db: tauri::State<'_, Db>,
+    include_archived: bool,
+) -> ApiResult<Vec<RecipeSummary>> {
+    Ok(db.read(|conn| {
+        recipe::list_recipes(conn, include_archived)?
+            .into_iter()
+            .map(|recipe| {
+                let versions = recipe::list_recipe_versions(conn, recipe.id)?;
+                Ok(RecipeSummary {
+                    version_count: versions.len() as i64,
+                    latest_version_no: versions.last().map(|v| v.version_no),
+                    recipe,
+                })
+            })
+            .collect()
+    })?)
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RecipeInput {
+    pub name: String,
+    pub beverage_type: BeverageType,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CreatedRecipe {
+    pub recipe_id: i64,
+    pub version_id: i64,
+}
+
+/// The recipe and an empty v1 together: a recipe with no version has nothing to edit.
+#[tauri::command]
+pub async fn create_recipe(
+    db: tauri::State<'_, Db>,
+    recipe: RecipeInput,
+) -> ApiResult<CreatedRecipe> {
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let recipe_id = recipe::create_recipe(
+            &tx,
+            &recipe.name,
+            recipe.beverage_type,
+            recipe.notes.as_deref(),
+        )?;
+        let version_id =
+            recipe::create_recipe_version(&tx, recipe_id, &NewRecipeVersion::default())?;
+        tx.commit()?;
+        Ok(CreatedRecipe {
+            recipe_id,
+            version_id,
+        })
+    })?)
+}
+
+#[tauri::command]
+pub async fn update_recipe(
+    db: tauri::State<'_, Db>,
+    id: i64,
+    recipe: RecipeInput,
+) -> ApiResult<()> {
+    Ok(db.write(|conn| {
+        recipe::update_recipe(
+            conn,
+            id,
+            &recipe.name,
+            recipe.beverage_type,
+            recipe.notes.as_deref(),
+        )
+    })?)
+}
+
+#[tauri::command]
+pub async fn archive_recipe(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| recipe::archive_recipe(conn, id, Timestamp::now()))?)
+}
+
+#[tauri::command]
+pub async fn restore_recipe(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| recipe::restore_recipe(conn, id))?)
+}
+
+/// One tab per version: enough to number it, badge it and route to it.
+#[derive(Debug, serde::Serialize)]
+pub struct VersionTab {
+    pub id: i64,
+    pub version_no: i64,
+    pub locked_at: Option<Timestamp>,
+    pub batch_count: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RecipeDetail {
+    pub recipe: RecipeRow,
+    pub versions: Vec<VersionTab>,
+}
+
+#[tauri::command]
+pub async fn get_recipe(db: tauri::State<'_, Db>, id: i64) -> ApiResult<RecipeDetail> {
+    Ok(db.read(|conn| {
+        let recipe = recipe::get_recipe(conn, id)?;
+        let used = recipe::version_batch_counts(conn, id)?;
+        let versions = recipe::list_recipe_versions(conn, id)?
+            .into_iter()
+            .map(|v| VersionTab {
+                batch_count: used.get(&v.id).copied().unwrap_or(0),
+                id: v.id,
+                version_no: v.version_no,
+                locked_at: v.locked_at,
+            })
+            .collect();
+        Ok(RecipeDetail { recipe, versions })
+    })?)
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RecipeItemView {
+    #[serde(flatten)]
+    pub item: RecipeItemRow,
+    pub ingredient: String,
+    /// Still shown on the line it is already on; gone from the picker.
+    pub ingredient_archived: bool,
+}
+
+/// A version in the display gravity unit, with its items named.
+#[derive(Debug, serde::Serialize)]
+pub struct RecipeVersionView {
+    pub id: i64,
+    pub recipe_id: i64,
+    pub version_no: i64,
+    pub locked_at: Option<Timestamp>,
+    pub batch_count: i64,
+    pub target_volume_l: Option<Litres>,
+    pub target_og: Option<f64>,
+    pub target_fg: Option<f64>,
+    /// A fraction, as stored.
+    pub target_abv: Option<f64>,
+    /// From the target OG and FG, by 3f's `alternate` — labelled as such on screen.
+    pub abv_alternate: Option<f64>,
+    pub notes: Option<String>,
+    pub gravity_unit: &'static str,
+    pub items: Vec<RecipeItemView>,
+}
+
+fn item_view(item: RecipeItemRow, names: &HashMap<i64, (String, bool)>) -> RecipeItemView {
+    let (ingredient, ingredient_archived) = names
+        .get(&item.ingredient_id)
+        .cloned()
+        .unwrap_or_else(|| (format!("#{}", item.ingredient_id), false));
+    RecipeItemView {
+        item,
+        ingredient,
+        ingredient_archived,
+    }
+}
+
+#[tauri::command]
+pub async fn get_recipe_version(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    id: i64,
+) -> ApiResult<RecipeVersionView> {
+    let display = config.get().ui.gravity_display;
+    Ok(db.read(|conn| {
+        let v = recipe::get_recipe_version(conn, id)?;
+        let batch_count = recipe::version_batch_counts(conn, v.recipe_id)?
+            .get(&id)
+            .copied()
+            .unwrap_or(0);
+        let names = reference::ingredient_names(conn)?;
+        let items = recipe::list_recipe_items(conn, id)?
+            .into_iter()
+            .map(|item| item_view(item, &names))
+            .collect();
+        let abv_alternate = match (v.target_og, v.target_fg) {
+            (Some(og), Some(fg)) => abv::alternate(og, fg).ok(),
+            _ => None,
+        };
+        Ok(RecipeVersionView {
+            id: v.id,
+            recipe_id: v.recipe_id,
+            version_no: v.version_no,
+            locked_at: v.locked_at,
+            batch_count,
+            target_volume_l: v.target_volume_l,
+            target_og: v.target_og.map(|sg| sg_to_display(sg, display)),
+            target_fg: v.target_fg.map(|sg| sg_to_display(sg, display)),
+            target_abv: v.target_abv,
+            abv_alternate,
+            notes: v.notes,
+            gravity_unit: display.unit(),
+            items,
+        })
+    })?)
+}
+
+/// What the targets form sends: gravities in the display unit, ABV as a fraction.
+#[derive(Debug, serde::Deserialize)]
+pub struct RecipeVersionInput {
+    pub target_volume_l: Option<f64>,
+    pub target_og: Option<f64>,
+    pub target_fg: Option<f64>,
+    pub target_abv: Option<f64>,
+    pub notes: Option<String>,
+}
+
+impl RecipeVersionInput {
+    fn into_new(self, display: GravityDisplay) -> brewcore::Result<NewRecipeVersion> {
+        let sg = |v: Option<f64>| v.map(|v| display_to_sg(v, display)).transpose();
+        Ok(NewRecipeVersion {
+            target_volume_l: self.target_volume_l.map(Litres::new).transpose()?,
+            target_og: sg(self.target_og)?,
+            target_fg: sg(self.target_fg)?,
+            target_abv: self.target_abv,
+            notes: self.notes,
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn update_recipe_version(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    id: i64,
+    version: RecipeVersionInput,
+) -> ApiResult<()> {
+    let version = version.into_new(config.get().ui.gravity_display)?;
+    Ok(db.write(|conn| recipe::update_recipe_version(conn, id, &version))?)
+}
+
+/// The fork and its items in one transaction. Returns the new version's tab, so the
+/// screen can route to `v{n}`.
+#[tauri::command]
+pub async fn fork_recipe_version(db: tauri::State<'_, Db>, id: i64) -> ApiResult<VersionTab> {
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let new_id = recipe::fork_recipe_version(&tx, id)?;
+        let v = recipe::get_recipe_version(&tx, new_id)?;
+        tx.commit()?;
+        Ok(VersionTab {
+            id: v.id,
+            version_no: v.version_no,
+            locked_at: v.locked_at,
+            batch_count: 0,
+        })
+    })?)
+}
+
+#[tauri::command]
+pub async fn delete_recipe_version(db: tauri::State<'_, Db>, id: i64) -> ApiResult<()> {
+    Ok(db.write(|conn| recipe::delete_recipe_version(conn, id))?)
+}
+
+#[tauri::command]
+pub async fn add_recipe_item(
+    db: tauri::State<'_, Db>,
+    version_id: i64,
+    item: NewRecipeItem,
+) -> ApiResult<i64> {
+    Ok(db.write(|conn| recipe::add_recipe_item(conn, version_id, &item))?)
+}
+
+#[tauri::command]
+pub async fn update_recipe_item(
+    db: tauri::State<'_, Db>,
+    id: i64,
+    item: NewRecipeItem,
+) -> ApiResult<()> {
+    Ok(db.write(|conn| recipe::update_recipe_item(conn, id, &item))?)
+}
+
+#[tauri::command]
+pub async fn delete_recipe_item(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| recipe::delete_recipe_item(conn, id))?)
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TargetChange {
+    pub field: &'static str,
+    pub from: Option<f64>,
+    pub to: Option<f64>,
+}
+
+/// One row of a diff. `from` and `to` are `None` on the side the item is missing from.
+#[derive(Debug, serde::Serialize)]
+pub struct ItemChangeView {
+    pub change: &'static str,
+    pub ingredient: String,
+    pub stage: Stage,
+    pub from: Option<RecipeItemRow>,
+    pub to: Option<RecipeItemRow>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RecipeDiffView {
+    pub from_version_no: i64,
+    pub to_version_no: i64,
+    pub gravity_unit: &'static str,
+    /// Only the targets that differ. Gravities in the display unit, ABV a fraction.
+    pub targets: Vec<TargetChange>,
+    pub items: Vec<ItemChangeView>,
+}
+
+#[tauri::command]
+pub async fn diff_recipe_versions(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    from_id: i64,
+    to_id: i64,
+) -> ApiResult<RecipeDiffView> {
+    let display = config.get().ui.gravity_display;
+    Ok(db.read(|conn| {
+        let diff = recipe::diff_recipe_versions(conn, from_id, to_id)?;
+        let names = reference::ingredient_names(conn)?;
+        let name = |id: i64| {
+            names
+                .get(&id)
+                .map_or_else(|| format!("#{id}"), |(n, _)| n.clone())
+        };
+        let gravity = |pair: (Option<Sg>, Option<Sg>)| {
+            let to_display = |v: Option<Sg>| v.map(|sg| sg_to_display(sg, display));
+            (to_display(pair.0), to_display(pair.1))
+        };
+
+        let mut targets = Vec::new();
+        let mut push = |field, (from, to): (Option<f64>, Option<f64>)| {
+            targets.push(TargetChange { field, from, to });
+        };
+        if let Some((a, b)) = diff.target_volume_l {
+            push("target_volume_l", (a.map(Litres::get), b.map(Litres::get)));
+        }
+        if let Some(pair) = diff.target_og {
+            push("target_og", gravity(pair));
+        }
+        if let Some(pair) = diff.target_fg {
+            push("target_fg", gravity(pair));
+        }
+        if let Some(pair) = diff.target_abv {
+            push("target_abv", pair);
+        }
+
+        let items = diff
+            .items
+            .into_iter()
+            .map(|change| {
+                let (change, from, to) = match change {
+                    ItemChange::Added(to) => ("added", None, Some(to)),
+                    ItemChange::Removed(from) => ("removed", Some(from), None),
+                    ItemChange::Changed { from, to } => ("changed", Some(from), Some(to)),
+                };
+                let any = from.as_ref().or(to.as_ref()).expect("one side is set");
+                ItemChangeView {
+                    change,
+                    ingredient: name(any.ingredient_id),
+                    stage: any.stage,
+                    from,
+                    to,
+                }
+            })
+            .collect();
+
+        Ok(RecipeDiffView {
+            from_version_no: diff.from.version_no,
+            to_version_no: diff.to.version_no,
+            gravity_unit: display.unit(),
+            targets,
+            items,
+        })
+    })?)
 }
 
 #[tauri::command]

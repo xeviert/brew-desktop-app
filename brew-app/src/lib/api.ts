@@ -427,6 +427,169 @@ export const archiveLot = (id: number): Promise<boolean> => call("archive_lot", 
 export const restoreLot = (id: number): Promise<boolean> => call("restore_lot", { id });
 
 // ---------------------------------------------------------------------------
+// Phase 3 UI pass, U2: recipes
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::recipe::Stage`. */
+export type Stage = "prep" | "pitch" | "fermentation" | "conditioning" | "packaging";
+
+/** Mirrors `brewcore::db::recipe::RecipeRow`. */
+export interface Recipe {
+	id: number;
+	name: string;
+	beverage_type: BeverageType;
+	notes: string | null;
+	archived_at: number | null;
+}
+
+/** Mirrors `src-tauri`'s `RecipeSummary`. */
+export interface RecipeSummary extends Recipe {
+	version_count: number;
+	latest_version_no: number | null;
+}
+
+/** Mirrors `src-tauri`'s `RecipeInput`. */
+export interface RecipeInput {
+	name: string;
+	beverage_type: BeverageType;
+	notes: string | null;
+}
+
+/** Mirrors `src-tauri`'s `VersionTab`. */
+export interface VersionTab {
+	id: number;
+	version_no: number;
+	/** Non-null: a batch points at it, so edits fork instead. */
+	locked_at: number | null;
+	batch_count: number;
+}
+
+/** Mirrors `src-tauri`'s `RecipeDetail`. */
+export interface RecipeDetail {
+	recipe: Recipe;
+	versions: VersionTab[];
+}
+
+/** Mirrors `brewcore::db::recipe::RecipeItemRow`. */
+export interface RecipeItem {
+	id: number;
+	recipe_version_id: number;
+	ingredient_id: number;
+	qty: CanonicalQty;
+	entry: Quantity;
+	stage: Stage;
+	/** Hours from pitch; negative is before it. */
+	offset_hours: number | null;
+	notes: string | null;
+}
+
+/** Mirrors `src-tauri`'s `RecipeItemView`. */
+export interface RecipeItemView extends RecipeItem {
+	ingredient: string;
+	ingredient_archived: boolean;
+}
+
+/** Mirrors `src-tauri`'s `RecipeVersionView`. Gravities in `gravity_unit`; ABV a fraction. */
+export interface RecipeVersion {
+	id: number;
+	recipe_id: number;
+	version_no: number;
+	locked_at: number | null;
+	batch_count: number;
+	target_volume_l: number | null;
+	target_og: number | null;
+	target_fg: number | null;
+	target_abv: number | null;
+	abv_alternate: number | null;
+	notes: string | null;
+	gravity_unit: string;
+	items: RecipeItemView[];
+}
+
+/** Mirrors `src-tauri`'s `RecipeVersionInput`. Gravities in the display unit. */
+export interface RecipeVersionInput {
+	target_volume_l: number | null;
+	target_og: number | null;
+	target_fg: number | null;
+	target_abv: number | null;
+	notes: string | null;
+}
+
+/** Mirrors `brewcore::db::recipe::NewRecipeItem`. */
+export interface RecipeItemInput {
+	ingredient_id: number;
+	entry: Quantity;
+	stage: Stage;
+	offset_hours: number | null;
+	notes: string | null;
+}
+
+/** Mirrors `src-tauri`'s `TargetChange`. */
+export interface TargetChange {
+	field: "target_volume_l" | "target_og" | "target_fg" | "target_abv";
+	from: number | null;
+	to: number | null;
+}
+
+/** Mirrors `src-tauri`'s `ItemChangeView`. */
+export interface ItemChange {
+	change: "added" | "removed" | "changed";
+	ingredient: string;
+	stage: Stage;
+	from: RecipeItem | null;
+	to: RecipeItem | null;
+}
+
+/** Mirrors `src-tauri`'s `RecipeDiffView`. */
+export interface RecipeDiff {
+	from_version_no: number;
+	to_version_no: number;
+	gravity_unit: string;
+	targets: TargetChange[];
+	items: ItemChange[];
+}
+
+export const listRecipes = (includeArchived: boolean): Promise<RecipeSummary[]> =>
+	call("list_recipes", { includeArchived });
+
+export const createRecipe = (recipe: RecipeInput): Promise<{ recipe_id: number; version_id: number }> =>
+	call("create_recipe", { recipe });
+
+export const updateRecipe = (id: number, recipe: RecipeInput): Promise<void> =>
+	call("update_recipe", { id, recipe });
+
+export const archiveRecipe = (id: number): Promise<boolean> => call("archive_recipe", { id });
+
+export const restoreRecipe = (id: number): Promise<boolean> => call("restore_recipe", { id });
+
+export const getRecipe = (id: number): Promise<RecipeDetail> => call("get_recipe", { id });
+
+export const getRecipeVersion = (id: number): Promise<RecipeVersion> =>
+	call("get_recipe_version", { id });
+
+export const updateRecipeVersion = (id: number, version: RecipeVersionInput): Promise<void> =>
+	call("update_recipe_version", { id, version });
+
+/** Copies the version and its items to the next number, unlocked. */
+export const forkRecipeVersion = (id: number): Promise<VersionTab> =>
+	call("fork_recipe_version", { id });
+
+/** Newest unlocked version only. */
+export const deleteRecipeVersion = (id: number): Promise<void> =>
+	call("delete_recipe_version", { id });
+
+export const addRecipeItem = (versionId: number, item: RecipeItemInput): Promise<number> =>
+	call("add_recipe_item", { versionId, item });
+
+export const updateRecipeItem = (id: number, item: RecipeItemInput): Promise<void> =>
+	call("update_recipe_item", { id, item });
+
+export const deleteRecipeItem = (id: number): Promise<boolean> => call("delete_recipe_item", { id });
+
+export const diffRecipeVersions = (fromId: number, toId: number): Promise<RecipeDiff> =>
+	call("diff_recipe_versions", { fromId, toId });
+
+// ---------------------------------------------------------------------------
 // Phase 4d: the batch curve
 // ---------------------------------------------------------------------------
 
