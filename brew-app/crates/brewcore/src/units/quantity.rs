@@ -97,7 +97,7 @@ impl Unit {
     /// The imperial factors are exact, not approximations: the international pound
     /// is *defined* as 0.453 592 37 kg (1959 agreement) and the US liquid gallon as
     /// 231 in³ = 3.785 411 784 L. That is why the tests can assert them tightly.
-    const fn factor(self) -> f64 {
+    pub const fn factor(self) -> f64 {
         match self {
             Unit::Mg => 0.001,
             Unit::G => 1.0,

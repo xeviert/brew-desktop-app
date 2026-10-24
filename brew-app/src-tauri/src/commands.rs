@@ -13,7 +13,10 @@ use brewcore::{
     db::{
         Db, DbStatus, Metric, SourceKind,
         analytics::BatchMetrics,
-        batch::{self, BatchEdit, BatchRow, BatchStatus, BatchSummary, GravityField, NewBatch},
+        batch::{
+            self, BatchCost, BatchEdit, BatchIngredientRow, BatchRow, BatchStatus, BatchSummary,
+            GravityField, NewBatch, NewBatchIngredient, PlanVsActualRow,
+        },
         compare::{self, Comparison, RelRange, YAxis, YMode},
         dashboard::{self, BatchDashboard, DisplayGravity},
         health::DeviceHealth,
@@ -1389,6 +1392,210 @@ pub async fn update_event(
 #[tauri::command]
 pub async fn delete_event(db: tauri::State<'_, Db>, event_id: i64) -> ApiResult<bool> {
     Ok(db.write(|conn| timeline::delete_event(conn, event_id))?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U5: actuals and cost
+// ---------------------------------------------------------------------------
+
+/// A lot as the additions picker shows it: which ingredient, and in what dimension.
+#[derive(Debug, serde::Serialize)]
+pub struct LotChoice {
+    #[serde(flatten)]
+    pub lot: LotRow,
+    pub ingredient: String,
+    pub category: Category,
+    pub default_unit: Unit,
+}
+
+/// Active lots of active ingredients, by ingredient name.
+#[tauri::command]
+pub async fn list_lot_choices(db: tauri::State<'_, Db>) -> ApiResult<Vec<LotChoice>> {
+    Ok(db.read(|conn| {
+        let ingredients: HashMap<i64, IngredientRow> = reference::list_ingredients(conn, false)?
+            .into_iter()
+            .map(|i| (i.id, i))
+            .collect();
+        let mut lots: Vec<LotChoice> = reference::list_all_lots(conn, false)?
+            .into_iter()
+            .filter_map(|lot| {
+                let i = ingredients.get(&lot.ingredient_id)?;
+                Some(LotChoice {
+                    ingredient: i.name.clone(),
+                    category: i.category,
+                    default_unit: i.default_unit,
+                    lot,
+                })
+            })
+            .collect();
+        lots.sort_by(|a, b| a.ingredient.cmp(&b.ingredient));
+        Ok(lots)
+    })?)
+}
+
+/// An addition with the names and the money beside it.
+#[derive(Debug, serde::Serialize)]
+pub struct ActualView {
+    #[serde(flatten)]
+    pub row: BatchIngredientRow,
+    pub ingredient: String,
+    /// The lot code, else its supplier, else its number.
+    pub lot_label: String,
+    pub lot_archived: bool,
+    /// What this addition cost, rounded once; `None` from an unpriced lot.
+    pub line_cost: Option<Money>,
+}
+
+/// 3c's `PlanVsActualRow`, named. `delta_entry` is `delta` in the planned line's own
+/// unit, so half a kilo short reads as 0.5 kg and not as 500 g.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum PlanLineView {
+    Missing {
+        planned: RecipeItemRow,
+        ingredient: String,
+    },
+    Unplanned {
+        actual: ActualView,
+        ingredient: String,
+    },
+    Both {
+        planned: RecipeItemRow,
+        actual: ActualView,
+        ingredient: String,
+        delta: Option<f64>,
+        delta_entry: Option<f64>,
+    },
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ActualsView {
+    pub recipe_version_id: Option<i64>,
+    pub lines: Vec<PlanLineView>,
+    /// `None` with `cost_error` set when the lots are in more than one currency: the
+    /// lines still show, the total does not exist.
+    pub cost: Option<BatchCost>,
+    pub cost_error: Option<ApiError>,
+}
+
+#[tauri::command]
+pub async fn batch_actuals(db: tauri::State<'_, Db>, batch_id: i64) -> ApiResult<ActualsView> {
+    Ok(db.read(|conn| {
+        let plan = batch::plan_vs_actual(conn, batch_id)?;
+        let names = reference::ingredient_names(conn)?;
+        let name = |id: i64| names.get(&id).map(|(n, _)| n.clone()).unwrap_or_default();
+        let lots: HashMap<i64, LotRow> = reference::list_all_lots(conn, true)?
+            .into_iter()
+            .map(|l| (l.id, l))
+            .collect();
+        let view = |row: BatchIngredientRow| {
+            let lot = lots.get(&row.ingredient_lot_id);
+            let line_cost = lot.and_then(|l| {
+                let per_unit = l.cost_per_canonical_unit()?;
+                let cost = l.cost?;
+                Some(Money::new(
+                    (per_unit * row.qty.amount()).round() as i64,
+                    cost.currency,
+                ))
+            });
+            ActualView {
+                ingredient: name(row.ingredient_id),
+                lot_label: lot
+                    .and_then(|l| l.lot_code.clone().or_else(|| l.supplier.clone()))
+                    .unwrap_or_else(|| format!("lot {}", row.ingredient_lot_id)),
+                lot_archived: lot.is_some_and(|l| l.archived_at.is_some()),
+                line_cost,
+                row,
+            }
+        };
+        let lines = plan
+            .rows
+            .into_iter()
+            .map(|r| match r {
+                PlanVsActualRow::Missing(planned) => PlanLineView::Missing {
+                    ingredient: name(planned.ingredient_id),
+                    planned,
+                },
+                PlanVsActualRow::Unplanned(actual) => PlanLineView::Unplanned {
+                    ingredient: name(actual.ingredient_id),
+                    actual: view(actual),
+                },
+                PlanVsActualRow::Both {
+                    planned,
+                    actual,
+                    delta,
+                } => PlanLineView::Both {
+                    ingredient: name(planned.ingredient_id),
+                    delta_entry: delta.map(|d| d / planned.entry.unit.factor()),
+                    delta,
+                    planned,
+                    actual: view(actual),
+                },
+            })
+            .collect();
+        let (cost, cost_error) = match batch::batch_cost(conn, batch_id) {
+            Ok(cost) => (Some(cost), None),
+            Err(e @ Error::CurrencyMismatch { .. }) => (None, Some(e.into())),
+            Err(e) => return Err(e),
+        };
+        Ok(ActualsView {
+            recipe_version_id: plan.recipe_version_id,
+            lines,
+            cost,
+            cost_error,
+        })
+    })?)
+}
+
+/// What the additions form sends. `added_at: None` is untimed, not now: "part of the
+/// stage" is a real answer for a prep addition.
+#[derive(Debug, serde::Deserialize)]
+pub struct ActualInput {
+    pub ingredient_lot_id: i64,
+    pub entry: Quantity,
+    pub stage: Stage,
+    pub added_at: Option<Timestamp>,
+    pub notes: Option<String>,
+}
+
+impl ActualInput {
+    fn into_new(self) -> brewcore::Result<NewBatchIngredient> {
+        Ok(NewBatchIngredient {
+            added_at: self
+                .added_at
+                .map(|at| not_in_future(Some(at), "addition"))
+                .transpose()?,
+            ingredient_lot_id: self.ingredient_lot_id,
+            entry: Quantity::new(self.entry.value, self.entry.unit)?,
+            stage: self.stage,
+            notes: self.notes,
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn add_batch_ingredient(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+    item: ActualInput,
+) -> ApiResult<i64> {
+    let item = item.into_new()?;
+    Ok(db.write(|conn| batch::add_batch_ingredient(conn, batch_id, &item))?)
+}
+
+#[tauri::command]
+pub async fn update_batch_ingredient(
+    db: tauri::State<'_, Db>,
+    id: i64,
+    item: ActualInput,
+) -> ApiResult<()> {
+    let item = item.into_new()?;
+    Ok(db.write(|conn| batch::update_batch_ingredient(conn, id, &item))?)
+}
+
+#[tauri::command]
+pub async fn delete_batch_ingredient(db: tauri::State<'_, Db>, id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| batch::delete_batch_ingredient(conn, id))?)
 }
 
 // ---------------------------------------------------------------------------

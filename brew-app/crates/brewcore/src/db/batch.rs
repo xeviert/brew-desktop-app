@@ -25,7 +25,7 @@ use super::{
         lock_recipe_version,
     },
     reference::{
-        CanonicalQty, canonical_for_ingredient, canonical_from_columns, duplicate, required_name,
+        CanonicalQty, canonical_from_columns, duplicate, positive_canonical, required_name,
         restore_row,
     },
 };
@@ -496,25 +496,31 @@ pub struct BatchIngredientRow {
     pub notes: Option<String>,
 }
 
-/// The lot's ingredient, then the ordinary dimension check.
+/// The lot's ingredient, then the ordinary dimension check and a positive amount.
 ///
 /// A wrapper rather than a copy of [`canonical_for_ingredient`]: a volume landing in
 /// `qty_g` has to be impossible from every write path, not from two of the three.
+/// `keep` is a lot an existing addition already uses: correcting the quantity of an
+/// addition from a lot archived since is a fix, not a new pick.
 fn canonical_for_lot(
     conn: &Connection,
     lot_id: i64,
     entry: Quantity,
+    keep: Option<i64>,
 ) -> Result<(Option<Grams>, Option<Litres>, Option<f64>)> {
-    let ingredient_id: i64 = conn
+    let (ingredient_id, archived): (i64, bool) = conn
         .query_row(
-            "SELECT ingredient_id FROM ingredient_lot WHERE id = ?",
+            "SELECT ingredient_id, archived_at IS NOT NULL FROM ingredient_lot WHERE id = ?",
             [lot_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?
         .ok_or(Error::NoSuchLot { lot_id })?;
+    if archived && keep != Some(lot_id) {
+        return Err(Error::LotArchived { lot_id });
+    }
 
-    canonical_for_ingredient(conn, ingredient_id, entry)
+    positive_canonical(conn, ingredient_id, entry)
 }
 
 pub fn add_batch_ingredient(
@@ -523,13 +529,11 @@ pub fn add_batch_ingredient(
     item: &NewBatchIngredient,
 ) -> Result<i64> {
     ensure_open(&get_batch(conn, batch_id)?)?;
-    let (qty_g, qty_l, qty_each) = canonical_for_lot(conn, item.ingredient_lot_id, item.entry)?;
+    let (qty_g, qty_l, qty_each) =
+        canonical_for_lot(conn, item.ingredient_lot_id, item.entry, None)?;
 
     conn.execute(
-        "INSERT INTO batch_ingredient \
-         (batch_id, ingredient_lot_id, qty_g, qty_l, qty_each, entry_qty, entry_unit, \
-          stage, added_at, notes) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO batch_ingredient          (batch_id, ingredient_lot_id, qty_g, qty_l, qty_each, entry_qty, entry_unit,           stage, added_at, notes)          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             batch_id,
             item.ingredient_lot_id,
@@ -546,7 +550,49 @@ pub fn add_batch_ingredient(
     Ok(conn.last_insert_rowid())
 }
 
+/// The batch an addition belongs to, open.
+fn open_batch_of(conn: &Connection, id: i64) -> Result<(i64, i64)> {
+    let (batch_id, lot_id): (i64, i64) = conn
+        .query_row(
+            "SELECT batch_id, ingredient_lot_id FROM batch_ingredient WHERE id = ?",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .ok_or(Error::NoSuchBatchIngredient { id })?;
+    ensure_open(&get_batch(conn, batch_id)?)?;
+    Ok((batch_id, lot_id))
+}
+
+/// Replace an addition, under the same checks as [`add_batch_ingredient`].
+pub fn update_batch_ingredient(
+    conn: &Connection,
+    id: i64,
+    item: &NewBatchIngredient,
+) -> Result<()> {
+    let (_, current_lot) = open_batch_of(conn, id)?;
+    let (qty_g, qty_l, qty_each) =
+        canonical_for_lot(conn, item.ingredient_lot_id, item.entry, Some(current_lot))?;
+    conn.execute(
+        "UPDATE batch_ingredient SET ingredient_lot_id = ?, qty_g = ?, qty_l = ?,                 qty_each = ?, entry_qty = ?, entry_unit = ?, stage = ?, added_at = ?, notes = ?          WHERE id = ?",
+        params![
+            item.ingredient_lot_id,
+            qty_g,
+            qty_l,
+            qty_each,
+            item.entry.value,
+            item.entry.unit,
+            item.stage,
+            item.added_at,
+            item.notes,
+            id,
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn delete_batch_ingredient(conn: &Connection, id: i64) -> Result<bool> {
+    open_batch_of(conn, id)?;
     let changed = conn.execute("DELETE FROM batch_ingredient WHERE id = ?", [id])?;
     Ok(changed == 1)
 }
@@ -1448,5 +1494,72 @@ mod tests {
         assert!(cost.total.is_none());
         assert_eq!(cost.lines_costed, 0);
         assert_eq!(cost.lines_without_cost, 0);
+    }
+
+    // ------------------------------------------------------------------- U5
+
+    #[test]
+    fn an_actual_of_nothing_or_less_is_refused() {
+        let conn = db();
+        let (_, lot) = stocked(&conn, "Sucrose", Category::Sugar, Unit::Kg);
+        let batch = create_batch(&conn, &new_batch("SELTZER-001", None), T0).unwrap();
+        for qty in [0.0, -2.0] {
+            let err = add_batch_ingredient(&conn, batch, &actual(lot, qty, Unit::Kg, Stage::Prep))
+                .unwrap_err();
+            assert_eq!(err.code(), "units.not_positive");
+        }
+    }
+
+    #[test]
+    fn an_archived_lot_takes_no_new_additions_but_an_existing_one_is_still_fixable() {
+        let conn = db();
+        let (_, lot) = stocked(&conn, "Sucrose", Category::Sugar, Unit::Kg);
+        let (_, other) = stocked(&conn, "Dextrose", Category::Sugar, Unit::Kg);
+        let batch = create_batch(&conn, &new_batch("SELTZER-001", None), T0).unwrap();
+        let id =
+            add_batch_ingredient(&conn, batch, &actual(lot, 4.0, Unit::Kg, Stage::Prep)).unwrap();
+        crate::db::reference::archive_lot(&conn, lot, T0).unwrap();
+
+        let err = add_batch_ingredient(&conn, batch, &actual(lot, 1.0, Unit::Kg, Stage::Prep))
+            .unwrap_err();
+        assert_eq!(err.code(), "db.lot_archived");
+        update_batch_ingredient(&conn, id, &actual(lot, 4.2, Unit::Kg, Stage::Prep)).unwrap();
+        assert_eq!(
+            list_batch_ingredients(&conn, batch).unwrap()[0].qty,
+            CanonicalQty::Mass(Grams::new(4200.0).unwrap())
+        );
+
+        // Moving it to another lot and back is a new pick of the archived one.
+        update_batch_ingredient(&conn, id, &actual(other, 4.2, Unit::Kg, Stage::Prep)).unwrap();
+        let err = update_batch_ingredient(&conn, id, &actual(lot, 4.2, Unit::Kg, Stage::Prep))
+            .unwrap_err();
+        assert_eq!(err.code(), "db.lot_archived");
+    }
+
+    #[test]
+    fn an_edit_is_checked_like_an_add_and_an_archived_batch_keeps_its_actuals() {
+        let conn = db();
+        let (_, lot) = stocked(&conn, "Sucrose", Category::Sugar, Unit::Kg);
+        let batch = create_batch(&conn, &new_batch("SELTZER-001", None), T0).unwrap();
+        let id =
+            add_batch_ingredient(&conn, batch, &actual(lot, 4.0, Unit::Kg, Stage::Prep)).unwrap();
+
+        let err = update_batch_ingredient(&conn, id, &actual(lot, 4.0, Unit::L, Stage::Prep))
+            .unwrap_err();
+        assert_eq!(err.code(), "units.dimension_mismatch");
+        let err = update_batch_ingredient(&conn, 404, &actual(lot, 1.0, Unit::Kg, Stage::Prep))
+            .unwrap_err();
+        assert_eq!(err.code(), "db.no_such_batch_ingredient");
+
+        archive_batch(&conn, batch, T0).unwrap();
+        for err in [
+            update_batch_ingredient(&conn, id, &actual(lot, 5.0, Unit::Kg, Stage::Prep))
+                .unwrap_err(),
+            delete_batch_ingredient(&conn, id).unwrap_err(),
+        ] {
+            assert_eq!(err.code(), "db.batch_archived");
+        }
+        restore_batch(&conn, batch).unwrap();
+        assert!(delete_batch_ingredient(&conn, id).unwrap());
     }
 }

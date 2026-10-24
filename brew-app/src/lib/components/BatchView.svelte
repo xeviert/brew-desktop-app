@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import Actuals from "$lib/components/Actuals.svelte";
   import BatchLifecycle from "$lib/components/BatchLifecycle.svelte";
   import Curve from "$lib/components/Curve.svelte";
   import StatusCard from "$lib/components/StatusCard.svelte";
@@ -99,6 +100,13 @@
         <Curve batchId={batch.id} pitchedAt={batch.pitched_at} ui={config.ui} />
       {/key}
       {#key batch.id}
+        <Actuals
+          batchId={batch.id}
+          pitchedAt={batch.pitched_at}
+          readonly={batch.archived_at !== null}
+          {revision}
+          onchanged={() => void changed()}
+        />
         <Timeline
           batchId={batch.id}
           {config}

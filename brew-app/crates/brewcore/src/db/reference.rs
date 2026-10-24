@@ -885,11 +885,25 @@ pub fn list_lots_for(
     ingredient_id: i64,
     include_archived: bool,
 ) -> Result<Vec<LotRow>> {
+    lots_where(conn, Some(ingredient_id), include_archived)
+}
+
+/// Every lot of every ingredient: one picker for a batch's additions.
+pub fn list_all_lots(conn: &Connection, include_archived: bool) -> Result<Vec<LotRow>> {
+    lots_where(conn, None, include_archived)
+}
+
+fn lots_where(
+    conn: &Connection,
+    ingredient_id: Option<i64>,
+    include_archived: bool,
+) -> Result<Vec<LotRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, ingredient_id, supplier, lot_code, qty_g, qty_l, qty_each, \
                 entry_qty, entry_unit, total_cost_minor, currency, purchased_at, expires_at, \
                 notes, archived_at \
-         FROM ingredient_lot WHERE ingredient_id = ?1 AND (?2 OR archived_at IS NULL) \
+         FROM ingredient_lot \
+         WHERE (?1 IS NULL OR ingredient_id = ?1) AND (?2 OR archived_at IS NULL) \
          ORDER BY purchased_at, id",
     )?;
     let rows = stmt.query_map(params![ingredient_id, include_archived], |row| {

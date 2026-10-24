@@ -19,13 +19,13 @@ use brewcore::{
             create_recipe_version,
         },
         reference::{
-            Category, NewIngredient, NewLot, NewYeastStrain, create_ingredient, create_lot,
-            create_yeast_strain,
+            Category, NewIngredient, NewLot, NewYeastStrain, YAN_ATTR, create_ingredient,
+            create_lot, create_yeast_strain,
         },
         tier1::{create_source, create_stream, insert_readings},
         timeline::{EventKind, NewBatchEvent, add_event, bind_stream, record_pitch},
     },
-    units::{Litres, Quantity, Sg, Timestamp, Unit},
+    units::{Currency, Litres, Money, Quantity, Sg, Timestamp, Unit},
 };
 use brewfixture::{
     JournalScenario, Kind, LogSpec, Scenario,
@@ -181,7 +181,7 @@ fn demo_db(path: Option<PathBuf>) {
         // U2: the seltzers are brewed off v1 of a recipe, so v1 is locked and the
         // recipe screen has something to fork. The nutrient lines match SELTZER-001's
         // Fermaid-O events below.
-        let plain = |name: &str, category: Category, unit: Unit| {
+        let plain = |name: &str, category: Category, unit: Unit, attrs: Option<String>| {
             create_ingredient(
                 &tx,
                 &NewIngredient {
@@ -189,13 +189,37 @@ fn demo_db(path: Option<PathBuf>) {
                     category,
                     default_unit: unit,
                     yeast_strain_id: None,
-                    attrs: None,
+                    attrs,
                     notes: None,
                 },
             )
         };
-        let sucrose = plain("Sucrose", Category::Sugar, Unit::Kg)?;
-        let fermaid = plain("Fermaid O", Category::Nutrient, Unit::G)?;
+        let sucrose = plain("Sucrose", Category::Sugar, Unit::Kg, None)?;
+        // TOSNA's figure, the lower of the two `calc::yan` offers.
+        let fermaid = plain(
+            "Fermaid O",
+            Category::Nutrient,
+            Unit::G,
+            Some(format!("{{\"{YAN_ATTR}\": 40.0}}")),
+        )?;
+        // U5: priced lots, so SELTZER-001 has a cost and a plan-vs-actual to read.
+        let priced = |ingredient: i64, qty: Quantity, minor: i64, code: &str| {
+            create_lot(
+                &tx,
+                &NewLot {
+                    ingredient_id: ingredient,
+                    supplier: Some("Metro".into()),
+                    lot_code: Some(code.into()),
+                    entry: qty,
+                    cost: Some(Money::new(minor, Currency::EUR)),
+                    purchased_at: Some(at(-7 * DAY)),
+                    expires_at: None,
+                    notes: None,
+                },
+            )
+        };
+        let sucrose_lot = priced(sucrose, Quantity::new(5.0, Unit::Kg)?, 1250, "SUC-2608")?;
+        let fermaid_lot = priced(fermaid, Quantity::new(250.0, Unit::G)?, 1890, "FO-0412")?;
         let recipe = create_recipe(&tx, "Citron-Verveine", BeverageType::Seltzer, None)?;
         let v1 = create_recipe_version(
             &tx,
@@ -256,6 +280,34 @@ fn demo_db(path: Option<PathBuf>) {
         )?;
         record_pitch(&tx, batch_id, at(0), Some("EC-1118, rehydrated"))?;
         pitch_yeast(batch_id, ec1118)?;
+        // 4.2 kg against the plan's 4, and the first Fermaid O only: one Both with a
+        // delta, one Missing left to record from the screen.
+        for (lot, qty, stage, added_at) in [
+            (
+                sucrose_lot,
+                Quantity::new(4.2, Unit::Kg)?,
+                Stage::Prep,
+                None,
+            ),
+            (
+                fermaid_lot,
+                Quantity::new(10.0, Unit::G)?,
+                Stage::Fermentation,
+                Some(at(DAY)),
+            ),
+        ] {
+            add_batch_ingredient(
+                &tx,
+                batch_id,
+                &NewBatchIngredient {
+                    ingredient_lot_id: lot,
+                    entry: qty,
+                    stage,
+                    added_at,
+                    notes: None,
+                },
+            )?;
+        }
 
         let esp32 = create_source(&tx, SourceKind::BrewdJournal, "esp32-fv1", None)?;
         let ispindel = create_source(&tx, SourceKind::BrewdJournal, "ispindel-1", None)?;

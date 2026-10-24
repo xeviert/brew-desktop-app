@@ -1520,3 +1520,184 @@ fn events_are_added_corrected_and_deleted_and_og_fg_set_and_cleared() {
         (Value::Null, json!(0.998))
     );
 }
+
+// ---------------------------------------------------------------------------
+// U5: actuals and cost
+
+fn priced_lot(
+    app: &Harness,
+    ingredient: &Value,
+    value: f64,
+    unit: &str,
+    cost: &str,
+    currency: &str,
+) -> Value {
+    app.invoke(
+        "create_lot",
+        json!({ "lot": {
+            "ingredient_id": ingredient, "supplier": "Metro", "lot_code": null,
+            "entry": { "value": value, "unit": unit }, "cost": cost, "currency": currency,
+            "purchased_at": 1_700_000_000, "expires_at": null, "notes": null,
+        }}),
+    )
+    .unwrap()
+}
+
+fn actual(lot: &Value, value: f64, unit: &str, stage: &str) -> Value {
+    json!({
+        "ingredient_lot_id": lot, "entry": { "value": value, "unit": unit },
+        "stage": stage, "added_at": null, "notes": null,
+    })
+}
+
+#[test]
+fn actuals_pair_with_the_plan_and_cost_the_batch() {
+    let app = Harness::new();
+    let created = app
+        .invoke(
+            "create_recipe",
+            json!({ "recipe": { "name": "Citron", "beverage_type": "seltzer", "notes": null } }),
+        )
+        .unwrap();
+    let v1 = created["version_id"].clone();
+    app.invoke(
+        "update_recipe_version",
+        json!({ "id": v1, "version": {
+            "target_volume_l": 20.0, "target_og": null, "target_fg": null,
+            "target_abv": null, "notes": null,
+        }}),
+    )
+    .unwrap();
+    let sucrose = sugar(&app);
+    app.invoke(
+        "add_recipe_item",
+        json!({ "versionId": v1, "item": item(&sucrose, 4.0, "kg", "prep", Value::Null) }),
+    )
+    .unwrap();
+    let lot = priced_lot(&app, &sucrose, 5.0, "kg", "12,50", "EUR");
+    let id = app
+        .invoke(
+            "create_batch",
+            json!({ "batch": batch_input("SELTZER-001", v1, "seltzer", Value::Null) }),
+        )
+        .unwrap();
+
+    let choices = app.invoke("list_lot_choices", json!({})).unwrap();
+    assert_eq!(choices[0]["ingredient"], "Sucrose");
+    assert_eq!(choices[0]["default_unit"], "kg");
+
+    let view = app
+        .invoke("batch_actuals", json!({ "batchId": id }))
+        .unwrap();
+    assert_eq!(view["lines"][0]["kind"], "missing");
+    assert_eq!(view["cost"]["total"], Value::Null);
+
+    let added = app
+        .invoke(
+            "add_batch_ingredient",
+            json!({ "batchId": id, "item": actual(&lot, 3.5, "kg", "prep") }),
+        )
+        .unwrap();
+    let view = app
+        .invoke("batch_actuals", json!({ "batchId": id }))
+        .unwrap();
+    let line = &view["lines"][0];
+    assert_eq!(line["kind"], "both");
+    assert_eq!(line["ingredient"], "Sucrose");
+    assert_eq!(line["actual"]["lot_label"], "Metro");
+    assert!(
+        (line["delta"].as_f64().unwrap() + 500.0).abs() < 1e-9,
+        "{line}"
+    );
+    assert!(
+        (line["delta_entry"].as_f64().unwrap() + 0.5).abs() < 1e-9,
+        "{line}"
+    );
+    // €12.50 for 5 kg, 3.5 kg of it.
+    assert_eq!(
+        line["actual"]["line_cost"],
+        json!({ "minor": 875, "currency": "EUR" })
+    );
+    assert_eq!(
+        view["cost"]["total"],
+        json!({ "minor": 875, "currency": "EUR" })
+    );
+    // Per litre off the recipe's 20 L target.
+    assert_eq!(view["cost"]["per_litre"]["minor"], 44);
+
+    app.invoke(
+        "update_batch_ingredient",
+        json!({ "id": added, "item": actual(&lot, 4.0, "kg", "prep") }),
+    )
+    .unwrap();
+    let view = app
+        .invoke("batch_actuals", json!({ "batchId": id }))
+        .unwrap();
+    assert_eq!(view["lines"][0]["delta"], 0.0);
+
+    let refused = [
+        (actual(&lot, 0.0, "kg", "prep"), "units.not_positive"),
+        (actual(&lot, 4.0, "L", "prep"), "units.dimension_mismatch"),
+        (actual(&json!(404), 4.0, "kg", "prep"), "db.no_such_lot"),
+    ];
+    for (item, code) in refused {
+        let err = app.api_error(
+            "add_batch_ingredient",
+            json!({ "batchId": id, "item": item }),
+        );
+        assert_eq!(err["code"], code);
+    }
+    let mut late = actual(&lot, 1.0, "kg", "prep");
+    late["added_at"] = json!(Timestamp::now().as_secs() + 86_400);
+    let err = app.api_error(
+        "add_batch_ingredient",
+        json!({ "batchId": id, "item": late }),
+    );
+    assert_eq!(err["code"], "db.in_future");
+
+    app.invoke("archive_lot", json!({ "id": lot })).unwrap();
+    let err = app.api_error(
+        "add_batch_ingredient",
+        json!({ "batchId": id, "item": actual(&lot, 1.0, "kg", "prep") }),
+    );
+    assert_eq!(err["code"], "db.lot_archived");
+    assert_eq!(
+        app.invoke("list_lot_choices", json!({})).unwrap(),
+        json!([])
+    );
+
+    assert_eq!(
+        app.invoke("delete_batch_ingredient", json!({ "id": added }))
+            .unwrap(),
+        true
+    );
+}
+
+#[test]
+fn a_batch_in_two_currencies_shows_its_lines_and_no_total() {
+    let app = Harness::new();
+    let sucrose = sugar(&app);
+    let eur = priced_lot(&app, &sucrose, 5.0, "kg", "12,50", "EUR");
+    let gbp = priced_lot(&app, &sucrose, 5.0, "kg", "10,00", "GBP");
+    let id = app
+        .invoke(
+            "create_batch",
+            json!({ "batch": batch_input("SELTZER-001", Value::Null, "seltzer", Value::Null) }),
+        )
+        .unwrap();
+    for lot in [&eur, &gbp] {
+        app.invoke(
+            "add_batch_ingredient",
+            json!({ "batchId": id, "item": actual(lot, 1.0, "kg", "prep") }),
+        )
+        .unwrap();
+    }
+
+    let view = app
+        .invoke("batch_actuals", json!({ "batchId": id }))
+        .unwrap();
+    assert_eq!(view["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(view["lines"][0]["kind"], "unplanned");
+    assert_eq!(view["cost"], Value::Null);
+    assert_eq!(view["cost_error"]["code"], "money.currency_mismatch");
+}

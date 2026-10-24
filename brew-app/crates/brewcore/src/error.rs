@@ -342,6 +342,15 @@ pub enum Error {
     #[error("nothing to record: no reading and no note")]
     EntryEmpty,
 
+    // Phase 3 UI pass, U5.
+    /// Archiving is how a used-up lot is marked until Phase 7 tracks stock, so a new
+    /// addition from one is a pick from the wrong bag.
+    #[error("lot {lot_id} is archived; restore it to add from it")]
+    LotArchived { lot_id: i64 },
+
+    #[error("batch ingredient {id} does not exist")]
+    NoSuchBatchIngredient { id: i64 },
+
     // Phase 3d. `0005_timeline.sql` leaves `kind` and `channel` open like every
     // vocabulary before them.
     #[error("unknown event kind '{0}' in the database")]
@@ -596,6 +605,8 @@ impl Error {
             Error::BeforePitch { .. } => "db.before_pitch",
             Error::OgInUse { .. } => "db.og_in_use",
             Error::EntryEmpty => "db.entry_empty",
+            Error::LotArchived { .. } => "db.lot_archived",
+            Error::NoSuchBatchIngredient { .. } => "db.no_such_batch_ingredient",
             Error::UnknownEventKind(_) => "db.unknown_event_kind",
             Error::UnknownAnnotationChannel(_) => "db.unknown_annotation_channel",
             Error::NoSuchBatchEvent { .. } => "db.no_such_batch_event",

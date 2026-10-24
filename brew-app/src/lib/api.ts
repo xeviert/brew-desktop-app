@@ -1289,3 +1289,93 @@ export const updateEvent = (eventId: number, event: EventInput): Promise<void> =
 	call("update_event", { eventId, event });
 
 export const deleteEvent = (eventId: number): Promise<boolean> => call("delete_event", { eventId });
+
+// ---------------------------------------------------------------------------
+// Phase 3 UI pass, U5: actuals and cost
+// ---------------------------------------------------------------------------
+
+/** Mirrors `src-tauri`'s `LotChoice`: a lot with its ingredient, for the additions picker. */
+export interface LotChoice extends Omit<Lot, "cost_per_canonical_unit" | "batch_count"> {
+	ingredient: string;
+	category: Category;
+	default_unit: Unit;
+}
+
+/** Mirrors `brewcore::db::batch::BatchIngredientRow`. */
+export interface BatchIngredient {
+	id: number;
+	batch_id: number;
+	ingredient_lot_id: number;
+	ingredient_id: number;
+	qty: CanonicalQty;
+	entry: Quantity;
+	stage: Stage;
+	/** Absolute; `null` is "part of the stage". */
+	added_at: number | null;
+	notes: string | null;
+}
+
+/** Mirrors `src-tauri`'s `ActualView`. */
+export interface Actual extends BatchIngredient {
+	ingredient: string;
+	lot_label: string;
+	lot_archived: boolean;
+	line_cost: Money | null;
+}
+
+/** Mirrors `src-tauri`'s `PlanLineView`. `delta` is canonical; `delta_entry` in the
+ * planned line's unit. */
+export type PlanLine =
+	| { kind: "missing"; planned: RecipeItem; ingredient: string }
+	| { kind: "unplanned"; actual: Actual; ingredient: string }
+	| {
+			kind: "both";
+			planned: RecipeItem;
+			actual: Actual;
+			ingredient: string;
+			delta: number | null;
+			delta_entry: number | null;
+	  };
+
+/** Mirrors `brewcore::db::batch::BatchCost`. `total: null` is "nothing priced", not zero. */
+export interface BatchCost {
+	batch_id: number;
+	/** The batch's volume, else its recipe version's target. */
+	volume_l: number | null;
+	total: Money | null;
+	per_litre: Money | null;
+	lines_costed: number;
+	lines_without_cost: number;
+}
+
+/** Mirrors `src-tauri`'s `ActualsView`. */
+export interface Actuals {
+	recipe_version_id: number | null;
+	lines: PlanLine[];
+	cost: BatchCost | null;
+	/** Set, with `cost: null`, when the lots are in more than one currency. */
+	cost_error: ApiError | null;
+}
+
+/** Mirrors `src-tauri`'s `ActualInput`. */
+export interface ActualInput {
+	ingredient_lot_id: number;
+	entry: Quantity;
+	stage: Stage;
+	added_at: number | null;
+	notes: string | null;
+}
+
+/** Active lots of active ingredients. */
+export const listLotChoices = (): Promise<LotChoice[]> => call("list_lot_choices");
+
+export const batchActuals = (batchId: number): Promise<Actuals> => call("batch_actuals", { batchId });
+
+/** An archived lot is refused; `added_at` in the future too. */
+export const addBatchIngredient = (batchId: number, item: ActualInput): Promise<number> =>
+	call("add_batch_ingredient", { batchId, item });
+
+export const updateBatchIngredient = (id: number, item: ActualInput): Promise<void> =>
+	call("update_batch_ingredient", { id, item });
+
+export const deleteBatchIngredient = (id: number): Promise<boolean> => call("delete_batch_ingredient", { id });

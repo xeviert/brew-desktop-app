@@ -976,6 +976,50 @@ the curve) and the refractometer reading deleted through the dialog, after which
 OG cleared.
 
 **U5. Actuals** — `batch_ingredient` from lots, `plan_vs_actual`, `batch_cost` (3c, 3f)
+- [x] `add_batch_ingredient` gets the checks lots and recipe lines already had: a
+      positive quantity (`positive_canonical`), and **no new addition from an archived
+      lot** (`db.lot_archived`) — archiving is how a used-up lot is marked until Phase 7.
+      An existing addition from a lot archived since stays editable; moving it off the
+      lot and back is a new pick. A future `added_at` is `db.in_future`, checked in the
+      command. `update_batch_ingredient` is new, under the same checks;
+      `delete_batch_ingredient` refuses an archived batch and names an unknown id
+      (`db.no_such_batch_ingredient`)
+- [x] `reference::list_all_lots`, beside `list_lots_for`, for one picker across
+      ingredients. `Unit::factor` is `pub` for the command's delta in the planned unit
+- [x] Commands: `list_lot_choices` (active lots of active ingredients, with name,
+      category and default unit), `batch_actuals` (3c's `plan_vs_actual` named, each
+      actual with its lot label and line cost rounded once, `delta_entry` in the planned
+      line's unit, and `batch_cost` — a currency mismatch comes back as `cost_error`
+      beside the lines rather than failing the whole view),
+      `add_`/`update_`/`delete_batch_ingredient`
+- [x] `Actuals.svelte` between the curve and the timeline: the plan against the
+      actuals by stage, each line planned / actual (lot, time) / delta ("+0.2 kg", "on
+      plan") / cost, flagged *missing* or *unplanned*; **Record** on a missing line
+      prefills its lot, quantity and stage; add an unplanned addition from any lot; edit
+      and delete (asked). Unit picker filtered to the lot's dimension. Footer: total, per
+      litre over the volume it used, and how many lines are unpriced. Shaping and wording
+      pure in `lib/actuals.ts`, with vitest
+- [x] **Found while driving it:** pairing with the plan goes by order within
+      (ingredient, stage), and an untimed addition sorts first — so the second of two
+      Fermaid O doses recorded with no time paired with the *first* planned dose, and the
+      delta landed on the wrong line. **Record** now prefills the planned time, pitch
+      plus the line's offset, capped at now
+- [x] `xtask demo-db`: priced lots of sucrose (€12.50 / 5 kg) and Fermaid O
+      (€18.90 / 250 g, 40 mg YAN/g), and SELTZER-001's actuals — 4.2 kg sucrose against
+      the plan's 4, and the first Fermaid O dose only — so the table opens on a delta and
+      one missing line
+
+**Done when:** a planned addition is recorded from its line, an unplanned one added,
+each refusal shown by its message, an edit moves the delta and the cost, and a deletion
+takes both back. **Status:** driven in the running app (WebView2 over CDP) on a
+`demo-db` file: the table opened on sucrose +0.2 kg (€10.50), EC-1118 on plan, one
+Fermaid O on plan and one missing, cost €11.26 · €0.56/L over 20 L · 1 unpriced (the
+yeast lot). 0 g refused; the missing dose recorded as 12 g at its planned +48 h (+2 g,
+€0.91); 250 g sucrose at packaging as unplanned (€0.63); sucrose edited to 4 kg (on
+plan, €10.00); the priming addition deleted through the dialog. With the sucrose lot
+archived a new addition was `db.lot_archived`, while the existing line still edited to
+4.1 kg with the lot shown "(archived)". 5a's YAN and the lot filter read
+`batch_ingredient` and are covered by their tests; not re-checked on screen.
 
 **U6. Batch screen** — status card, curve, timeline and actuals on one page,
 replacing `BatchView`'s stand-in
