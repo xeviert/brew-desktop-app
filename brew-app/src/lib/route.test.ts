@@ -41,6 +41,11 @@ describe("parse", () => {
 		expect(parse("#/ingredients/strains")).toEqual({ name: "ingredients", tab: "strains" });
 		expect(parse("#/ingredients/lots")).toEqual({ name: "home" });
 	});
+	it("reads the calculators, blank or from a version", () => {
+		expect(parse("#/calc")).toEqual({ name: "calc", version: null });
+		expect(parse("#/calc/version/4")).toEqual({ name: "calc", version: 4 });
+		expect(parse("#/calc/4")).toEqual({ name: "home" });
+	});
 	it("treats an empty hash and a trailing slash as the same screen", () => {
 		expect(parse("")).toEqual({ name: "home" });
 		expect(parse("#/settings/")).toEqual({ name: "settings" });
@@ -68,6 +73,8 @@ describe("parse", () => {
 			{ name: "recipe-diff", id: 3, from: 1, to: 2 },
 			{ name: "ingredients", tab: "ingredients" },
 			{ name: "ingredients", tab: "strains" },
+			{ name: "calc", version: null },
+			{ name: "calc", version: 4 },
 			{ name: "settings" },
 		];
 		for (const r of routes) {

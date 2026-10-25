@@ -3,6 +3,7 @@
   import BatchNew from "$lib/components/BatchNew.svelte";
   import BatchView from "$lib/components/BatchView.svelte";
   import BatchesView from "$lib/components/BatchesView.svelte";
+  import CalcView from "$lib/components/CalcView.svelte";
   import CompareView from "$lib/components/CompareView.svelte";
   import HomeView from "$lib/components/HomeView.svelte";
   import IngredientsView from "$lib/components/IngredientsView.svelte";
@@ -118,6 +119,7 @@
       <a href={href({ name: "ingredients", tab: "ingredients" })} class:active={route.name === "ingredients"}
         >Ingredients</a
       >
+      <a href={href({ name: "calc", version: null })} class:active={route.name === "calc"}>Calculators</a>
       <a href={href({ name: "settings" })} class:active={route.name === "settings"}>Settings</a>
     </nav>
   </header>
@@ -145,6 +147,10 @@
       <RecipeView id={route.id} version={route.version} />
     {:else if route.name === "recipe-diff"}
       <RecipeDiff id={route.id} from={route.from} to={route.to} />
+    {:else if route.name === "calc"}
+      {#key route.version}
+        <CalcView version={route.version} gravity={config.ui.gravity_display} />
+      {/key}
     {:else}
       <Settings {config} onsaved={(c) => (config = c)} />
       <Sources {sources} {syncs} onchanged={(s) => (sources = s)} />

@@ -165,6 +165,11 @@ fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
         commands::export_query,
         commands::export_comparison,
         commands::export_batch_readings,
+        commands::calc_defaults,
+        commands::calc_sugar_for_og,
+        commands::calc_og_from_sugar,
+        commands::calc_yan,
+        commands::calc_pitch,
     ]
 }
 

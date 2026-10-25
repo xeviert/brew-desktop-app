@@ -16,6 +16,8 @@ export type Route =
 	/** `version` is a `version_no`, not an id: `v3` is what a person reads. `null` is the newest. */
 	| { name: "recipe"; id: number; version: number | null }
 	| { name: "recipe-diff"; id: number; from: number; to: number }
+	/** U7. `version` is a recipe_version id to prefill from, as `batch-new`'s is. */
+	| { name: "calc"; version: number | null }
 	| { name: "settings" };
 
 export type IngredientsTab = "ingredients" | "strains";
@@ -54,6 +56,9 @@ export function parse(hash: string): Route {
 	if (recipe) return { name: "recipe", id: Number(recipe[1]), version: recipe[2] ? Number(recipe[2]) : null };
 	const diff = /^\/recipe\/(\d+)\/diff\/(\d+),(\d+)$/.exec(path);
 	if (diff) return { name: "recipe-diff", id: Number(diff[1]), from: Number(diff[2]), to: Number(diff[3]) };
+	// U7: `#/calc`, `#/calc/version/4`.
+	const calc = /^\/calc(?:\/version\/(\d+))?$/.exec(path);
+	if (calc) return { name: "calc", version: calc[1] ? Number(calc[1]) : null };
 	return { name: "home" };
 }
 
@@ -82,6 +87,8 @@ export function href(route: Route): string {
 			return route.version === null ? `#/recipe/${route.id}` : `#/recipe/${route.id}/v${route.version}`;
 		case "recipe-diff":
 			return `#/recipe/${route.id}/diff/${route.from},${route.to}`;
+		case "calc":
+			return route.version === null ? "#/calc" : `#/calc/version/${route.version}`;
 		case "settings":
 			return "#/settings";
 	}

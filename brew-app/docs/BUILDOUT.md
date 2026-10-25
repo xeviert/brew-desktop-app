@@ -859,8 +859,8 @@ covered by tests until U3 can create one from the UI.
       deleted a source's readings without asking. Both call sites now use
       `lib/confirm.ts` (`plugin-dialog`'s `ask`), with `dialog:allow-ask` granted.
       Confirmed blocking in the running app in U3, on "Undo pitch"
-- [ ] Calculators (sugar for a target OG, YAN dose and stagger, pitch rate) — **deferred**
-      to after U6, once real batches show which ones earn a place
+- [x] Calculators (sugar for a target OG, YAN dose and stagger, pitch rate) — **deferred**
+      to after U6, once real batches show which ones earn a place. **Landed in U7**
 
 **Done when:** a recipe is created, its targets set in the display unit, lines added
 and edited; a locked version refuses edits and forks; the diff of a moved nutrient reads
@@ -1056,7 +1056,45 @@ SELTZER-U6 showed the pitch message and no toolbar; pitched, its header read "10
 left only Restore, Export and the curve's axis toggle; restored, every control came
 back. `#/batch/999` read "No batch 999." No console errors.
 
-**Phase 3 UI pass done.** Next: the calculators deferred to after U6.
+**U7. Calculators** — sugar for a target OG, YAN dose and stagger, pitch rate (U2's
+deferral, 3f's `calc`)
+- [x] Five commands, none touching the database: `calc_defaults` (3f's demand factors,
+      `TOSNA_DOSES`, `RATE_ALE`/`RATE_LAGER`, `DRY_CELLS_PER_GRAM` — `api.ts` holds no
+      copy, the `yan_presets` rule), `calc_sugar_for_og`, `calc_og_from_sugar`,
+      `calc_yan` (`target_ppm` → `total_mg` → `product_grams` → `stagger`) and
+      `calc_pitch`. Gravities in `ui.gravity_display`, U2's rule. A typed SG outside
+      `Sg::PLAUSIBLE` is `db.measurement_implausible`: `display_to_sg` passes an SG
+      through unchecked, so `1075` typed for 1.075 would otherwise reach the sums
+- [x] Nothing defaults what `calc` refuses to default: the demand factor and the nutrient
+      yield are picked from presets or typed, and viability is typed. `calc_pitch`
+      returns grams only when cells per gram **and** viability are given; a blank
+      viability says "type a viability for grams", and the hint says to type 100 for an
+      unknown packet age and read the answer as a minimum (`dry_yeast_grams`' doc)
+- [x] Sugar is two directions, sugar for an OG and the OG of a weighed sugar, and the
+      volume is labelled **water added** — `og_from_sugar`'s argument, not the finished
+      volume. Doses are N equal fractions, TOSNA's four by default; their timing stays in
+      the recipe's `offset_hours`. The nutrient picker lists the user's own nutrient
+      ingredients with a YAN figure first, then `calc::yan::PRESETS`. A strain picked
+      in the pitch panel decides dry or not by its `form`, nothing else
+- [x] Screen `#/calc` (nav: "Calculators") and `#/calc/version/<id>`, prefilled from
+      the version's target OG and volume; the recipe screen links "Calculators for vN"
+      beside "Start a batch from vN". Each panel recomputes on input, a stale answer
+      dropped by sequence number. Form shaping and wording pure in `lib/calc.ts`, with
+      vitest
+- [ ] Blend / dilute (`calc::blend`, `dilute`) and "add as recipe lines" — **deferred**
+      until a batch needs them; the second is a write, and the screen is read-only
+
+**Done when:** from a recipe version, the calculators open prefilled; each worked example
+in 3f reads back on screen; a refused input shows its message; the display unit is
+honoured both ways. **Status:** driven in the running app (WebView2 over CDP) on a
+`demo-db` file: "Calculators for v1" on Citron-Verveine opened `#/calc/version/1`
+prefilled 1.038 and 20 L; 1.075 / 20 L / high / DAP read 245 mg/L · 4.89 g N · 23.1 g,
+four doses of 5.77 g; 1.048 / 20 L / ale read 179 billion cells, then 29.8 g at 100 %;
+viability 0, a dose count of 2.5 and an SG of 1075 each refused by message; 4,2 kg in
+20 L → OG 1.0714. In °P the prefill read 9.5098, 20 °P in 4 L of water 998.23 g, and
+1 kg back to 20.0 °P (1.0831). Nav opened blank. No console errors.
+
+**Phase 3 UI pass done**, calculators included.
 
 ### Phase 4 — Dashboard & curves
 > Starts after the Phase 3 UI pass: the batch screen, recipe screen, timeline and

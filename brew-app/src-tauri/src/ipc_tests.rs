@@ -1706,3 +1706,127 @@ fn a_batch_in_two_currencies_shows_its_lines_and_no_total() {
     assert_eq!(view["cost"], Value::Null);
     assert_eq!(view["cost_error"]["code"], "money.currency_mismatch");
 }
+
+#[test]
+fn the_calculators_reproduce_calcs_worked_examples() {
+    let app = Harness::new();
+    let defaults = app.invoke("calc_defaults", json!({})).unwrap();
+    let high = defaults["yan_demand"][2]["value"].as_f64().unwrap();
+    assert_eq!(high, 1.25);
+    assert_eq!(defaults["tosna_doses"], json!([0.25, 0.25, 0.25, 0.25]));
+    assert_eq!(defaults["dry_cells_per_gram"], 6.0e9);
+
+    let og = app
+        .invoke(
+            "calc_og_from_sugar",
+            json!({ "sugarG": 1000.0, "waterL": 4.0 }),
+        )
+        .unwrap();
+    assert!((og["og"].as_f64().unwrap() - 1.0834).abs() < 0.001, "{og}");
+    let back = app
+        .invoke(
+            "calc_sugar_for_og",
+            json!({ "targetOg": og["og_sg"], "waterL": 4.0 }),
+        )
+        .unwrap();
+    assert!(
+        (back["sugar_g"].as_f64().unwrap() - 1000.0).abs() < 0.5,
+        "{back}"
+    );
+
+    let dose = app
+        .invoke(
+            "calc_yan",
+            json!({ "input": {
+                "gravity": 1.075, "volume_l": 20.0, "demand": high,
+                "mg_yan_per_g": 212.0, "doses": defaults["tosna_doses"],
+            }}),
+        )
+        .unwrap();
+    assert!(
+        (dose["product_g"].as_f64().unwrap() - 23.1).abs() < 0.3,
+        "{dose}"
+    );
+    assert_eq!(dose["dose_g"].as_array().unwrap().len(), 4);
+    assert!(
+        (dose["dose_g"][0].as_f64().unwrap() - 5.77).abs() < 0.1,
+        "{dose}"
+    );
+
+    let pitch = |viability: Value| {
+        app.invoke(
+            "calc_pitch",
+            json!({ "input": {
+                "gravity": 1.0484, "volume_l": 20.0, "rate": 0.75,
+                "cells_per_gram": 6.0e9, "viability": viability,
+            }}),
+        )
+        .unwrap()
+    };
+    let fresh = pitch(json!(1.0));
+    assert!(
+        (fresh["cells"].as_f64().unwrap() - 1.8e11).abs() < 3.0e9,
+        "{fresh}"
+    );
+    assert!(
+        (fresh["dry_g"].as_f64().unwrap() - 30.0).abs() < 0.6,
+        "{fresh}"
+    );
+    assert!(pitch(Value::Null)["dry_g"].is_null());
+}
+
+#[test]
+fn the_calculators_take_gravity_in_the_display_unit() {
+    let app = Harness::new();
+    let mut config = app.invoke("get_config", json!({})).unwrap();
+    config["ui"]["gravity_display"] = json!("plato");
+    app.invoke("set_config", json!({ "config": config }))
+        .unwrap();
+
+    let sugar = app
+        .invoke(
+            "calc_sugar_for_og",
+            json!({ "targetOg": 20.0, "waterL": 4.0 }),
+        )
+        .unwrap();
+    assert!(
+        (sugar["og"].as_f64().unwrap() - 20.0).abs() < 1e-6,
+        "{sugar}"
+    );
+    assert!(
+        (sugar["og_sg"].as_f64().unwrap() - 1.0834).abs() < 0.001,
+        "{sugar}"
+    );
+    assert!(
+        (sugar["sugar_g"].as_f64().unwrap() - 998.2).abs() < 1.0,
+        "{sugar}"
+    );
+}
+
+#[test]
+fn a_refused_calculation_comes_back_with_a_code() {
+    let app = Harness::new();
+    let err = app.api_error(
+        "calc_sugar_for_og",
+        json!({ "targetOg": 1075.0, "waterL": 20.0 }),
+    );
+    assert_eq!(err["code"], "db.measurement_implausible");
+
+    let err = app.api_error(
+        "calc_yan",
+        json!({ "input": {
+            "gravity": 1.075, "volume_l": 20.0, "demand": 1.25,
+            "mg_yan_per_g": 212.0, "doses": [0.3, 0.3, 0.3],
+        }}),
+    );
+    assert_eq!(err["code"], "calc.out_of_range");
+
+    let err = app.api_error(
+        "calc_pitch",
+        json!({ "input": {
+            "gravity": 1.048, "volume_l": 20.0, "rate": 0.75,
+            "cells_per_gram": 6.0e9, "viability": 0.0,
+        }}),
+    );
+    assert_eq!(err["code"], "calc.out_of_range");
+}

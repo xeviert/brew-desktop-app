@@ -317,6 +317,7 @@
           {/if}
         </span>
         <a href={href({ name: "batch-new", version: current.id })}>Start a batch from v{current.version_no}</a>
+        <a href={href({ name: "calc", version: current.id })}>Calculators for v{current.version_no}</a>
         <button onclick={fork} disabled={busy}>Fork to v{(detail?.versions.at(-1)?.version_no ?? 0) + 1}</button>
       </div>
       <p class="hint">A version a batch was made from never changes. Edit a fork instead.</p>
@@ -449,6 +450,7 @@
           <a class="start" href={href({ name: "batch-new", version: current.id })}
             >Start a batch from v{current.version_no}</a
           >
+          <a class="start" href={href({ name: "calc", version: current.id })}>Calculators for v{current.version_no}</a>
           {#if newest && (detail?.versions.length ?? 0) > 1}
             <button class="link" onclick={deleteDraft} disabled={busy}>Delete draft v{current.version_no}</button>
           {/if}

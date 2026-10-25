@@ -1379,3 +1379,74 @@ export const updateBatchIngredient = (id: number, item: ActualInput): Promise<vo
 	call("update_batch_ingredient", { id, item });
 
 export const deleteBatchIngredient = (id: number): Promise<boolean> => call("delete_batch_ingredient", { id });
+
+// ------------------------------------------------------------------ U7: calculators
+
+/** Mirrors `src-tauri`'s `CalcPreset`. */
+export interface CalcPreset {
+	label: string;
+	value: number;
+}
+
+/** Mirrors `src-tauri`'s `CalcDefaults`: `calc::yan` and `calc::pitch`'s figures. */
+export interface CalcDefaults {
+	/** mg N per gram of sugar. */
+	yan_demand: CalcPreset[];
+	tosna_doses: number[];
+	/** Million cells per mL per °P. */
+	pitch_rates: CalcPreset[];
+	dry_cells_per_gram: number;
+}
+
+/** Mirrors `src-tauri`'s `SugarResult`. `og` in the display unit. */
+export interface SugarResult {
+	sugar_g: number;
+	og: number;
+	og_sg: number;
+}
+
+/** Mirrors `src-tauri`'s `YanInput`. `gravity` in the display unit; `doses` sum to 1. */
+export interface YanInput {
+	gravity: number;
+	volume_l: number;
+	demand: number;
+	mg_yan_per_g: number;
+	doses: number[];
+}
+
+/** Mirrors `src-tauri`'s `YanResult`. */
+export interface YanResult {
+	sugar_g_per_l: number;
+	target_ppm: number;
+	total_mg: number;
+	product_g: number;
+	dose_g: number[];
+}
+
+/** Mirrors `src-tauri`'s `PitchInput`. Grams come back only with both dry-yeast fields. */
+export interface PitchInput {
+	gravity: number;
+	volume_l: number;
+	rate: number;
+	cells_per_gram: number | null;
+	viability: number | null;
+}
+
+/** Mirrors `src-tauri`'s `PitchResult`. */
+export interface PitchResult {
+	cells: number;
+	dry_g: number | null;
+}
+
+export const calcDefaults = (): Promise<CalcDefaults> => call("calc_defaults");
+
+/** `targetOg` in the display unit; `waterL` is water added, not the finished volume. */
+export const calcSugarForOg = (targetOg: number, waterL: number): Promise<SugarResult> =>
+	call("calc_sugar_for_og", { targetOg, waterL });
+
+export const calcOgFromSugar = (sugarG: number, waterL: number): Promise<SugarResult> =>
+	call("calc_og_from_sugar", { sugarG, waterL });
+
+export const calcYan = (input: YanInput): Promise<YanResult> => call("calc_yan", { input });
+
+export const calcPitch = (input: PitchInput): Promise<PitchResult> => call("calc_pitch", { input });

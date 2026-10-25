@@ -4,8 +4,9 @@ use brewcore::{
     Error,
     brewd::{self, JournalProbe},
     calc::{
-        abv,
+        self, abv,
         gravity::{display_to_sg, sg_to_display},
+        pitch,
         stability::{ExpectedFg, FlatSpan, Stability, flat_spans},
         yan,
     },
@@ -46,7 +47,7 @@ use brewcore::{
     fermentrack::{self, Client, LogProbe, SourceSummary, discovery},
     journal::JournalEntry,
     sync::{ReadingSource, SourceStatus, SyncManager},
-    units::{Currency, GravityDisplay, Litres, Money, Quantity, Sg, Timestamp, Unit},
+    units::{Currency, Grams, GravityDisplay, Litres, Money, Quantity, Sg, Timestamp, Unit},
 };
 
 use crate::error::{ApiError, ApiResult};
@@ -1863,4 +1864,169 @@ pub async fn export_batch_readings(
         &table,
         config.get().export.dialect,
     )?)
+}
+
+// ---------------------------------------------------------------------------
+// U7: calculators
+// ---------------------------------------------------------------------------
+//
+// Pure: no database, nothing written. Gravities cross in `ui.gravity_display` like
+// U2's targets, and every constant comes from `calc`, so `api.ts` holds none.
+
+#[derive(Debug, serde::Serialize)]
+pub struct CalcPreset {
+    pub label: &'static str,
+    pub value: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CalcDefaults {
+    /// mg N per gram of sugar.
+    pub yan_demand: Vec<CalcPreset>,
+    pub tosna_doses: Vec<f64>,
+    /// Million cells per mL per °P.
+    pub pitch_rates: Vec<CalcPreset>,
+    pub dry_cells_per_gram: f64,
+}
+
+#[tauri::command]
+pub async fn calc_defaults() -> ApiResult<CalcDefaults> {
+    let preset = |label, value| CalcPreset { label, value };
+    Ok(CalcDefaults {
+        yan_demand: vec![
+            preset("Low", yan::DEMAND_LOW),
+            preset("Medium", yan::DEMAND_MEDIUM),
+            preset("High (sugar wash)", yan::DEMAND_HIGH),
+        ],
+        tosna_doses: yan::TOSNA_DOSES.to_vec(),
+        pitch_rates: vec![
+            preset("Ale", pitch::RATE_ALE),
+            preset("Lager", pitch::RATE_LAGER),
+        ],
+        dry_cells_per_gram: pitch::DRY_CELLS_PER_GRAM,
+    })
+}
+
+/// `display_to_sg` passes an SG through unchecked, so a `1075` typed for 1.075 is
+/// refused here rather than reaching a calculation as a gravity of 1075.
+fn typed_gravity(value: f64, display: GravityDisplay) -> brewcore::Result<Sg> {
+    let sg = display_to_sg(value, display)?;
+    if !sg.is_plausible() {
+        return Err(Error::MeasurementImplausible {
+            metric: Metric::Sg,
+            value: sg.get(),
+        });
+    }
+    Ok(sg)
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SugarResult {
+    pub sugar_g: Grams,
+    /// In the display unit.
+    pub og: f64,
+    pub og_sg: Sg,
+}
+
+#[tauri::command]
+pub async fn calc_sugar_for_og(
+    config: tauri::State<'_, ConfigStore>,
+    target_og: f64,
+    water_l: f64,
+) -> ApiResult<SugarResult> {
+    let display = config.get().ui.gravity_display;
+    let og_sg = typed_gravity(target_og, display)?;
+    let sugar_g = calc::sugar_for_og(og_sg, Litres::new(water_l)?)?;
+    Ok(SugarResult {
+        sugar_g,
+        og: sg_to_display(og_sg, display),
+        og_sg,
+    })
+}
+
+#[tauri::command]
+pub async fn calc_og_from_sugar(
+    config: tauri::State<'_, ConfigStore>,
+    sugar_g: f64,
+    water_l: f64,
+) -> ApiResult<SugarResult> {
+    let sugar_g = Grams::new(sugar_g)?;
+    let og_sg = calc::og_from_sugar(sugar_g, Litres::new(water_l)?)?;
+    Ok(SugarResult {
+        sugar_g,
+        og: sg_to_display(og_sg, config.get().ui.gravity_display),
+        og_sg,
+    })
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct YanInput {
+    /// In the display unit.
+    pub gravity: f64,
+    pub volume_l: f64,
+    pub demand: f64,
+    pub mg_yan_per_g: f64,
+    /// Fractions summing to one, as `calc::yan::stagger` takes them.
+    pub doses: Vec<f64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct YanResult {
+    pub sugar_g_per_l: f64,
+    pub target_ppm: f64,
+    pub total_mg: f64,
+    pub product_g: Grams,
+    pub dose_g: Vec<f64>,
+}
+
+#[tauri::command]
+pub async fn calc_yan(
+    config: tauri::State<'_, ConfigStore>,
+    input: YanInput,
+) -> ApiResult<YanResult> {
+    let gravity = typed_gravity(input.gravity, config.get().ui.gravity_display)?;
+    let target_ppm = yan::target_ppm(gravity, input.demand)?;
+    let total_mg = yan::total_mg(target_ppm, Litres::new(input.volume_l)?)?;
+    let product_g = yan::product_grams(total_mg, input.mg_yan_per_g)?;
+    Ok(YanResult {
+        sugar_g_per_l: yan::sugar_per_litre(gravity)?,
+        target_ppm,
+        total_mg,
+        dose_g: yan::stagger(product_g.get(), &input.doses)?,
+        product_g,
+    })
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct PitchInput {
+    /// In the display unit.
+    pub gravity: f64,
+    pub volume_l: f64,
+    pub rate: f64,
+    /// Dry yeast only: grams are computed when both of these are given.
+    pub cells_per_gram: Option<f64>,
+    /// A fraction. Never defaulted — see `calc::pitch::dry_yeast_grams`.
+    pub viability: Option<f64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct PitchResult {
+    pub cells: f64,
+    pub dry_g: Option<Grams>,
+}
+
+#[tauri::command]
+pub async fn calc_pitch(
+    config: tauri::State<'_, ConfigStore>,
+    input: PitchInput,
+) -> ApiResult<PitchResult> {
+    let gravity = typed_gravity(input.gravity, config.get().ui.gravity_display)?;
+    let cells = pitch::cells_needed(Litres::new(input.volume_l)?, gravity, input.rate)?;
+    let dry_g = match (input.cells_per_gram, input.viability) {
+        (Some(per_gram), Some(viability)) => {
+            Some(pitch::dry_yeast_grams(cells, per_gram, viability)?)
+        }
+        _ => None,
+    };
+    Ok(PitchResult { cells, dry_g })
 }

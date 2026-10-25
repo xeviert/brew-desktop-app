@@ -105,3 +105,37 @@ dd {
 .ref p[role="alert"] {
   color: #e06c5f;
 }
+
+/* U7: the calculator panels. */
+.ref.calc {
+  margin-bottom: 1.5rem;
+}
+
+.ref.calc .pair {
+  display: flex;
+  gap: 0.5rem;
+  color: inherit;
+}
+
+.ref.calc .pair input {
+  width: 6rem;
+}
+
+.ref.calc label.radio {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+.ref.calc .answer {
+  font-size: 1.1rem;
+}
+
+.ref.calc .muted,
+.ref.calc .doses {
+  color: #9aa0a6;
+}
+
+.ref.calc input[type="checkbox"] {
+  justify-self: start;
+}
