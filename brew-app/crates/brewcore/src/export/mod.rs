@@ -205,7 +205,11 @@ mod tests {
                     Cell::text("a;b,\"c\"\nd"),
                 ],
                 vec![Cell::text("SELTZER-002"), Cell::num(0.000001), Cell::Empty],
-                vec![Cell::text("Côte des Blancs"), Cell::num(-3.5), Cell::text("1.5")],
+                vec![
+                    Cell::text("Côte des Blancs"),
+                    Cell::num(-3.5),
+                    Cell::text("1.5"),
+                ],
             ],
         }
     }

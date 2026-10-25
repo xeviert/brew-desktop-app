@@ -155,7 +155,11 @@ fn metrics_row(m: &BatchMetrics) -> Vec<Cell> {
 }
 
 fn unevaluated_row(u: &Unevaluated) -> Vec<Cell> {
-    let mut row = vec![Cell::text("unevaluated"), Cell::int(u.batch_id), Cell::text(&u.code)];
+    let mut row = vec![
+        Cell::text("unevaluated"),
+        Cell::int(u.batch_id),
+        Cell::text(&u.code),
+    ];
     row.resize(METRICS_HEADER.len() - 2, Cell::Empty);
     row.extend([tag(u.criterion), tag(u.reason)]);
     row
@@ -282,7 +286,14 @@ pub fn comparison_table(c: &Comparison) -> Table {
             point_rows(&mut rows, &lead, s, metric, Some(b.pitched_at), &tail);
         }
         if let Some(s) = &b.temp {
-            point_rows(&mut rows, &lead, s, s.metric.as_str(), Some(b.pitched_at), &tail);
+            point_rows(
+                &mut rows,
+                &lead,
+                s,
+                s.metric.as_str(),
+                Some(b.pitched_at),
+                &tail,
+            );
         }
     }
     for e in &c.excluded {
@@ -495,7 +506,10 @@ mod tests {
                     lag_secs: None,
                     terminal_secs: Some(s),
                     ferm_temp_c: Some(s),
-                    band: Some(AttenuationBand { min: 0.8, max: 0.95 }),
+                    band: Some(AttenuationBand {
+                        min: 0.8,
+                        max: 0.95,
+                    }),
                     band_check: Some(BandCheck::Above),
                 },
                 StrainRollup {
@@ -518,11 +532,12 @@ mod tests {
     }
 
     fn comparison() -> Comparison {
-        let gravity = series(Metric::Sg, &[-HOUR, 0, HOUR], &[Some(0.0), None, Some(0.1)], &[
-            Some(0.0),
-            None,
-            Some(0.09),
-        ]);
+        let gravity = series(
+            Metric::Sg,
+            &[-HOUR, 0, HOUR],
+            &[Some(0.0), None, Some(0.1)],
+            &[Some(0.0), None, Some(0.09)],
+        );
         Comparison {
             span: None,
             batches: vec![
@@ -584,7 +599,10 @@ mod tests {
         assert_eq!(column(&t, 0, "ferm_temp_c_max"), &Cell::Num("19.25".into()));
         assert_eq!(column(&t, 0, "cost_per_litre"), &Cell::Num("0.42".into()));
         assert_eq!(column(&t, 0, "cost_currency"), &Cell::text("EUR"));
-        assert_eq!(column(&t, 0, "pitched_utc"), &Cell::text("2023-11-14T22:13:20Z"));
+        assert_eq!(
+            column(&t, 0, "pitched_utc"),
+            &Cell::text("2023-11-14T22:13:20Z")
+        );
         assert_eq!(
             column(&t, 0, "strains"),
             &Cell::text("EC-1118 | Côte des Blancs; \"CdB\"")
@@ -595,7 +613,10 @@ mod tests {
         assert_eq!(column(&t, 1, "lag_missing"), &Cell::text("no_pitch"));
         assert_eq!(column(&t, 1, "ferm_temp_c_median"), &Cell::Empty);
         assert_eq!(column(&t, 1, "ferm_temp_missing"), &Cell::text("no_pitch"));
-        assert_eq!(column(&t, 1, "cost_per_litre_missing"), &Cell::text("mixed_currency"));
+        assert_eq!(
+            column(&t, 1, "cost_per_litre_missing"),
+            &Cell::text("mixed_currency")
+        );
         assert_eq!(column(&t, 1, "strains"), &Cell::text(""));
     }
 
@@ -606,7 +627,10 @@ mod tests {
         assert_eq!(column(&t, 2, "match"), &Cell::text("unevaluated"));
         assert_eq!(column(&t, 2, "code"), &Cell::text("WINE-009"));
         assert_eq!(column(&t, 2, "og_sg"), &Cell::Empty);
-        assert_eq!(column(&t, 2, "unevaluated_criterion"), &Cell::text("ferm_temp"));
+        assert_eq!(
+            column(&t, 2, "unevaluated_criterion"),
+            &Cell::text("ferm_temp")
+        );
         assert_eq!(column(&t, 2, "unevaluated_reason"), &Cell::text("no_temp"));
     }
 
@@ -618,7 +642,10 @@ mod tests {
         assert_eq!(column(&t, 0, "thin"), &Cell::text("true"));
         assert_eq!(column(&t, 0, "batch_ids"), &Cell::text("1 | 4"));
         assert_eq!(column(&t, 0, "lag_secs_median"), &Cell::Empty);
-        assert_eq!(column(&t, 0, "attenuation_fraction_n"), &Cell::Num("2".into()));
+        assert_eq!(
+            column(&t, 0, "attenuation_fraction_n"),
+            &Cell::Num("2".into())
+        );
         assert_eq!(column(&t, 0, "band_check"), &Cell::text("above"));
 
         assert_eq!(column(&t, 1, "group"), &Cell::text("mixed"));
@@ -654,7 +681,12 @@ mod tests {
     fn readings_without_a_pitch_have_no_offset() {
         let s = BatchSeries {
             range: None,
-            series: vec![series(Metric::TempC, &[0, 60], &[Some(18.0), Some(18.5)], &[])],
+            series: vec![series(
+                Metric::TempC,
+                &[0, 60],
+                &[Some(18.0), Some(18.5)],
+                &[],
+            )],
         };
         let t = readings_table(&s, None);
         assert_eq!(t.rows.len(), 2);
