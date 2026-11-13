@@ -93,6 +93,11 @@
     }
   }
 
+  // Not `<a href="#id">`: the router owns the hash, and would read it as a route.
+  function jump(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+  }
+
   /** `GET /journals/`: only brewd answers it with a journal list, so a count is proof. */
   async function testBrewd() {
     testingBrewd = true;
@@ -110,39 +115,16 @@
 
 <section>
   <h2>Settings</h2>
+  <nav class="toc">
+    <button class="link" onclick={() => jump("settings-display")}>Display</button>
+    <button class="link" onclick={() => jump("settings-connections")}>Connections</button>
+    <button class="link" onclick={() => jump("settings-devices")}>iSpindle</button>
+    <button class="link" onclick={() => jump("sources")}>Sources</button>
+    <button class="link" onclick={() => jump("vessels")}>Vessels</button>
+  </nav>
 
-  <label>
-    <span>Fermentrack URL</span>
-    <!-- `text`, not `url`: an empty value is legal and means "not set up yet". -->
-    <input type="text" bind:value={draft.fermentrack.base_url} placeholder="http://fermentrack.local" />
-    <small>
-      <button class="link" onclick={test} disabled={testing || !draft.fermentrack.base_url.trim()}>
-        {testing ? "Testing…" : "Test connection"}
-      </button>
-      {#if reachable}<span>· {reachable}</span>{/if}
-    </small>
-  </label>
-
-  <label>
-    <span>brewd URL</span>
-    <input type="text" bind:value={draft.brewd.base_url} placeholder="http://brewd.local:8080" />
-    <small>
-      <button class="link" onclick={testBrewd} disabled={testingBrewd || !draft.brewd.base_url.trim()}>
-        {testingBrewd ? "Testing…" : "Test connection"}
-      </button>
-      {#if brewdReachable}<span>· {brewdReachable}</span>{:else}<span>· the Pi — leave empty until it is set up</span>{/if}
-    </small>
-  </label>
-
-  <label>
-    <span>Poll interval</span>
-    <input type="number" min="5" max="86400" step="5" bind:value={draft.sync.poll_interval_secs} />
-    {#if intervalMissing}
-      <small class="warn">required — 5 to 86400 seconds</small>
-    {:else}
-      <small>seconds — takes effect in Phase 2</small>
-    {/if}
-  </label>
+  <h3 id="settings-display">Display</h3>
+  <p class="intro">How numbers are shown and exported. Nothing stored changes.</p>
 
   <label>
     <span>Temperature</span>
@@ -155,19 +137,20 @@
   <label>
     <span>Gravity</span>
     <select bind:value={draft.ui.gravity_display}>
-      <option value="sg">Specific gravity</option>
-      <option value="plato">Plato</option>
-      <option value="brix">Brix</option>
+      <option value="sg">Specific gravity (1.050)</option>
+      <option value="plato">Plato (°P)</option>
+      <option value="brix">Brix (°Bx)</option>
     </select>
+    <small>also the unit gravities are typed in</small>
   </label>
 
   <label>
     <span>CSV export</span>
     <select bind:value={draft.export.dialect}>
-      <option value="rfc4180">RFC 4180</option>
-      <option value="excel_fr">Excel (French) — ; separator, , decimal</option>
+      <option value="rfc4180">Standard — comma separated, 1.5</option>
+      <option value="excel_fr">Excel, European — semicolon separated, 1,5</option>
     </select>
-    <small>files are always in canonical units</small>
+    <small>pick European if Excel opens exports as one column. Values are always SG, °C, g and L</small>
   </label>
 
   <label>
@@ -176,47 +159,98 @@
     {#if currencyInvalid}
       <small class="warn">a three-letter code, e.g. EUR</small>
     {:else}
-      <small>prefills a new lot's cost — never converted</small>
+      <small>filled in when you add a lot's cost; amounts are never converted</small>
     {/if}
   </label>
 
+  <h3 id="settings-connections">Connections</h3>
+  <p class="intro">
+    Where the app fetches sensor readings from. Leave a URL empty if you don't run that service. Each log or
+    journal is then added under <button class="link" onclick={() => jump("sources")}>Sources</button>.
+  </p>
+
   <label>
-    <span>iSpindle outputs</span>
+    <span>brewd URL</span>
+    <input type="text" bind:value={draft.brewd.base_url} placeholder="http://brewd.local:8080" />
+    <small>
+      the logger on the Raspberry Pi that records the iSpindle and temperature probes.
+      <button class="link" onclick={testBrewd} disabled={testingBrewd || !draft.brewd.base_url.trim()}>
+        {testingBrewd ? "Testing…" : "Test connection"}
+      </button>
+      {#if brewdReachable}<span>· {brewdReachable}</span>{/if}
+    </small>
+  </label>
+
+  <label>
+    <span>Fermentrack URL</span>
+    <!-- `text`, not `url`: an empty value is legal and means "not set up yet". -->
+    <input type="text" bind:value={draft.fermentrack.base_url} placeholder="http://fermentrack.local" />
+    <small>
+      a Fermentrack server, if you have one; its CSV logs can be added as sources.
+      <button class="link" onclick={test} disabled={testing || !draft.fermentrack.base_url.trim()}>
+        {testing ? "Testing…" : "Test connection"}
+      </button>
+      {#if reachable}<span>· {reachable}</span>{/if}
+    </small>
+  </label>
+
+  <label>
+    <span>Check every</span>
+    <input type="number" min="5" max="86400" step="5" bind:value={draft.sync.poll_interval_secs} />
+    {#if intervalMissing}
+      <small class="warn">required — 5 to 86400 seconds</small>
+    {:else}
+      <small>seconds between fetches of new readings from each source; slows down while one is failing</small>
+    {/if}
+  </label>
+
+  <h3 id="settings-devices">iSpindle and wireless sensors</h3>
+  <p class="intro">How to read the iSpindle, and when the home screen flags a sensor's battery or Wi-Fi.</p>
+
+  <label>
+    <span>iSpindle reads in</span>
     <!-- No default: the device publishes a bare number, and SG and °P both look plausible. -->
     <select bind:value={draft.gravity.ispindel_unit}>
       <option value={null}>Not set</option>
       <option value="sg">Specific gravity</option>
       <option value="plato">Plato</option>
     </select>
-    <small>whatever its calibration polynomial was written in</small>
+    <small>
+      the unit its calibration formula gives. The iSpindle sends a bare number, so its gravity isn't stored until
+      this is set
+    </small>
   </label>
 
   <label>
-    <span>Battery warning</span>
+    <span>Low battery below</span>
     <input type="number" min="3" max="4.2" step="0.05" bind:value={draft.health.battery_warn_v} />
     {#if batteryMissing}
       <small class="warn">required — 3.0 to 4.2 V</small>
     {:else}
-      <small>volts — a device under this is flagged</small>
+      <small>volts. A full Li-ion cell reads about 4.2 V</small>
     {/if}
   </label>
 
   <label>
-    <span>Signal warning</span>
+    <span>Weak signal below</span>
     <input type="number" min="-100" max="-50" step="1" bind:value={draft.health.rssi_warn_dbm} />
     {#if rssiMissing}
       <small class="warn">required — −100 to −50 dBm</small>
     {:else}
-      <small>dBm — a device under this is flagged</small>
+      <small>dBm, Wi-Fi strength. Closer to 0 is stronger: −60 is good, −85 is about to drop out</small>
     {/if}
   </label>
 
   <div class="actions">
     <button onclick={save} disabled={!dirty || saving || intervalMissing || batteryMissing || rssiMissing || currencyInvalid}>
-      {saving ? "Saving…" : "Save"}
+      {saving ? "Saving…" : "Save settings"}
     </button>
     {#if saved && !dirty}
       <span class="ok">Saved</span>
+    {:else if dirty}
+      <span class="pending">Unsaved changes</span>
+    {:else}
+      <span class="note">Sources and vessels below save as you go.</span>
     {/if}
   </div>
 
@@ -227,12 +261,37 @@
 
 <style>
   section {
-    max-width: 32rem;
+    max-width: 40rem;
+  }
+
+  .toc {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+  }
+
+
+
+  h3 {
+    margin: 1.75rem 0 0.25rem;
+  }
+
+  .intro {
+    margin: 0 0 0.75rem;
+    color: #9aa0a6;
+  }
+
+  .pending {
+    color: #e0a35f;
+  }
+
+  .note {
+    color: #6f757d;
   }
 
   label {
     display: grid;
-    grid-template-columns: 10rem 1fr;
+    grid-template-columns: 11rem 1fr;
     align-items: center;
     gap: 0.5rem 1rem;
     margin-bottom: 0.75rem;

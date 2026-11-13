@@ -11,6 +11,7 @@
     type Vessel,
     type VesselKind,
   } from "$lib/api";
+  import { metricName } from "$lib/home";
 
   let vessels = $state<Vessel[]>([]);
   let streams = $state<Stream[]>([]);
@@ -66,8 +67,12 @@
   }
 </script>
 
-<section>
+<section id="vessels">
   <h2>Vessels</h2>
+  <p class="hint">
+    Your fermenters, carboys and kegs. Tick the sensors that live in a vessel; whichever batch is in it gets their
+    readings, from its pitch until it's packaged.
+  </p>
 
   {#if vessels.length === 0}
     <p class="empty">No vessels yet.</p>
@@ -81,7 +86,6 @@
         {#if sensors.length === 0}
           <p class="empty">No sensor streams yet — they appear once a source has synced.</p>
         {:else}
-          <p class="hint">Bound to a batch from its pitch until it is packaged.</p>
           {#each sensors as stream (stream.id)}
             <label class="check">
               <input
@@ -90,7 +94,7 @@
                 onchange={(e) => toggle(vessel, stream.id, e.currentTarget.checked)}
               />
               <span>{stream.source_name}</span>
-              <span class="metric">{stream.metric}</span>
+              <span class="metric">{metricName(stream.metric)}</span>
             </label>
           {/each}
         {/if}

@@ -55,7 +55,7 @@
     "brewd.unconfigured": "Set the brewd URL in Settings first.",
     "brewd.not_brewd": "Check the brewd URL in Settings — that host is something else.",
     "brewd.not_a_journal": "brewd serves it, but it does not start with a time column.",
-    "brewd.ispindel_unit_unset": "Set “iSpindle outputs” in Settings; nothing is skipped meanwhile.",
+    "brewd.ispindel_unit_unset": "Set “iSpindle reads in” in Settings above; nothing is skipped meanwhile.",
   };
 
   async function validate() {
@@ -206,11 +206,16 @@
   }
 </script>
 
-<section>
+<section id="sources">
   <h2>Sources</h2>
+  <p class="hint">
+    Each source is one log the app keeps fetching new readings from: a brewd journal (one per device on the Pi) or a
+    Fermentrack CSV log. The dot is green when its last fetch worked, red when it failed, amber when the server couldn’t be reached. A source's readings reach a batch through the
+    vessel it's in — see Vessels below.
+  </p>
 
   {#if sources.length === 0}
-    <p class="empty">No logs yet. Paste one below.</p>
+    <p class="empty">No sources yet — add one below.</p>
   {:else}
     <ul>
       {#each sources as source (source.id)}
@@ -222,7 +227,7 @@
             {source.name}
           </span>
           <span class="path" title={source.remote_path ?? ""}>{source.remote_path ?? "—"}</span>
-          <span class="age" title="age of the newest reading">{age(newest(source))}</span>
+          <span class="age" title="newest reading">{age(newest(source))}</span>
           <span class="next">
             {#if live?.phase === "syncing"}
               syncing…
@@ -233,10 +238,15 @@
             {/if}
           </span>
           <span class="row-actions">
-            <button class="minor" onclick={() => doResync(source.id)} disabled={!live}>
+            <button class="minor" onclick={() => doResync(source.id)} disabled={!live} title="Fetch new readings now instead of waiting">
               Resync
             </button>
-            <button class="minor" onclick={() => doRebuild(source)} disabled={!live}>
+            <button
+              class="minor"
+              onclick={() => doRebuild(source)}
+              disabled={!live}
+              title="Delete this source's readings and read the whole log again — for when readings look wrong"
+            >
               Rebuild
             </button>
           </span>
@@ -249,6 +259,7 @@
   {/if}
 
   <h3>Add from brewd</h3>
+  <p class="hint">Lists the journals the Pi is writing; pick one to see what it records, then add it.</p>
   <div class="actions">
     <button onclick={loadJournals} disabled={journalBusy}>
       {journalBusy && !journals ? "Loading…" : journals ? "Reload journals" : "Load journals"}
@@ -297,7 +308,7 @@
       {/if}
       {#if journalProbe.header.needs_ispindel_unit}
         <dt>Gravity</dt>
-        <dd class="warn">waits for “iSpindle outputs” in Settings</dd>
+        <dd class="warn">waits for “iSpindle reads in” in Settings above</dd>
       {/if}
     </dl>
 
@@ -311,6 +322,7 @@
   {/if}
 
   <h3>Add a Fermentrack log</h3>
+  <p class="hint">Paste the URL of a beer's full CSV log from Fermentrack, check it with Validate, then add it.</p>
   <!-- No API lists the beers, and the log id and beer name are both in the filename,
        so there is nothing to pick from: the URL is pasted once, here. -->
   <label>
