@@ -28,12 +28,12 @@ password = "change-me"
 [[device]]
 name = "ispindel-1"
 columns = [
-    { topic = "ispindel/iSpindel000/tilt", column = "tilt" },
-    { topic = "ispindel/iSpindel000/gravity", column = "gravity" },
-    { topic = "ispindel/iSpindel000/temperature", column = "temperature" },
-    { topic = "ispindel/iSpindel000/battery", column = "battery" },
-    { topic = "ispindel/iSpindel000/RSSI", column = "rssi" },
-    { topic = "ispindel/iSpindel000/interval", column = "interval" },
+    { topic = "ispindel/ispindel-1/tilt", column = "tilt" },
+    { topic = "ispindel/ispindel-1/gravity", column = "gravity" },
+    { topic = "ispindel/ispindel-1/temperature", column = "temperature" },
+    { topic = "ispindel/ispindel-1/battery", column = "battery" },
+    { topic = "ispindel/ispindel-1/RSSI", column = "rssi" },
+    { topic = "ispindel/ispindel-1/interval", column = "interval" },
 ]
 
 # ESPHome's default state topic is <node>/sensor/<sensor>/state.
