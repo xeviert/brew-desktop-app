@@ -122,7 +122,14 @@ dd {
 
 /* U7: the calculator panels. */
 .ref.calc {
-  margin-bottom: 1.5rem;
+  padding: 0.25rem 1rem 0.5rem;
+  background: #1b1e24;
+  border: 1px solid #2a2e36;
+  border-radius: 4px;
+}
+
+.ref.calc label {
+  grid-template-columns: 8rem 1fr;
 }
 
 .ref.calc .pair {
@@ -131,8 +138,17 @@ dd {
   color: inherit;
 }
 
+.ref.calc .pair {
+  min-width: 0;
+}
+
+.ref.calc .pair select {
+  flex: 1;
+  min-width: 0;
+}
+
 .ref.calc .pair input {
-  width: 6rem;
+  width: 4.5rem;
 }
 
 .ref.calc label.radio {

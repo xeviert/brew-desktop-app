@@ -1,23 +1,22 @@
 <script lang="ts">
   import { calcYan, toApiError, type CalcPreset, type YanResult } from "$lib/api";
-  import { GRAVITY_UNIT } from "$lib/batch";
   import { formatDose, formatPpm, toYanInput, type YanForm } from "$lib/calc";
-  import type { GravityDisplay } from "$lib/units";
 
   let {
-    gravity,
     og,
     volume,
     demands,
-    nutrients,
+    shelf,
+    datasheet,
     doses,
   }: {
-    gravity: GravityDisplay;
     og: string;
     volume: string;
     demands: CalcPreset[];
-    /** `yan_presets` and the nutrient ingredients that carry a YAN figure. */
-    nutrients: CalcPreset[];
+    /** Nutrient ingredients that carry a YAN figure. */
+    shelf: CalcPreset[];
+    /** `yan_presets`. */
+    datasheet: CalcPreset[];
     doses: number;
   } = $props();
 
@@ -34,7 +33,21 @@
     form.doses = String(doses);
   });
 
-  const nutrient = $derived(nutrients.find((p) => String(p.value) === form.mgYanPerG)?.label ?? "");
+  const nutrient = $derived(
+    [...shelf, ...datasheet].find((p) => String(p.value) === form.mgYanPerG)?.label ?? "",
+  );
+  const missing = $derived(
+    (
+      [
+        ["gravity", form.gravity],
+        ["volume", form.volume],
+        ["demand", form.demand],
+        ["nutrient", form.mgYanPerG],
+      ] as const
+    )
+      .filter(([, v]) => v.trim() === "")
+      .map(([name]) => name),
+  );
 
   $effect(() => {
     const input = toYanInput(form);
@@ -52,34 +65,35 @@
 <section class="ref calc">
   <h3>Nutrient (YAN)</h3>
   <label>
-    <span>Gravity ({GRAVITY_UNIT[gravity]})</span>
-    <input bind:value={form.gravity} inputmode="decimal" />
-  </label>
-  <label>
-    <span>Volume (L)</span>
-    <input bind:value={form.volume} inputmode="decimal" />
-  </label>
-  <label>
     <span>Demand</span>
     <span class="pair">
       <select bind:value={form.demand}>
         <option value="">Pick…</option>
         {#each demands as d (d.label)}
-          <option value={String(d.value)}>{d.label} ({d.value})</option>
+          <option value={String(d.value)}>{d.label}</option>
         {/each}
       </select>
       <input bind:value={form.demand} inputmode="decimal" aria-label="Demand factor" />
     </span>
-    <small>The yeast's nitrogen demand, mg N per g of sugar. Nothing defaults it.</small>
+    <small>The yeast's nitrogen demand, mg N per g of sugar. Its datasheet says low, medium or high.</small>
   </label>
   <label>
     <span>Nutrient</span>
     <span class="pair">
       <select bind:value={form.mgYanPerG}>
         <option value="">Pick…</option>
-        {#each nutrients as p (p.label)}
-          <option value={String(p.value)}>{p.label} ({p.value})</option>
-        {/each}
+        {#if shelf.length}
+          <optgroup label="Your ingredients">
+            {#each shelf as p (p.label)}
+              <option value={String(p.value)}>{p.label}</option>
+            {/each}
+          </optgroup>
+        {/if}
+        <optgroup label="Datasheet figures">
+          {#each datasheet as p (p.label)}
+            <option value={String(p.value)}>{p.label}</option>
+          {/each}
+        </optgroup>
       </select>
       <input bind:value={form.mgYanPerG} inputmode="decimal" aria-label="mg YAN per g" />
     </span>
@@ -88,7 +102,7 @@
   <label>
     <span>Doses</span>
     <input bind:value={form.doses} inputmode="numeric" />
-    <small>Equal splits. When each goes in is the recipe's line offsets.</small>
+    <small>Split into this many equal additions.</small>
   </label>
 
   {#if result}
@@ -104,5 +118,9 @@
     {/if}
     <p class="muted">Sugar {result.sugar_g_per_l.toFixed(0)} g/L</p>
   {/if}
-  {#if error}<p role="alert">{error}</p>{/if}
+  {#if error}
+    <p role="alert">{error}</p>
+  {:else if !result && missing.length}
+    <p class="muted">Needs {missing.join(", ")}.</p>
+  {/if}
 </section>

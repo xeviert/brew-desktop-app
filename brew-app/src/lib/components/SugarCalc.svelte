@@ -5,7 +5,16 @@
   import { formatGravityIn } from "$lib/dashboard";
   import { formatGravity, formatMass, type GravityDisplay } from "$lib/units";
 
-  let { gravity, og }: { gravity: GravityDisplay; og: string } = $props();
+  let {
+    gravity,
+    og,
+    onog,
+  }: {
+    gravity: GravityDisplay;
+    og: string;
+    /** "Use as must gravity": the OG a weighed sugar gives, typed into the shared field. */
+    onog: (og: string) => void;
+  } = $props();
 
   let form = $state<SugarForm>({ mode: "target", og: "", sugar: "", water: "" });
   let result = $state<SugarResult | null>(null);
@@ -15,6 +24,17 @@
   $effect.pre(() => {
     form.og = og;
   });
+
+  const missing = $derived(
+    (
+      [
+        [form.mode === "target" ? "target OG" : "sucrose", form.mode === "target" ? form.og : form.sugar],
+        ["water", form.water],
+      ] as const
+    )
+      .filter(([, v]) => v.trim() === "")
+      .map(([name]) => name),
+  );
 
   $effect(() => {
     const args = toSugarArgs(form);
@@ -34,8 +54,8 @@
 <section class="ref calc">
   <h3>Sugar wash</h3>
   <div class="actions">
-    <label class="radio"><input type="radio" bind:group={form.mode} value="target" /> Sugar for a target OG</label>
-    <label class="radio"><input type="radio" bind:group={form.mode} value="og" /> OG from a weighed sugar</label>
+    <label class="radio"><input type="radio" bind:group={form.mode} value="target" /> Sugar for an OG</label>
+    <label class="radio"><input type="radio" bind:group={form.mode} value="og" /> OG from sugar</label>
   </div>
   {#if form.mode === "target"}
     <label>
@@ -63,6 +83,15 @@
         {#if gravity !== "sg"}<span class="muted">({formatGravity(result.og_sg)})</span>{/if}
       {/if}
     </p>
+    {#if form.mode === "og"}
+      <button class="link" onclick={() => result && onog(String(Number(result.og.toFixed(gravity === "sg" ? 3 : 1))))}
+        >Use as must gravity</button
+      >
+    {/if}
   {/if}
-  {#if error}<p role="alert">{error}</p>{/if}
+  {#if error}
+    <p role="alert">{error}</p>
+  {:else if !result && missing.length}
+    <p class="muted">Needs {missing.join(", ")}.</p>
+  {/if}
 </section>

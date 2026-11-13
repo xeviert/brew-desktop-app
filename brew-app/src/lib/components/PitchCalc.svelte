@@ -1,19 +1,15 @@
 <script lang="ts">
   import { calcPitch, toApiError, type CalcPreset, type PitchResult, type YeastStrain } from "$lib/api";
-  import { GRAVITY_UNIT } from "$lib/batch";
   import { billions, formatCells, formatDose, toPitchInput, type PitchForm } from "$lib/calc";
   import { strainLabel } from "$lib/reference";
-  import type { GravityDisplay } from "$lib/units";
 
   let {
-    gravity,
     og,
     volume,
     rates,
     cellsPerGram,
     strains,
   }: {
-    gravity: GravityDisplay;
     og: string;
     volume: string;
     rates: CalcPreset[];
@@ -34,6 +30,18 @@
   $effect.pre(() => {
     form.cellsPerGram = billions(cellsPerGram);
   });
+
+  const missing = $derived(
+    (
+      [
+        ["gravity", form.gravity],
+        ["volume", form.volume],
+        ["rate", form.rate],
+      ] as const
+    )
+      .filter(([, v]) => v.trim() === "")
+      .map(([name]) => name),
+  );
 
   /** The strain's form decides whether grams apply; nothing else is read off it. */
   function pickStrain(e: Event) {
@@ -59,20 +67,12 @@
 <section class="ref calc">
   <h3>Pitch rate</h3>
   <label>
-    <span>Gravity ({GRAVITY_UNIT[gravity]})</span>
-    <input bind:value={form.gravity} inputmode="decimal" />
-  </label>
-  <label>
-    <span>Volume (L)</span>
-    <input bind:value={form.volume} inputmode="decimal" />
-  </label>
-  <label>
     <span>Rate</span>
     <span class="pair">
       <select bind:value={form.rate}>
         <option value="">Pick…</option>
         {#each rates as r (r.label)}
-          <option value={String(r.value)}>{r.label} ({r.value})</option>
+          <option value={String(r.value)}>{r.label}</option>
         {/each}
       </select>
       <input bind:value={form.rate} inputmode="decimal" aria-label="Pitch rate" />
@@ -116,5 +116,9 @@
       <p class="muted">Type a viability for grams.</p>
     {/if}
   {/if}
-  {#if error}<p role="alert">{error}</p>{/if}
+  {#if error}
+    <p role="alert">{error}</p>
+  {:else if !result && missing.length}
+    <p class="muted">Needs {missing.join(", ")}.</p>
+  {/if}
 </section>
