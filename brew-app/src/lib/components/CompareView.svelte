@@ -20,6 +20,7 @@
   import { assignSlots, buildCompare, colorOf, type ComparePanel, type Panel } from "$lib/compare";
   import { csvName, saveCsv } from "$lib/export";
   import { href } from "$lib/route";
+  import { formatTimestamp } from "$lib/units";
 
   let { ids, ui }: { ids: number[]; ui: Config["ui"] } = $props();
 
@@ -33,6 +34,7 @@
   let batches = $state<Batch[]>([]);
   let yMode = $state<YMode>("fraction");
   let withTemp = $state(false);
+  let showArchived = $state(false);
   let view = $state.raw<CompareView | null>(null);
   let error = $state<ApiError | null>(null);
 
@@ -145,7 +147,7 @@
         height: HEIGHT,
         scales: { x: { time: false } },
         series: [
-          {},
+          { label: "Since pitch", value: (_u, v) => (v == null ? "--" : `${v.toFixed(1)} h`) },
           ...p.drawn.map((d): uPlot.Series =>
             d.role === "manual"
               ? {
@@ -227,6 +229,21 @@
     return b.y.reason === "no_og" ? "raw — no OG" : "raw — OG implausible";
   }
 
+  // Pitched first, newest first: only they can be lined up at t=0. A picked batch
+  // always stays listed, so it can be unticked.
+  const listed = $derived(
+    batches
+      .filter((b) => ids.includes(b.id) || showArchived || b.archived_at === null)
+      .sort((a, b) => (b.pitched_at ?? -Infinity) - (a.pitched_at ?? -Infinity)),
+  );
+  const archivedCount = $derived(batches.filter((b) => b.archived_at !== null).length);
+
+  function about(b: Batch): string {
+    const parts = [b.beverage_type, b.archived_at !== null ? "archived" : b.status];
+    parts.push(b.pitched_at === null ? "not pitched" : `pitched ${formatTimestamp(b.pitched_at, { dateStyle: "medium" })}`);
+    return parts.join(" · ");
+  }
+
   const REASONS: Partial<Record<Missing, string>> = { no_pitch: "not pitched" };
   const reason = (m: Missing) => REASONS[m] ?? m.replaceAll("_", " ");
 
@@ -261,38 +278,63 @@
 
 <section>
   <h2>Compare</h2>
+  <p class="intro">
+    Overlay the fermentation curves of two or more batches, each starting at its own pitch (hour 0), to see which
+    fermented faster or further — a new yeast against the old one, say, or the same recipe in summer and winter.
+  </p>
 
   <fieldset class="picker">
-    <legend>Batches <span class="hint">({ids.length} of up to {MAX_BATCHES})</span></legend>
-    {#each batches as b (b.id)}
+    <legend>
+      Batches <span class="hint">({ids.length} of up to {MAX_BATCHES} ticked)</span>
+      {#if archivedCount}
+        <label class="archived"><input type="checkbox" bind:checked={showArchived} /> Show archived</label>
+      {/if}
+    </legend>
+    {#if batches.length === 0}
+      <p class="empty">No batches yet.</p>
+    {/if}
+    {#each listed as b (b.id)}
       <label class:off={b.pitched_at === null}>
         <input
           type="checkbox"
           checked={ids.includes(b.id)}
-          disabled={!ids.includes(b.id) && ids.length >= MAX_BATCHES}
+          disabled={!ids.includes(b.id) && (ids.length >= MAX_BATCHES || b.pitched_at === null)}
           onchange={() => toggle(b.id)}
         />
         {#if ids.includes(b.id)}<i style:background={colorOf(slots, b.id)}></i>{/if}
         {b.code}
-        <span class="hint">
-          {b.archived_at !== null ? "archived" : b.status}{b.pitched_at === null ? " · not pitched" : ""}
-        </span>
+        <span class="hint">{about(b)}</span>
       </label>
     {/each}
   </fieldset>
 
-  <div class="toolbar">
-    <div class="toggle" role="group" aria-label="Gravity as">
-      <button class:on={yMode === "fraction"} onclick={() => (yMode = "fraction")}>Attenuation</button>
-      <button class:on={yMode === "raw"} onclick={() => (yMode = "raw")}>{view?.gravity_unit ?? "SG"}</button>
+  {#if ids.length >= 2}
+    <div class="toolbar">
+      <span class="hint">Gravity as</span>
+      <div class="toggle" role="group" aria-label="Gravity as">
+        <button
+          class:on={yMode === "fraction"}
+          onclick={() => (yMode = "fraction")}
+          title="How much of each batch's sugar has fermented, from its own OG">Attenuation %</button
+        >
+        <button class:on={yMode === "raw"} onclick={() => (yMode = "raw")} title="The gravity readings as taken"
+          >{view?.gravity_unit ?? "SG"}</button
+        >
+      </div>
+      <label><input type="checkbox" bind:checked={withTemp} /> Show temperature</label>
+      <span class="spacer"></span>
+      <button disabled={!view} title="Save these series as CSV" onclick={exportCsv}>Export CSV</button>
     </div>
-    <label><input type="checkbox" bind:checked={withTemp} /> Temperature</label>
-    <span class="hint">Drag to zoom, double-click to reset.</span>
-    <button disabled={!view} title="Save these series as CSV" onclick={exportCsv}>Export</button>
-  </div>
+    <p class="hint">
+      {yMode === "fraction"
+        ? "Attenuation puts batches with different starting gravities on one scale: 0 % at its OG, 100 % at 1.000 (a dry mead or wine goes past it)."
+        : "Raw gravity: batches with different OGs start at different heights."}
+      Drag across a chart to zoom, double-click to reset.
+    </p>
+  {/if}
 
   {#if ids.length < 2}
-    <p class="empty">Pick at least {2 - ids.length} more batch{ids.length === 1 ? "" : "es"} to compare.</p>
+    <p class="empty">Tick {ids.length === 0 ? "two or more batches" : "one more batch"} above to see their curves.</p>
   {:else if error}
     <p role="alert">{error.message}</p>
   {:else if view}
@@ -336,6 +378,27 @@
 
   .picker label.off {
     color: #6f757d;
+  }
+
+  .picker legend {
+    display: flex;
+    gap: 1rem;
+    align-items: baseline;
+  }
+
+  .picker .archived {
+    font-size: 0.9rem;
+    color: #9aa0a6;
+  }
+
+  .intro {
+    max-width: 44rem;
+    color: #9aa0a6;
+    line-height: 1.45;
+  }
+
+  .spacer {
+    flex: 1;
   }
 
   .toolbar {
