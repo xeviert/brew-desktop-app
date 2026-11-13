@@ -272,7 +272,7 @@
       </label>
       <label>
         <span>Notes</span>
-        <input type="text" bind:value={recipeNotes} />
+        <textarea rows="4" bind:value={recipeNotes}></textarea>
       </label>
       <div class="actions">
         <button onclick={saveRecipe} disabled={busy || recipeName.trim() === ""}>Save</button>
@@ -291,7 +291,7 @@
           {/if}
         </span>
       </header>
-      {#if detail.recipe.notes}<p class="detail">{detail.recipe.notes}</p>{/if}
+      {#if detail.recipe.notes}<p class="detail notes">{detail.recipe.notes}</p>{/if}
     {/if}
 
     <nav class="tabs">
@@ -336,7 +336,7 @@
         <dd>{current.target_abv === null ? "—" : pct(current.target_abv)}</dd>
         {#if current.notes}
           <dt>Notes</dt>
-          <dd>{current.notes}</dd>
+          <dd class="notes">{current.notes}</dd>
         {/if}
       </dl>
     {:else}
@@ -358,7 +358,7 @@
       </label>
       <label>
         <span>Notes</span>
-        <input type="text" bind:value={targets.notes} />
+        <textarea rows="3" bind:value={targets.notes}></textarea>
       </label>
       <div class="actions">
         <button onclick={saveTargets} disabled={busy || !targetsDirty}>Save targets</button>
@@ -371,31 +371,42 @@
     <h3>Lines</h3>
     {#if groups.length === 0}
       <p class="empty">No lines yet.</p>
-    {/if}
-    <table>
-      <tbody>
+    {:else}
+      <table class="lines">
+        <thead>
+          <tr>
+            <th>Ingredient</th>
+            <th class="num">Quantity</th>
+            <th>When</th>
+            <th></th>
+          </tr>
+        </thead>
         {#each groups as g (g.stage)}
-          <tr class="stage"><th colspan="5">{g.stage}</th></tr>
-          {#each g.items as item (item.id)}
-            <tr>
-              <td>
-                {item.ingredient}
-                {#if item.ingredient_archived}<small>archived</small>{/if}
-              </td>
-              <td>{formatQuantity(item.entry)}</td>
-              <td>{formatOffset(item.offset_hours)}</td>
-              <td class="detail">{item.notes ?? ""}</td>
-              <td class="row-actions">
-                {#if !locked}
-                  <button class="link" onclick={() => editLine(item)}>Edit</button>
-                  <button class="link" onclick={() => removeLine(item)}>Delete</button>
-                {/if}
-              </td>
-            </tr>
-          {/each}
+          <tbody>
+            <tr class="stage"><th colspan="4">{g.stage}</th></tr>
+            {#each g.items as item (item.id)}
+              <tr class:editing={editingItem === item.id}>
+                <td>
+                  {item.ingredient}
+                  {#if item.ingredient_archived}<small>archived</small>{/if}
+                  {#if item.notes}<div class="detail notes">{item.notes}</div>{/if}
+                </td>
+                <td class="num">{formatQuantity(item.entry)}</td>
+                <td class="when">{formatOffset(item.offset_hours)}</td>
+                <td>
+                  {#if !locked}
+                    <span class="row-actions">
+                      <button class="link" onclick={() => editLine(item)}>Edit</button>
+                      <button class="link" onclick={() => removeLine(item)}>Delete</button>
+                    </span>
+                  {/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
         {/each}
-      </tbody>
-    </table>
+      </table>
+    {/if}
 
     {#if !locked}
       {#if editingItem !== null}
@@ -438,7 +449,7 @@
         </label>
         <label>
           <span>Notes</span>
-          <input type="text" bind:value={line.notes} />
+          <textarea rows="3" bind:value={line.notes}></textarea>
         </label>
         <div class="actions">
           <button onclick={saveLine} disabled={busy}>Save line</button>
@@ -542,19 +553,62 @@
     margin: 1.25rem 0 0.5rem;
   }
 
-  table {
+  .notes {
+    white-space: pre-wrap;
+  }
+
+  table.lines {
+    width: 100%;
     border-collapse: collapse;
   }
 
-  td,
-  th {
-    padding: 0.25rem 1.25rem 0.25rem 0;
+  .lines td,
+  .lines th {
+    padding: 0.4rem 1.25rem 0.4rem 0;
     text-align: left;
+    vertical-align: top;
     font-variant-numeric: tabular-nums;
   }
 
+  .lines thead th {
+    color: #6f757d;
+    font-size: 0.85em;
+    font-weight: normal;
+    border-bottom: 1px solid #2a2e36;
+  }
+
+  .lines .num {
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .lines .when {
+    white-space: nowrap;
+  }
+
+  .lines td:last-child {
+    padding-right: 0;
+  }
+
+  .lines td:last-child .row-actions {
+    justify-content: flex-end;
+  }
+
+  .lines tbody tr + tr td {
+    border-top: 1px solid #22252c;
+  }
+
+  .lines tr.editing td {
+    background: #1e2127;
+  }
+
+  .lines td .notes {
+    margin-top: 0.2rem;
+    font-size: 0.9em;
+  }
+
   tr.stage th {
-    padding-top: 0.6rem;
+    padding-top: 0.9rem;
     color: #9aa0a6;
     font-weight: normal;
     text-transform: capitalize;

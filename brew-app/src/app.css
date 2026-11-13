@@ -55,13 +55,27 @@ dd {
 }
 
 .ref input,
-.ref select {
+.ref select,
+.ref textarea {
   padding: 0.35rem 0.5rem;
   background: #1e2127;
   color: inherit;
   border: 1px solid #333842;
   border-radius: 3px;
   font: inherit;
+}
+
+.ref textarea {
+  resize: vertical;
+  min-height: 3.5rem;
+}
+
+.ref label:has(> textarea) {
+  align-items: start;
+}
+
+.ref label:has(> textarea) > span {
+  padding-top: 0.35rem;
 }
 
 .ref input[type="checkbox"] {
