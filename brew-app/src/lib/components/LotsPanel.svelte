@@ -105,17 +105,17 @@
 
 <div class="lots">
   {#if lots.length === 0}
-    <p class="empty">No lots{showArchived ? "" : " in stock"}.</p>
+    <p class="empty">No lots{showArchived ? "" : " in stock"} — add one so batches can use {ingredient.name}.</p>
   {:else}
     <table>
       <thead>
         <tr>
-          <th>Qty</th>
-          <th>Supplier / lot</th>
+          <th>Bought</th>
+          <th>Supplier · lot code</th>
           <th>Cost</th>
           <th>Purchased</th>
           <th>Expires</th>
-          <th>Used by</th>
+          <th>Used in</th>
           <th></th>
         </tr>
       </thead>
@@ -145,8 +145,8 @@
             <td class="row-actions">
               <button class="link" onclick={() => edit(lot)}>Edit</button>
               {#if lot.archived_at === null}
-                <button class="link" onclick={() => setArchived(lot, true)} title="Used up — hides it from pickers"
-                  >Archive</button
+                <button class="link" onclick={() => setArchived(lot, true)} title="Archives it: batches can no longer pick it"
+                  >Used up</button
                 >
               {:else}
                 <button class="link" onclick={() => setArchived(lot, false)}>Restore</button>
@@ -161,7 +161,7 @@
   {#if editing !== null}
     <h4>{editing === "new" ? "New lot" : "Edit lot"}</h4>
     <label>
-      <span>Quantity</span>
+      <span>Quantity bought</span>
       <div class="pair">
         <input type="text" inputmode="decimal" bind:value={form.qty} />
         <select bind:value={form.unit}>
@@ -214,7 +214,9 @@
 
 <style>
   .lots {
-    margin: 0.25rem 0 0.75rem 1.5rem;
+    margin: 0 0 0.75rem 0.4rem;
+    padding: 0.25rem 0 0.25rem 1rem;
+    border-left: 2px solid #2a2e36;
   }
 
   table {

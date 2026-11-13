@@ -127,10 +127,9 @@
   }
 
   function detail(i: Ingredient): string {
-    const parts: string[] = [i.default_unit];
-    if (i.yeast_strain) parts.push(i.yeast_strain);
-    if (i.category === "nutrient") parts.push(i.mg_yan_per_g === null ? "no YAN figure" : `${i.mg_yan_per_g} mg YAN/g`);
-    return parts.join(" · ");
+    if (i.yeast_strain) return i.yeast_strain;
+    if (i.category === "nutrient") return i.mg_yan_per_g === null ? "no YAN figure" : `${i.mg_yan_per_g} mg YAN/g`;
+    return "";
   }
 </script>
 
@@ -151,18 +150,55 @@
       onchanged={loadStrains}
     />
   {:else}
+    <p class="intro">
+      An <strong>ingredient</strong> is what a recipe calls for. A <strong>lot</strong> is one purchase of it — how
+      much, what it cost, where from. A batch's additions are drawn from lots, so an ingredient needs a lot in stock
+      before a batch can use it. Mark a lot used up once it's gone.
+    </p>
+
+    {#if editing === "new"}
+      <h3>New ingredient</h3>
+      <div class="editor">
+        <IngredientFields bind:form {strains} {presets} onstrain={loadStrains} />
+        <div class="actions">
+          <button onclick={save} disabled={busy || form.name.trim() === ""}>Add</button>
+          <button class="link" onclick={cancel}>Cancel</button>
+        </div>
+      </div>
+    {:else}
+      <div class="actions">
+        <button onclick={() => edit(null)}>Add an ingredient</button>
+      </div>
+    {/if}
+
     {#if groups.length === 0}
       <p class="empty">No ingredients yet.</p>
+    {:else}
+      <div class="row head">
+        <span>Ingredient</span>
+        <span>Unit</span>
+        <span>Strain / YAN</span>
+        <span>In stock</span>
+        <span></span>
+      </div>
     {/if}
     {#each groups as g (g.value)}
       <h3>{g.label}</h3>
       {#each g.items as i (i.id)}
-        <div class="row" class:archived={i.archived_at !== null}>
+        <div class="row" class:archived={i.archived_at !== null} class:expanded={open.has(i.id)}>
           <button class="link name" onclick={() => toggle(i.id)} aria-expanded={open.has(i.id)}>
             {open.has(i.id) ? "▾" : "▸"} {i.name}
           </button>
+          <span class="detail">{i.default_unit}</span>
           <span class="detail">{detail(i)}</span>
-          <span class="detail">{i.lot_count} lot{i.lot_count === 1 ? "" : "s"}</span>
+          <button
+            class="link stock"
+            class:none={i.lot_count === 0 && i.archived_at === null}
+            onclick={() => toggle(i.id)}
+            title={i.lot_count === 0 ? "Batches can't use it until it has a lot" : "Show its lots"}
+          >
+            {i.lot_count === 0 ? "none" : `${i.lot_count} lot${i.lot_count === 1 ? "" : "s"}`}
+          </button>
           <span class="row-actions">
             <button class="link" onclick={() => edit(i)}>Edit</button>
             {#if i.archived_at === null}
@@ -191,21 +227,6 @@
         {/if}
       {/each}
     {/each}
-
-    {#if editing === "new"}
-      <h3>New ingredient</h3>
-      <div class="editor">
-        <IngredientFields bind:form {strains} {presets} onstrain={loadStrains} />
-        <div class="actions">
-          <button onclick={save} disabled={busy || form.name.trim() === ""}>Add</button>
-          <button class="link" onclick={cancel}>Cancel</button>
-        </div>
-      </div>
-    {:else}
-      <div class="actions">
-        <button onclick={() => edit(null)}>Add an ingredient</button>
-      </div>
-    {/if}
   {/if}
 
   {#if error}
@@ -248,18 +269,40 @@
     font-size: 0.95rem;
   }
 
+  .intro {
+    max-width: 44rem;
+    margin: 0 0 0.5rem;
+    color: #9aa0a6;
+    line-height: 1.45;
+  }
+
+  .intro strong {
+    color: #e6e6e6;
+    font-weight: normal;
+  }
+
   .row {
     display: grid;
-    grid-template-columns: 14rem 1fr 5rem auto;
+    grid-template-columns: 14rem 3rem 1fr 5rem 7rem;
     align-items: baseline;
     gap: 1rem;
     padding: 0.25rem 0;
     border-bottom: 1px solid #2a2e36;
   }
 
+  .row.head {
+    margin-top: 1rem;
+    color: #6f757d;
+    font-size: 0.85rem;
+  }
+
   .row.archived,
   .row.archived .detail {
     color: #6f757d;
+  }
+
+  .row.expanded {
+    border-bottom-color: transparent;
   }
 
   .name {
@@ -270,6 +313,15 @@
 
   .detail {
     color: #9aa0a6;
+  }
+
+  .ref button.stock {
+    text-align: left;
+    color: #9aa0a6;
+  }
+
+  .ref button.stock.none {
+    color: #d8a657;
   }
 
   .editor {
