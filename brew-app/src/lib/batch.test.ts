@@ -4,8 +4,10 @@ import {
 	byStatus,
 	editForm,
 	fromLocalDateTime,
+	dayInVessel,
 	headerFacts,
 	localDateTime,
+	pitchText,
 	recipeLabel,
 	toBatchEdit,
 	toBatchInput,
@@ -128,5 +130,19 @@ describe("screen", () => {
 			headerFacts(summary({ status: "fermenting", pitched_at: pitched, archived_at: after }), after),
 		).not.toContain("day 31");
 		expect(headerFacts(summary({ vessel_id: null, vessel_name: null, volume_l: null }))).toEqual([]);
+	});
+});
+
+describe("pitchText", () => {
+	const pitched = 1_790_000_000;
+	const date = formatTimestamp(pitched, { dateStyle: "medium" });
+	it("counts days in the vessel, dates the pitch after", () => {
+		const fermenting = summary({ status: "fermenting", pitched_at: pitched });
+		expect(pitchText(fermenting, pitched + 2 * 86_400 + 1)).toBe(`${date} · day 3`);
+		expect(pitchText(summary({ status: "packaged", pitched_at: pitched }), pitched + 86_400)).toBe(date);
+		expect(dayInVessel({ ...fermenting, archived_at: pitched + 1 }, pitched + 86_400)).toBeNull();
+	});
+	it("says when there is no pitch", () => {
+		expect(pitchText(summary({ status: "planned", pitched_at: null }))).toBe("not yet");
 	});
 });

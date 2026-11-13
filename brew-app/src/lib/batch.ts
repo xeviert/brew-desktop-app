@@ -6,7 +6,7 @@
  * a `datetime-local` value, read as local time. Range rules — a plausible OG, a positive
  * volume, a pitch not in the future — are the backend's, refused with a code.
  */
-import type { BatchEdit, BatchInput, BatchStatus, BatchSummary, BeverageType } from "$lib/api";
+import type { Batch, BatchEdit, BatchInput, BatchStatus, BatchSummary, BeverageType } from "$lib/api";
 import { reader, type Result } from "$lib/reference";
 import { formatTimestamp, type GravityDisplay } from "$lib/units";
 
@@ -117,9 +117,23 @@ export function headerFacts(b: BatchSummary, now: number = Date.now() / 1000): s
 	const facts: string[] = [];
 	if (b.vessel_name) facts.push(b.vessel_name);
 	if (b.volume_l !== null) facts.push(`${Number(b.volume_l.toFixed(2))} L`);
-	if (b.pitched_at !== null && (b.status === "fermenting" || b.status === "conditioning") && b.archived_at === null) {
-		facts.push(`day ${Math.floor(Math.max(0, now - b.pitched_at) / 86_400) + 1}`);
-	}
+	const day = dayInVessel(b, now);
+	if (day !== null) facts.push(`day ${day}`);
 	if (b.pitched_at !== null) facts.push(`pitched ${formatTimestamp(b.pitched_at)}`);
 	return facts;
+}
+
+/** Day 1 is the pitch's first 24 hours; `null` once out of the vessel, or before a pitch. */
+export function dayInVessel(b: Batch, now: number = Date.now() / 1000): number | null {
+	if (b.pitched_at === null || b.archived_at !== null) return null;
+	if (b.status !== "fermenting" && b.status !== "conditioning") return null;
+	return Math.floor(Math.max(0, now - b.pitched_at) / 86_400) + 1;
+}
+
+/** The batches list's "Pitched" column: the date, and the day while in the vessel. */
+export function pitchText(b: Batch, now: number = Date.now() / 1000): string {
+	if (b.pitched_at === null) return "not yet";
+	const day = dayInVessel(b, now);
+	const date = formatTimestamp(b.pitched_at, { dateStyle: "medium" });
+	return day === null ? date : `${date} · day ${day}`;
 }

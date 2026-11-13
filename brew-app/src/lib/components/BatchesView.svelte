@@ -1,8 +1,7 @@
 <script lang="ts">
   import { archiveBatch, listBatches, restoreBatch, toApiError, type ApiError, type BatchSummary } from "$lib/api";
-  import { byStatus, recipeLabel } from "$lib/batch";
+  import { byStatus, pitchText, recipeLabel } from "$lib/batch";
   import { href } from "$lib/route";
-  import { formatTimestamp } from "$lib/units";
 
   let batches = $state<BatchSummary[]>([]);
   let showArchived = $state(false);
@@ -41,6 +40,7 @@
   <nav class="bar">
     <h2>Batches</h2>
     <a class="new" href={href({ name: "batch-new", version: null })}>New batch</a>
+    <a class="compare" href={href({ name: "compare", ids: [] })}>Compare curves</a>
     <label class="check">
       <input type="checkbox" bind:checked={showArchived} />
       <span>Show archived</span>
@@ -48,18 +48,26 @@
   </nav>
 
   {#if loaded && groups.length === 0}
-    <p class="empty">No batches yet.</p>
+    <p class="empty">No batches yet. <a href={href({ name: "batch-new", version: null })}>Start one</a>.</p>
+  {:else if groups.length}
+    <div class="row head">
+      <span>Batch</span>
+      <span>Type</span>
+      <span>Recipe</span>
+      <span>Vessel</span>
+      <span>Pitched</span>
+      <span></span>
+    </div>
   {/if}
   {#each groups as g (g.status)}
-    <h3>{g.status}</h3>
+    <h3>{g.status} <span class="count">{g.items.length}</span></h3>
     {#each g.items as b (b.id)}
       <div class="row" class:archived={b.archived_at !== null}>
-        <a href={href({ name: "batch", id: b.id })}>{b.code}</a>
-        <span class="detail">
-          {recipeLabel(b)}
-          {b.vessel_name ? `· ${b.vessel_name}` : ""}
-          {b.pitched_at !== null ? `· pitched ${formatTimestamp(b.pitched_at, { dateStyle: "medium" })}` : ""}
-        </span>
+        <a class="code" href={href({ name: "batch", id: b.id })}>{b.code}</a>
+        <span class="detail">{b.beverage_type}</span>
+        <span class="detail">{recipeLabel(b)}</span>
+        <span class="detail">{b.vessel_name ?? "—"}</span>
+        <span class="detail">{pitchText(b)}</span>
         <span class="row-actions">
           {#if b.archived_at === null}
             <button class="link" onclick={() => setArchived(b, true)}>Archive</button>
@@ -78,7 +86,7 @@
 
 <style>
   section {
-    max-width: 48rem;
+    max-width: 64rem;
   }
 
   .bar {
@@ -88,7 +96,22 @@
   }
 
   .bar .new {
+    padding: 0.3rem 0.8rem;
+    background: #2d5d8a;
+    color: #fff;
+    border-radius: 3px;
+    text-decoration: none;
+    align-self: center;
+  }
+
+  .bar .compare,
+  .empty a {
     color: #7ba7d4;
+  }
+
+  .count {
+    margin-left: 0.3rem;
+    color: #6f757d;
   }
 
   .bar .check {
@@ -107,19 +130,46 @@
 
   .row {
     display: grid;
-    grid-template-columns: 12rem 1fr auto;
+    grid-template-columns: 9rem 5rem 1fr 7rem 11rem 4rem;
     align-items: baseline;
     gap: 1rem;
     padding: 0.3rem 0;
     border-bottom: 1px solid #2a2e36;
   }
 
-  .row a {
-    color: inherit;
+  .row.head {
+    margin-top: 1rem;
+    color: #6f757d;
+    font-size: 0.85rem;
   }
 
-  .row.archived a,
+  .row .code {
+    color: inherit;
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .row .code:hover {
+    text-decoration: underline;
+  }
+
+  .row .row-actions {
+    justify-content: flex-end;
+    opacity: 0;
+  }
+
+  .row:hover .row-actions,
+  .row .row-actions:focus-within,
+  .row.archived .row-actions {
+    opacity: 1;
+  }
+
   .detail {
+    color: #9aa0a6;
+  }
+
+  .row.archived .code,
+  .row.archived .detail {
     color: #6f757d;
   }
 </style>
