@@ -60,7 +60,11 @@
 </script>
 
 <section>
-  <h2>Fermenting</h2>
+  <nav class="bar">
+    <h2>Fermenting and conditioning</h2>
+    <a href={href({ name: "batches" })}>All batches</a>
+    <a href={href({ name: "batch-new", version: null })}>New batch</a>
+  </nav>
 
   {#if error}
     <p role="alert">{error.message}</p>
@@ -68,16 +72,26 @@
 
   {#if home}
     {#if home.batches.length === 0}
-      <p class="muted">Nothing fermenting or conditioning.</p>
+      <p class="muted">
+        Nothing fermenting or conditioning. Batches show here once pitched, with their latest readings —
+        <a href={href({ name: "batch-new", version: null })}>start one</a>.
+      </p>
     {/if}
 
     <div class="cards">
       {#each home.batches as b (b.dashboard.batch_id)}
         {@const quiet = quietSources(b.streams, syncs)}
-        <a class="card" href={href({ name: "batch", id: b.dashboard.batch_id })}>
+        {@const stalled = b.dashboard.stability.state === "stalled"}
+        {@const e = b.dashboard.estimate}
+        <a
+          class="card"
+          class:attention={stalled || quiet.length > 0}
+          href={href({ name: "batch", id: b.dashboard.batch_id })}
+        >
           <h3>
             {b.code}
-            <span class="muted">{b.status}{b.vessel ? ` · ${b.vessel}` : ""}</span>
+            <span class="pill">{b.status}</span>
+            {#if b.vessel}<span class="muted">{b.vessel}</span>{/if}
           </h3>
           <dl>
             <dt>Gravity</dt>
@@ -89,6 +103,18 @@
                 <span class="muted">—</span>
               {/if}
             </dd>
+
+            {#if e.state === "estimated"}
+              <dt>Attenuation</dt>
+              <dd>
+                <span class="bar-track"><span class="bar-fill" style:width="{Math.min(100, e.apparent_attenuation * 100)}%"
+                  ></span></span>
+                {(e.apparent_attenuation * 100).toFixed(0)} %
+              </dd>
+
+              <dt>ABV</dt>
+              <dd>{(e.abv_alternate * 100).toFixed(1)} % <span class="muted">(alternate)</span></dd>
+            {/if}
 
             <dt>Temp</dt>
             <dd>
@@ -103,10 +129,10 @@
               {/if}
             </dd>
 
-            <dt>Status</dt>
-            <dd>{stabilityText(b.dashboard.stability, now)}</dd>
+            <dt>Activity</dt>
+            <dd class:warn={stalled}>{stabilityText(b.dashboard.stability, now)}</dd>
 
-            <dt>Newest</dt>
+            <dt>Last reading</dt>
             <dd>{age(b.newest)}</dd>
           </dl>
 
@@ -134,9 +160,24 @@
 </section>
 
 <style>
+  .bar {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+  }
+
+  .bar h2 {
+    margin-right: auto;
+  }
+
+  .bar a,
+  p.muted a {
+    color: #7ba7d4;
+  }
+
   .cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
     gap: 0.75rem;
     margin-bottom: 1.5rem;
   }
@@ -154,7 +195,46 @@
     border-color: #4a5160;
   }
 
+  .card.attention {
+    border-color: #8a6a3a;
+  }
+
+  .pill {
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    background: #2a2e36;
+    color: #9aa0a6;
+    font-size: 0.8em;
+    font-weight: normal;
+    vertical-align: 0.1em;
+  }
+
+  .bar-track {
+    display: inline-block;
+    width: 4rem;
+    height: 0.4rem;
+    margin-right: 0.4rem;
+    background: #2a2e36;
+    border-radius: 2px;
+    vertical-align: 0.1em;
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    display: block;
+    height: 100%;
+    background: #2d5d8a;
+  }
+
+  .warn {
+    color: #e0a35f;
+  }
+
   h3 {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
     margin: 0 0 0.5rem;
   }
 
