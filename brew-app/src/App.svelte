@@ -112,7 +112,7 @@
         class:active={route.name === "batches" || route.name === "batch-new" || route.name === "batch"}>Batches</a
       >
       <a href={href({ name: "compare", ids: [] })} class:active={route.name === "compare"}>Compare</a>
-      <a href={href({ name: "query", id: null })} class:active={route.name === "query"}>Queries</a>
+      <a href={href({ name: "query", id: null })} class:active={route.name === "query"}>Find batches</a>
       <a href={href({ name: "recipes" })} class:active={route.name === "recipes" || route.name === "recipe" || route.name === "recipe-diff"}
         >Recipes</a
       >

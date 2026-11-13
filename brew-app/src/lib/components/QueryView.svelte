@@ -73,6 +73,15 @@
   const versions = $derived(options.recipes.find((r) => r.id === form.recipe_id)?.versions ?? []);
   const rows = $derived(view ? sortRows(view.rows, sortKey, desc) : []);
   const codes = $derived(new Map(view?.rows.map((r) => [r.batch_id, r.code])));
+  const filtered = $derived(
+    JSON.stringify(parsed) !== JSON.stringify(toFilter(toForm(emptyFilter(), formTemp), formTemp)),
+  );
+
+  function clearFilters() {
+    form = toForm(emptyFilter(), formTemp);
+  }
+
+  const picks = (n: number) => (n === 0 ? "any" : `${n} picked`);
 
   let busy = false;
   let again = false;
@@ -308,26 +317,21 @@
 </script>
 
 <section>
-  <h2>Queries</h2>
+  <h2>Find batches</h2>
+  <p class="hint intro">
+    Narrow down your batches with the filters, then compare their numbers, overlay their
+    curves, or export them. Save a filter to rerun it later.
+  </p>
 
-  <nav class="saved">
-    <a href={href({ name: "query", id: null })} class:active={id === null}>New query</a>
-    {#each saved as q (q.id)}
-      <a href={href({ name: "query", id: q.id })} class:active={id === q.id}>{q.name}</a>
-    {/each}
-  </nav>
-
-  <div class="toolbar">
-    <input placeholder="Name" bind:value={name} />
-    {#if open}
-      <button onclick={update} disabled={!parsed.ok || (!dirty && name.trim() === open.name)}>Update</button>
-      <button onclick={saveNew} disabled={!parsed.ok}>Save as new</button>
-      <button onclick={archive}>Archive</button>
-    {:else}
-      <button onclick={saveNew} disabled={!parsed.ok}>Save</button>
-    {/if}
-    {#if saveError}<span role="alert">{saveError.message}</span>{/if}
-  </div>
+  {#if saved.length}
+    <nav class="saved">
+      <span class="hint">Saved filters:</span>
+      <a href={href({ name: "query", id: null })} class:active={id === null}>none</a>
+      {#each saved as q (q.id)}
+        <a href={href({ name: "query", id: q.id })} class:active={id === q.id}>{q.name}</a>
+      {/each}
+    </nav>
+  {/if}
 
   <form class="filter" onsubmit={(e) => e.preventDefault()}>
     <fieldset>
@@ -358,42 +362,47 @@
         {/each}
       </select>
     </fieldset>
-    <fieldset>
-      <legend>Yeast strain <span class="hint">(any of)</span></legend>
+    <fieldset class="ranges">
+      <legend>Ranges <span class="hint">(blank = no limit)</span></legend>
+      <span>OG</span>
+      <span><input bind:value={form.og_min} placeholder="min" /> – <input bind:value={form.og_max} placeholder="max" /> SG</span>
+      <span>FG</span>
+      <span><input bind:value={form.fg_min} placeholder="min" /> – <input bind:value={form.fg_max} placeholder="max" /> SG</span>
+      <span>Ferment temp</span>
+      <span>
+        <input bind:value={form.temp_min} placeholder="min" /> –
+        <input bind:value={form.temp_max} placeholder="max" /> °{formTemp}
+      </span>
+      <span>Pitched</span>
+      <span><input type="date" bind:value={form.pitched_from} /> – <input type="date" bind:value={form.pitched_to} /></span>
+    </fieldset>
+    <details class="pick">
+      <summary>Yeast strain <span class="hint">{picks(form.strain_ids.length)}</span></summary>
       {#each options.strains as s (s.id)}
         <label><input type="checkbox" value={s.id} bind:group={form.strain_ids} /> {s.name}</label>
       {:else}
         <span class="hint">No strains yet.</span>
       {/each}
-    </fieldset>
-    <fieldset>
-      <legend>Ingredient lot <span class="hint">(any of)</span></legend>
+    </details>
+    <details class="pick">
+      <summary>Ingredient lot <span class="hint">{picks(form.lot_ids.length)}</span></summary>
       {#each options.lots as l (l.id)}
         <label>
           <input type="checkbox" value={l.id} bind:group={form.lot_ids} />
           {l.ingredient}
           <span class="hint">
             {[l.lot_code, l.supplier].filter(Boolean).join(" · ")}
-            {l.batch_count} batch{l.batch_count === 1 ? "" : "es"}
+            · {l.batch_count} batch{l.batch_count === 1 ? "" : "es"}
           </span>
         </label>
       {:else}
         <span class="hint">No lot used in a batch yet.</span>
       {/each}
-    </fieldset>
-    <fieldset class="ranges">
-      <legend>Ranges <span class="hint">(inclusive; blank is open)</span></legend>
-      <label>OG <input bind:value={form.og_min} placeholder="1.035" /> – <input bind:value={form.og_max} /> SG</label>
-      <label>FG <input bind:value={form.fg_min} /> – <input bind:value={form.fg_max} /> SG</label>
-      <label>
-        Ferment temp <input bind:value={form.temp_min} /> – <input bind:value={form.temp_max} /> °{formTemp}
-      </label>
-      <label>
-        Pitched <input type="date" bind:value={form.pitched_from} /> –
-        <input type="date" bind:value={form.pitched_to} />
-      </label>
-    </fieldset>
+    </details>
   </form>
+  {#if filtered}
+    <button class="link" onclick={clearFilters}>Clear filters</button>
+  {/if}
 
   {#if !parsed.ok}
     <p role="alert">{parsed.error}</p>
@@ -402,22 +411,23 @@
   {/if}
 
   {#if view}
-    <div class="toolbar">
-      <span>{view.rows.length} batch{view.rows.length === 1 ? "" : "es"}</span>
-      <span class="modes">
-        <label><input type="radio" value="batches" bind:group={mode} /> Batches</label>
-        <label><input type="radio" value="strains" bind:group={mode} /> By strain</label>
-      </span>
+    <div class="toolbar results">
+      <strong>{view.rows.length} batch{view.rows.length === 1 ? "" : "es"} match</strong>
+      <nav class="modes">
+        <button class:active={mode === "batches"} onclick={() => (mode = "batches")}>Each batch</button>
+        <button class:active={mode === "strains"} onclick={() => (mode = "strains")}>Averages by strain</button>
+      </nav>
+      <span class="spacer"></span>
       {#if mode === "batches"}
         <button
           disabled={picked.length < 2 || picked.length > MAX_OVERLAY}
-          title="Overlay 2 to {MAX_OVERLAY} ticked batches"
+          title="Tick 2 to {MAX_OVERLAY} batches to draw their curves on one chart"
           onclick={() => (location.hash = href({ name: "compare", ids: picked }))}
         >
-          Overlay these ({picked.length})
+          Overlay curves ({picked.length})
         </button>
       {/if}
-      <button title="Save this table as CSV" onclick={exportCsv}>Export</button>
+      <button title="Save this table as CSV" onclick={exportCsv}>Export CSV</button>
     </div>
 
     {#if mode === "strains"}
@@ -426,7 +436,7 @@
       <table>
         <thead>
           <tr>
-            <th></th>
+            <th title="Tick to overlay"></th>
             {#each COLUMNS as [key, label] (key)}
               <th>
                 <button class="sort" onclick={() => sortBy(key)}>
@@ -463,7 +473,7 @@
     {/if}
 
     {#if mode === "batches" && view.unevaluated.length}
-      <p class="hint">Couldn't judge — neither matched nor excluded:</p>
+      <p class="hint">Not listed above — missing the data a filter checks:</p>
       <ul class="unevaluated">
         {#each view.unevaluated as u (u.batch_id)}
           <li>
@@ -474,6 +484,18 @@
       </ul>
     {/if}
   {/if}
+
+  <div class="toolbar save">
+    <input placeholder="Name this filter" bind:value={name} />
+    {#if open}
+      <button onclick={update} disabled={!parsed.ok || (!dirty && name.trim() === open.name)}>Update</button>
+      <button onclick={saveNew} disabled={!parsed.ok}>Save as new</button>
+      <button onclick={archive}>Archive</button>
+    {:else}
+      <button onclick={saveNew} disabled={!parsed.ok || name.trim() === ""}>Save filter</button>
+    {/if}
+    {#if saveError}<span role="alert">{saveError.message}</span>{/if}
+  </div>
 </section>
 
 <style>
@@ -501,6 +523,71 @@
     margin-bottom: 0.5rem;
   }
 
+  .intro {
+    margin: 0 0 0.75rem;
+    max-width: 40rem;
+  }
+
+  .results {
+    margin-top: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .modes button {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #9aa0a6;
+    padding: 0.2rem 0;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .modes button.active {
+    color: #e6e6e6;
+    border-bottom-color: #2d5d8a;
+  }
+
+  .save {
+    margin-top: 1.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #2a2e36;
+  }
+
+  button.link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #7ba7d4;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .pick {
+    flex-basis: 100%;
+    border: 1px solid #333842;
+    padding: 0.35rem 0.75rem;
+  }
+
+  .pick summary {
+    cursor: pointer;
+  }
+
+  .pick[open] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+  }
+
+  .pick[open] summary {
+    flex-basis: 100%;
+    margin-bottom: 0.25rem;
+  }
+
   .modes {
     display: flex;
     gap: 0.5rem;
@@ -522,7 +609,9 @@
   }
 
   .ranges {
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: auto auto;
+    align-items: center;
   }
 
   .ranges input:not([type="date"]) {

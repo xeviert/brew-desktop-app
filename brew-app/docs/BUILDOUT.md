@@ -734,7 +734,7 @@ laptop is shut. The desktop app does everything else.
       `SourceStatus.last_error_code` so the UI branches on codes, not text. The
       footer says "brewd unreachable" when every unreachable source is a journal
 
-**Done when:** the Pi logs both probes and the iSpindle with the laptop shut, and
+**Done when:** the Pi logs the probe and the iSpindle with the laptop shut, and
 opening the app backfills a gap-free curve bound to the pitched batch.
 
 ### Phase 3 UI pass
