@@ -66,6 +66,15 @@ export function lotsFor(lots: LotChoice[], ingredientId: number | null): LotChoi
 	return ingredientId === null ? lots : lots.filter((l) => l.ingredient_id === ingredientId);
 }
 
+export function hasLot(lots: LotChoice[], ingredientId: number): boolean {
+	return lots.some((l) => l.ingredient_id === ingredientId);
+}
+
+/** "10 g · Boil 60 min": what the recipe asked for, for the form's heading. */
+export function planSummary(p: RecipeItem): string {
+	return p.notes ? `${formatQuantity(p.entry)} · ${p.notes}` : formatQuantity(p.entry);
+}
+
 /** Units the picked lot's ingredient may be typed in. */
 export function unitsFor(lots: LotChoice[], lot: number | null, fallback: Unit): Unit[] {
 	const picked = lots.find((l) => l.id === lot);

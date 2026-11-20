@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { Actual, LotChoice, PlanLine, RecipeItem } from "./api";
-import { actualForm, byLineStage, deltaText, lotLabel, lotsFor, toActualInput, unitsFor } from "./actuals";
+import {
+	actualForm,
+	byLineStage,
+	deltaText,
+	hasLot,
+	lotLabel,
+	lotsFor,
+	planSummary,
+	toActualInput,
+	unitsFor,
+} from "./actuals";
 
 const lot = (over: Partial<LotChoice>): LotChoice => ({
 	id: 1,
@@ -101,6 +111,16 @@ describe("the form", () => {
 		expect(unitsFor(lots, 2, "kg")).not.toContain("L");
 		expect(lotLabel(lots[1])).toBe("Fermaid O — FO-1");
 		expect(lotLabel(lots[0])).toBe("Sucrose — Metro");
+	});
+
+	it("knows when a planned ingredient has no lot to record from", () => {
+		expect(hasLot(lots, 11)).toBe(true);
+		expect(hasLot(lots, 99)).toBe(false);
+	});
+
+	it("sums up the plan for the heading", () => {
+		expect(planSummary(planned)).toBe("10 g");
+		expect(planSummary({ ...planned, notes: "Boil 60 min" })).toBe("10 g · Boil 60 min");
 	});
 });
 
