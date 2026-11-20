@@ -31,6 +31,7 @@ impl Rig {
             .set(Config {
                 brewd: Brewd {
                     base_url: server.base_url(),
+                    ..Brewd::default()
                 },
                 ..Config::default()
             })
@@ -188,6 +189,7 @@ async fn the_base_url_is_read_live_and_an_empty_one_is_unconfigured() {
         .set(Config {
             brewd: Brewd {
                 base_url: server.base_url(),
+                ..Brewd::default()
             },
             ..Config::default()
         })
@@ -211,6 +213,7 @@ async fn a_stopped_brewd_is_unreachable_and_a_wrong_host_is_not() {
         .set(Config {
             brewd: Brewd {
                 base_url: format!("http://{closed}"),
+                ..Brewd::default()
             },
             ..Config::default()
         })

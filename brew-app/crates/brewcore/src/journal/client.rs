@@ -431,6 +431,46 @@ impl Client {
             .map(|(bytes, _)| bytes)
     }
 
+    /// Phase 6. A write to `brewd`, authorised by its token: a JSON body or none.
+    ///
+    /// Not retried. Every write `brewd` takes is safe to repeat, but the caller is a
+    /// button or the next poll, and either is a better retry than a hidden one. A
+    /// `401`/`403` is [`Error::BrewdWriteRefused`] — the token, not the network.
+    pub async fn send(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        token: &str,
+        json: Option<Vec<u8>>,
+    ) -> Result<()> {
+        let mut request = self.http.request(method, url).bearer_auth(token);
+        if let Some(json) = json {
+            request = request.header(CONTENT_TYPE, "application/json").body(json);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|source| transport_error(url, source))?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let body = response
+            .bytes()
+            .await
+            .map_err(|source| transport_error(url, source))?;
+        match status {
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(Error::BrewdWriteRefused {
+                reason: String::from_utf8_lossy(&body).trim().to_owned(),
+            }),
+            _ => Err(Error::HttpStatus {
+                url: url.to_owned(),
+                status: status.as_u16(),
+                preview: preview_bytes(&body),
+            }),
+        }
+    }
+
     /// Run `f` under the retry policy. Shared by `fetch` and the capped reads so that a
     /// proxy restarting costs one extra attempt in every path, not just the sync one.
     async fn retrying<T, F, Fut>(&self, url: &str, f: F) -> Result<T>

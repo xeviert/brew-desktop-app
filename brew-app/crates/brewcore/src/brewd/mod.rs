@@ -5,6 +5,7 @@
 //! [`Dialect`](crate::journal::Dialect), a [`ReadingSource`](crate::sync::ReadingSource)
 //! and discovery. Nothing here imports `fermentrack`.
 
+pub mod alerts;
 pub mod dialect;
 pub mod discovery;
 pub mod source;

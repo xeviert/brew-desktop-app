@@ -51,6 +51,16 @@ pub enum Rule {
 }
 
 impl Rule {
+    pub const ALL: [Rule; 7] = [
+        Rule::Finished,
+        Rule::Stalled,
+        Rule::TempHigh,
+        Rule::TempLow,
+        Rule::Silent,
+        Rule::SugarBreak,
+        Rule::TargetSg,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Rule::Finished => "finished",
@@ -74,5 +84,13 @@ impl Rule {
             Rule::SugarBreak => "⅓ sugar break",
             Rule::TargetSg => "target gravity reached",
         }
+    }
+}
+
+impl std::str::FromStr for Rule {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, ()> {
+        Rule::ALL.into_iter().find(|r| r.as_str() == s).ok_or(())
     }
 }

@@ -1,3 +1,4 @@
+mod alert_sync;
 mod commands;
 mod error;
 mod logging;
@@ -56,6 +57,10 @@ pub fn run() {
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move { start_polling(&handle) });
+
+            // Phase 6. Its own loop beside the reading sync; see `alert_sync`.
+            app.manage(std::sync::Arc::new(alert_sync::AlertSync::default()));
+            alert_sync::start(app.handle().clone());
 
             Ok(())
         })
@@ -171,6 +176,13 @@ fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
         commands::calc_og_from_sugar,
         commands::calc_yan,
         commands::calc_pitch,
+        commands::list_alerts,
+        commands::get_batch_alert,
+        commands::set_batch_alert,
+        commands::ack_alert,
+        commands::snooze_alert,
+        commands::test_notification,
+        commands::alert_sync_status,
     ]
 }
 

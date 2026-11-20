@@ -500,6 +500,10 @@ pub enum Error {
     #[error("no brewd token is set")]
     BrewdTokenUnset,
 
+    /// Phase 6. `brewd` refused a write: the token is wrong, or `brewd` has none set.
+    #[error("brewd refused the write: {reason}")]
+    BrewdWriteRefused { reason: String },
+
     #[error("source {source_id} has no sync_state row")]
     MissingSyncState { source_id: i64 },
 
@@ -671,6 +675,7 @@ impl Error {
             Error::InvalidAlertLog { .. } => "alert.invalid_log",
             Error::NoSuchAlert { .. } => "alert.no_such_alert",
             Error::BrewdTokenUnset => "alert.token_unset",
+            Error::BrewdWriteRefused { .. } => "alert.write_refused",
             Error::MissingSyncState { .. } => "sync.missing_state",
             Error::SourceNotScheduled { .. } => "sync.not_scheduled",
             Error::BackgroundTask { .. } => "sync.task",

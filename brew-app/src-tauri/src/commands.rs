@@ -13,6 +13,7 @@ use brewcore::{
     config::{Config, ConfigStore},
     db::{
         Db, DbStatus, Metric, SourceKind,
+        alert::{self, AlertRow, BatchAlert},
         analytics::BatchMetrics,
         batch::{
             self, BatchCost, BatchEdit, BatchIngredientRow, BatchStatus, BatchSummary,
@@ -50,6 +51,7 @@ use brewcore::{
     units::{Currency, Grams, GravityDisplay, Litres, Money, Quantity, Sg, Timestamp, Unit},
 };
 
+use crate::alert_sync::{AlertSync, AlertSyncStatus};
 use crate::error::{ApiError, ApiResult};
 
 #[tauri::command]
@@ -2045,4 +2047,137 @@ pub async fn calc_pitch(
         _ => None,
     };
     Ok(PitchResult { cells, dry_g })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6. Alerts
+
+/// Newest first; `open_only` leaves out the cleared. `batch_id` absent is every batch.
+#[tauri::command]
+pub async fn list_alerts(
+    db: tauri::State<'_, Db>,
+    batch_id: Option<i64>,
+    open_only: bool,
+) -> ApiResult<Vec<AlertRow>> {
+    Ok(db.read(|conn| alert::list_alerts(conn, batch_id, open_only))?)
+}
+
+/// A batch's alert settings for its form. Temperatures in °C, converted at the edge
+/// like every other; the target in the display gravity unit, like the recipe's.
+#[derive(Debug, serde::Serialize)]
+pub struct BatchAlertForm {
+    pub temp_min_c: Option<f64>,
+    pub temp_max_c: Option<f64>,
+    pub target: Option<f64>,
+    pub muted: bool,
+    pub yeast_min_c: Option<f64>,
+    pub yeast_max_c: Option<f64>,
+    pub gravity_unit: &'static str,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct BatchAlertInput {
+    pub temp_min_c: Option<f64>,
+    pub temp_max_c: Option<f64>,
+    pub target: Option<f64>,
+    pub muted: bool,
+}
+
+fn batch_alert_form(view: alert::BatchAlertView, display: GravityDisplay) -> BatchAlertForm {
+    BatchAlertForm {
+        temp_min_c: view.settings.temp_min_c,
+        temp_max_c: view.settings.temp_max_c,
+        target: view.settings.target_sg.map(|sg| sg_to_display(sg, display)),
+        muted: view.settings.muted,
+        yeast_min_c: view.yeast_min_c,
+        yeast_max_c: view.yeast_max_c,
+        gravity_unit: display.unit(),
+    }
+}
+
+#[tauri::command]
+pub async fn get_batch_alert(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_id: i64,
+) -> ApiResult<BatchAlertForm> {
+    let display = config.get().ui.gravity_display;
+    let view = db.read(|conn| alert::get_batch_alert(conn, batch_id))?;
+    Ok(batch_alert_form(view, display))
+}
+
+/// Saves and wakes the alert round, so `brewd` judges by the new settings at once.
+#[tauri::command]
+pub async fn set_batch_alert(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
+    batch_id: i64,
+    input: BatchAlertInput,
+) -> ApiResult<BatchAlertForm> {
+    let display = config.get().ui.gravity_display;
+    let settings = BatchAlert {
+        temp_min_c: input.temp_min_c,
+        temp_max_c: input.temp_max_c,
+        target_sg: input
+            .target
+            .map(|v| typed_gravity(v, display))
+            .transpose()?,
+        muted: input.muted,
+    };
+    let view = db.write(|conn| {
+        alert::set_batch_alert(conn, batch_id, &settings)?;
+        alert::get_batch_alert(conn, batch_id)
+    })?;
+    alerts.wake();
+    Ok(batch_alert_form(view, display))
+}
+
+#[tauri::command]
+pub async fn ack_alert(
+    client: tauri::State<'_, Client>,
+    config: tauri::State<'_, ConfigStore>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
+    id: i64,
+) -> ApiResult<()> {
+    brewd::alerts::ack(&client, &config.get(), id).await?;
+    alerts.wake();
+    Ok(())
+}
+
+/// Notify again in `hours` if it still holds and nobody has acked it.
+#[tauri::command]
+pub async fn snooze_alert(
+    client: tauri::State<'_, Client>,
+    config: tauri::State<'_, ConfigStore>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
+    id: i64,
+    hours: f64,
+) -> ApiResult<()> {
+    if !hours.is_finite() || hours <= 0.0 {
+        return Err(Error::NotPositive {
+            field: "hours",
+            value: hours,
+        }
+        .into());
+    }
+    let until = Timestamp::now().saturating_add_secs((hours * 3_600.0).round() as i64);
+    brewd::alerts::snooze(&client, &config.get(), id, until).await?;
+    alerts.wake();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn test_notification(
+    client: tauri::State<'_, Client>,
+    config: tauri::State<'_, ConfigStore>,
+) -> ApiResult<()> {
+    Ok(brewd::alerts::test_notification(&client, &config.get()).await?)
+}
+
+#[tauri::command]
+pub async fn alert_sync_status(
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
+) -> ApiResult<AlertSyncStatus> {
+    Ok(alerts.status())
 }

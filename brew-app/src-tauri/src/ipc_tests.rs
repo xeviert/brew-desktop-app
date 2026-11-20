@@ -43,6 +43,7 @@ impl Harness {
             .manage(db.clone())
             .manage(Client::new().unwrap())
             .manage(manager)
+            .manage(Arc::new(crate::alert_sync::AlertSync::default()))
             .invoke_handler(super::handler())
             .build(mock_context(noop_assets()))
             .unwrap();
@@ -1871,4 +1872,54 @@ fn a_refused_calculation_comes_back_with_a_code() {
         }}),
     );
     assert_eq!(err["code"], "calc.out_of_range");
+}
+
+/// Phase 6. A batch's alert settings cross with the target in the display unit, and a
+/// write to `brewd` with no `brewd` set says so by code.
+#[test]
+fn batch_alert_settings_round_trip_in_the_display_unit() {
+    let app = Harness::new();
+    let batch_id = pitched_batch(&app);
+    let mut config = app.invoke("get_config", json!({})).unwrap();
+    config["ui"]["gravity_display"] = json!("plato");
+    app.invoke("set_config", json!({ "config": config }))
+        .unwrap();
+
+    let empty = app
+        .invoke("get_batch_alert", json!({ "batchId": batch_id }))
+        .unwrap();
+    assert_eq!(empty["muted"], false);
+    assert_eq!(empty["target"], Value::Null);
+    assert_eq!(empty["gravity_unit"], "°P");
+
+    let saved = app
+        .invoke(
+            "set_batch_alert",
+            json!({ "batchId": batch_id, "input": {
+                "temp_min_c": 16.0, "temp_max_c": 20.0, "target": 2.5, "muted": false,
+            }}),
+        )
+        .unwrap();
+    assert_eq!(saved["temp_max_c"], 20.0);
+    let target = saved["target"].as_f64().unwrap();
+    assert!((target - 2.5).abs() < 0.01, "{target}");
+
+    let err = app.api_error(
+        "set_batch_alert",
+        json!({ "batchId": batch_id, "input": {
+            "temp_min_c": 21.0, "temp_max_c": 20.0, "target": null, "muted": false,
+        }}),
+    );
+    assert_eq!(err["code"], "units.range_inverted");
+
+    let alerts = app
+        .invoke(
+            "list_alerts",
+            json!({ "batchId": batch_id, "openOnly": true }),
+        )
+        .unwrap();
+    assert_eq!(alerts, json!([]));
+
+    let err = app.api_error("ack_alert", json!({ "id": 1 }));
+    assert_eq!(err["code"], "brewd.unconfigured");
 }

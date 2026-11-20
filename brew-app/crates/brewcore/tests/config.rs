@@ -113,6 +113,7 @@ fn save_then_load_round_trips() {
         },
         brewd: Brewd {
             base_url: "http://brewd.local:8080".to_owned(),
+            token: "0123456789abcdef".to_owned(),
         },
         sync: SyncConfig {
             poll_interval_secs: 300,

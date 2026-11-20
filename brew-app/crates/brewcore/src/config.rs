@@ -129,6 +129,9 @@ pub struct Fermentrack {
 pub struct Brewd {
     /// Empty until the Pi is set up, which is a state and not an error.
     pub base_url: String,
+    /// Phase 6. `brewd`'s `http.token`, for its write endpoints. Empty: alerts are
+    /// read but no watches are pushed, so `brewd` judges nothing new.
+    pub token: String,
 }
 
 // Named `SyncConfig` rather than `Sync`, which would shadow `std::marker::Sync`.
@@ -1015,6 +1018,7 @@ mod tests {
         let mut config = Config {
             brewd: Brewd {
                 base_url: "  http://brewd.local:8080/  ".to_owned(),
+                ..Brewd::default()
             },
             ..Config::default()
         };

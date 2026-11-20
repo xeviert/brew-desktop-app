@@ -16,7 +16,8 @@ export interface ApiError {
 /** Mirrors `brewcore::config::Config`. Field names are serde's, so snake_case. */
 export interface Config {
 	fermentrack: { base_url: string };
-	brewd: { base_url: string };
+	/** `token` is `brewd`'s `http.token`; empty means alerts are read but no watches pushed. */
+	brewd: { base_url: string; token: string };
 	sync: { poll_interval_secs: number };
 	ui: { temp_display: TempDisplay; gravity_display: GravityDisplay };
 	measurement: { hydrometer_calibration_c: number; refractometer_wort_correction: number };
@@ -1454,3 +1455,108 @@ export const calcOgFromSugar = (sugarG: number, waterL: number): Promise<SugarRe
 export const calcYan = (input: YanInput): Promise<YanResult> => call("calc_yan", { input });
 
 export const calcPitch = (input: PitchInput): Promise<PitchResult> => call("calc_pitch", { input });
+
+// ---------------------------------------------------------------------------
+// Phase 6. Alerts
+
+/** Mirrors `brewcore::alert::Rule`. */
+export type AlertRule =
+	| "finished"
+	| "stalled"
+	| "temp_high"
+	| "temp_low"
+	| "silent"
+	| "sugar_break"
+	| "target_sg";
+
+/** Mirrors `brewcore::db::alert::AlertRow`. Timestamps are epoch seconds. */
+export interface AlertRow {
+	id: number;
+	batch_id: number;
+	code: string;
+	rule: AlertRule;
+	/** The journal device, for `silent`. */
+	device: string | null;
+	raised_at: number;
+	detail: string;
+	cleared_at: number | null;
+	/** Why `brewd` cleared it when the rule itself didn't. */
+	cleared_note: string | null;
+	acked_at: number | null;
+	snoozed_until: number | null;
+	notified_at: number | null;
+}
+
+/** Mirrors `src-tauri`'s `BatchAlertForm`. °C, and `target` in the display gravity unit. */
+export interface BatchAlertForm {
+	temp_min_c: number | null;
+	temp_max_c: number | null;
+	target: number | null;
+	muted: boolean;
+	/** The pitched yeasts' overlap, which an unset end falls back to. */
+	yeast_min_c: number | null;
+	yeast_max_c: number | null;
+	gravity_unit: string;
+}
+
+/** Mirrors `src-tauri`'s `BatchAlertInput`. */
+export interface BatchAlertInput {
+	temp_min_c: number | null;
+	temp_max_c: number | null;
+	target: number | null;
+	muted: boolean;
+}
+
+/** Mirrors `brewcore::brewd::alerts::AlertSyncReport`. */
+export interface AlertSyncReport {
+	watches: "pushed" | "unchanged" | "no_token";
+	watched: number;
+	applied: number;
+}
+
+/** Mirrors `src-tauri`'s `AlertSyncStatus`. */
+export interface AlertSyncStatus {
+	at: number | null;
+	report: AlertSyncReport | null;
+	error_code: string | null;
+	error: string | null;
+}
+
+export const listAlerts = (batchId: number | null, openOnly: boolean): Promise<AlertRow[]> =>
+	call("list_alerts", { batchId, openOnly });
+
+export const getBatchAlert = (batchId: number): Promise<BatchAlertForm> =>
+	call("get_batch_alert", { batchId });
+
+export const setBatchAlert = (batchId: number, input: BatchAlertInput): Promise<BatchAlertForm> =>
+	call("set_batch_alert", { batchId, input });
+
+/** No more notifications; it stays open until its rule clears. Goes through `brewd`. */
+export const ackAlert = (id: number): Promise<void> => call("ack_alert", { id });
+
+/** Notify again in `hours` if it still holds. Goes through `brewd`. */
+export const snoozeAlert = (id: number, hours: number): Promise<void> =>
+	call("snooze_alert", { id, hours });
+
+/** One notification through `brewd`'s ntfy, end to end. */
+export const testNotification = (): Promise<void> => call("test_notification");
+
+export const alertSyncStatus = (): Promise<AlertSyncStatus> => call("alert_sync_status");
+
+/** Subscribe to alert rounds that changed something. Same contract as `onSyncStatus`. */
+export function onAlerts(cb: (status: AlertSyncStatus) => void): () => void {
+	let stop: (() => void) | null = null;
+	let cancelled = false;
+
+	void listen<AlertSyncStatus>("alerts://changed", (event) => cb(event.payload)).then(
+		(unlisten) => {
+			if (cancelled) unlisten();
+			else stop = unlisten;
+		},
+	);
+
+	return () => {
+		cancelled = true;
+		stop?.();
+	};
+}
