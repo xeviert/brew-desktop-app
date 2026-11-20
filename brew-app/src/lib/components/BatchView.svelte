@@ -1,5 +1,6 @@
 <script lang="ts">
   import Actuals from "$lib/components/Actuals.svelte";
+  import BatchAlerts from "$lib/components/BatchAlerts.svelte";
   import BatchHeader from "$lib/components/BatchHeader.svelte";
   import BatchLifecycle from "$lib/components/BatchLifecycle.svelte";
   import Curve from "$lib/components/Curve.svelte";
@@ -86,6 +87,9 @@
         <div class="moves">
           <BatchLifecycle {batch} onchanged={changed} />
         </div>
+        <div class="alerts">
+          <BatchAlerts batchId={batch.id} ui={config.ui} {readonly} />
+        </div>
         <div class="timeline">
           <Timeline batchId={batch.id} {config} {readonly} {revision} onchanged={() => void changed()} />
         </div>
@@ -119,7 +123,8 @@
     order: 1;
   }
 
-  .moves {
+  .moves,
+  .alerts {
     order: 2;
   }
 

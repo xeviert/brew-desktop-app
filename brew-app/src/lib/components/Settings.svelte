@@ -1,5 +1,18 @@
 <script lang="ts">
-  import { checkFermentrack, listJournals, setConfig, toApiError, type ApiError, type Config } from "$lib/api";
+  import { onMount } from "svelte";
+  import {
+    alertSyncStatus,
+    checkFermentrack,
+    listJournals,
+    onAlerts,
+    setConfig,
+    testNotification,
+    toApiError,
+    type AlertSyncStatus,
+    type ApiError,
+    type Config,
+  } from "$lib/api";
+  import { syncText } from "$lib/alerts";
 
   let { config, onsaved }: { config: Config; onsaved: (c: Config) => void } = $props();
 
@@ -29,6 +42,28 @@
   let reachable = $state<string | null>(null);
   let testingBrewd = $state(false);
   let brewdReachable = $state<string | null>(null);
+  let notifying = $state(false);
+  let notified = $state<string | null>(null);
+  let alertStatus = $state.raw<AlertSyncStatus | null>(null);
+
+  onMount(() => {
+    alertSyncStatus().then((s) => (alertStatus = s), () => {});
+    return onAlerts((s) => (alertStatus = s));
+  });
+
+  /** Through `brewd` to its ntfy topic, with the saved URL and token. */
+  async function notifyTest() {
+    notifying = true;
+    notified = null;
+    try {
+      await testNotification();
+      notified = "sent — check the phone";
+    } catch (e) {
+      notified = toApiError(e).message;
+    } finally {
+      notifying = false;
+    }
+  }
 
   const dirty = $derived(JSON.stringify(draft) !== JSON.stringify(config));
 
@@ -118,6 +153,7 @@
   <nav class="toc">
     <button class="link" onclick={() => jump("settings-display")}>Display</button>
     <button class="link" onclick={() => jump("settings-connections")}>Connections</button>
+    <button class="link" onclick={() => jump("settings-alerts")}>Alerts</button>
     <button class="link" onclick={() => jump("settings-devices")}>iSpindle</button>
     <button class="link" onclick={() => jump("sources")}>Sources</button>
     <button class="link" onclick={() => jump("vessels")}>Vessels</button>
@@ -203,6 +239,41 @@
       <small>seconds between fetches of new readings from each source; slows down while one is failing</small>
     {/if}
   </label>
+
+  <h3 id="settings-alerts">Alerts</h3>
+  <p class="intro">
+    brewd on the Pi checks every reading against each fermenting batch — finished, stalled, too warm or cold, a
+    sensor gone quiet — and pushes what fires to your phone through ntfy, laptop shut or not. Each batch's own
+    thresholds are on its page.
+  </p>
+
+  <label>
+    <span>brewd token</span>
+    <input
+      type="password"
+      autocomplete="off"
+      autocapitalize="none"
+      spellcheck="false"
+      bind:value={draft.brewd.token}
+      placeholder="the http.token in brewd.toml"
+    />
+    <small>
+      lets the app tell brewd what to watch, and acknowledge or snooze alerts. Without it, alerts are still shown
+      but brewd isn't told about new batches.
+    </small>
+  </label>
+
+  <div class="status-row">
+    <span>Last check</span>
+    <span role="status">{alertStatus ? syncText(alertStatus) : "—"}</span>
+    <small>
+      <button class="link" onclick={notifyTest} disabled={notifying || dirty || !config.brewd.token.trim()}>
+        {notifying ? "Sending…" : "Send a test notification"}
+      </button>
+      {#if dirty}<span>· save first</span>{/if}
+      {#if notified}<span>· {notified}</span>{/if}
+    </small>
+  </div>
 
   <h3 id="settings-devices">iSpindle and wireless sensors</h3>
   <p class="intro">How to read the iSpindle, and when the home screen flags a sensor's battery or Wi-Fi.</p>
@@ -314,6 +385,17 @@
   small {
     grid-column: 2;
     color: #6f757d;
+  }
+
+  .status-row {
+    display: grid;
+    grid-template-columns: 11rem 1fr;
+    gap: 0.5rem 1rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .status-row > span:first-child {
+    color: #9aa0a6;
   }
 
   small.warn {

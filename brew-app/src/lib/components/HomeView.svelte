@@ -1,15 +1,20 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
+  import AlertList from "$lib/components/AlertList.svelte";
   import Devices from "$lib/components/Devices.svelte";
   import {
     homeSummary,
+    listAlerts,
+    onAlerts,
     onSyncStatus,
+    type AlertRow,
     toApiError,
     type ApiError,
     type Config,
     type HomeSummary,
     type SourceStatus,
   } from "$lib/api";
+  import { alertTitle, openByBatch } from "$lib/alerts";
   import { formatGravityIn, gravitySource, stabilityText } from "$lib/dashboard";
   import { age } from "$lib/format";
   import { quietSources, silenceText } from "$lib/home";
@@ -20,6 +25,9 @@
 
   let home = $state.raw<HomeSummary | null>(null);
   let error = $state<ApiError | null>(null);
+  // Phase 6. Every open alert, from the last round `brewd`'s log was read in.
+  let alerts = $state.raw<AlertRow[]>([]);
+  const alertsByBatch = $derived(openByBatch(alerts));
 
   const unit = $derived(home?.gravity_unit ?? "SG");
   const now = $derived(home ? Date.now() / 1000 : 0);
@@ -37,7 +45,7 @@
     }
     busy = true;
     try {
-      home = await homeSummary();
+      [home, alerts] = await Promise.all([homeSummary(), listAlerts(null, true)]);
       error = null;
     } catch (e) {
       error = toApiError(e);
@@ -56,7 +64,15 @@
   });
 
   // Every poll of any source: a poll that adds nothing is when a stream goes stale.
-  onMount(() => onSyncStatus(() => void refresh()));
+  // And every alert round that changed something.
+  onMount(() => {
+    const stopSync = onSyncStatus(() => void refresh());
+    const stopAlerts = onAlerts(() => void refresh());
+    return () => {
+      stopSync();
+      stopAlerts();
+    };
+  });
 </script>
 
 <section>
@@ -68,6 +84,13 @@
 
   {#if error}
     <p role="alert">{error.message}</p>
+  {/if}
+
+  {#if alerts.length > 0}
+    <section class="open-alerts" aria-labelledby="open-alerts-title">
+      <h3 id="open-alerts-title">Alerts</h3>
+      <AlertList {alerts} showBatch onchanged={() => void refresh()} />
+    </section>
   {/if}
 
   {#if home}
@@ -83,9 +106,10 @@
         {@const quiet = quietSources(b.streams, syncs)}
         {@const stalled = b.dashboard.stability.state === "stalled"}
         {@const e = b.dashboard.estimate}
+        {@const raised = alertsByBatch.get(b.dashboard.batch_id) ?? []}
         <a
           class="card"
-          class:attention={stalled || quiet.length > 0}
+          class:attention={stalled || quiet.length > 0 || raised.length > 0}
           href={href({ name: "batch", id: b.dashboard.batch_id })}
         >
           <h3>
@@ -135,6 +159,10 @@
             <dt>Last reading</dt>
             <dd>{age(b.newest)}</dd>
           </dl>
+
+          {#if raised.length > 0}
+            <p class="raised">Alert: {raised.map(alertTitle).join(", ")}</p>
+          {/if}
 
           {#if quiet.length > 0}
             <ul class="stale">
@@ -256,6 +284,20 @@
 
   dd {
     margin: 0;
+  }
+
+  .open-alerts {
+    margin-bottom: 1.25rem;
+  }
+
+  .open-alerts h3 {
+    margin: 0 0 0.5rem;
+  }
+
+  .raised {
+    margin: 0.5rem 0 0;
+    color: #e0a35f;
+    font-size: 0.9em;
   }
 
   .stale {

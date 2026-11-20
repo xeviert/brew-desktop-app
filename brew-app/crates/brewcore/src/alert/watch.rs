@@ -71,11 +71,18 @@ impl Watch {
 }
 
 /// The whole set, as `PUT /watches` carries it and `brewd` stores it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WatchSet {
     pub v: u64,
     pub watches: Vec<Watch>,
+}
+
+/// Nothing watched, at this build's version — what a `brewd` with no state serves.
+impl Default for WatchSet {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
 }
 
 impl WatchSet {
@@ -153,6 +160,11 @@ pub(crate) mod tests {
             stability: StabilityParams::default(),
             health: HealthParams::default(),
         }
+    }
+
+    #[test]
+    fn the_empty_default_carries_the_version() {
+        assert_eq!(WatchSet::default().v, WATCH_VERSION);
     }
 
     #[test]

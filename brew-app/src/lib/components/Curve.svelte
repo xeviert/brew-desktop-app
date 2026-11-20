@@ -5,16 +5,20 @@
   import {
     batchSeries,
     batchStability,
+    listAlerts,
     listBatchEvents,
+    onAlerts,
     onSyncStatus,
     toApiError,
     type ApiError,
+    type AlertRow,
     type BatchEvent,
     type Config,
     type Curve,
     type SeriesRange,
     type StabilityView,
   } from "$lib/api";
+  import { alertTitle, isUrgent } from "$lib/alerts";
   import { buildPlot, toAbs, toX, type Drawn, type Plot, type XMode } from "$lib/chart";
   import { formatTimestamp } from "$lib/units";
 
@@ -38,7 +42,11 @@
   let events = $state.raw<BatchEvent[]>([]);
   let stability = $state.raw<StabilityView | null>(null);
   let error = $state<ApiError | null>(null);
-  let hover = $state<{ event: BatchEvent; left: number } | null>(null);
+  // Phase 6: what `brewd` raised, marked along the top like events.
+  let alerts = $state.raw<AlertRow[]>([]);
+  /** What the cursor is near: an event or an alert. */
+  type Hover = { key: string; title: string; ts: number; note: string | null; left: number };
+  let hover = $state<Hover | null>(null);
 
   let host: HTMLDivElement;
   let chart: uPlot | null = null;
@@ -62,10 +70,11 @@
     }
     busy = true;
     try {
-      const [c, e, s] = await Promise.allSettled([
+      const [c, e, s, a] = await Promise.allSettled([
         batchSeries(batchId, view, MAX_POINTS),
         all ? listBatchEvents(batchId) : null,
         all ? batchStability(batchId) : null,
+        all ? listAlerts(batchId, false) : null,
       ]);
       if (c.status === "fulfilled") {
         curve = c.value;
@@ -75,6 +84,7 @@
       }
       if (e.status === "fulfilled" && e.value) events = e.value;
       if (s.status === "fulfilled" && s.value) stability = s.value;
+      if (a.status === "fulfilled" && a.value) alerts = a.value;
     } finally {
       busy = false;
       if (again !== null) {
@@ -186,24 +196,48 @@
       ctx.fillStyle = pitch ? "#e6e6e6" : "#9aa0a6";
       ctx.fillText(pitch ? "pitch · t=0" : kindLabel(e.kind), x + 4 * px, bbox.top + 12 * px);
     }
+    // An alert is a triangle at the top where it was raised, and a bar along the top
+    // edge for as long as it held.
+    const size = 5 * px;
+    for (const a of alerts) {
+      const x = u.valToPos(toX(a.raised_at, m, pitchedAt), "x", true);
+      const end = a.cleared_at ?? Date.now() / 1000;
+      const x1 = Math.min(u.valToPos(toX(end, m, pitchedAt), "x", true), bbox.left + bbox.width);
+      if (x1 < bbox.left || x > bbox.left + bbox.width) continue;
+      const color = isUrgent(a) ? "#e0a35f" : "#7ba7d4";
+      ctx.fillStyle = `${color}55`;
+      ctx.fillRect(Math.max(x, bbox.left), bbox.top, Math.max(x1 - Math.max(x, bbox.left), px), 2 * px);
+      if (x < bbox.left) continue;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(x - size, bbox.top);
+      ctx.lineTo(x + size, bbox.top);
+      ctx.lineTo(x, bbox.top + 1.6 * size);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.restore();
   }
 
-  /** The nearest event within a few pixels of the cursor, for its note. */
+  /** The nearest event or alert within a few pixels of the cursor, for its note. */
   function hoverEvent(u: uPlot, m: XMode) {
     const left = u.cursor.left;
-    let best: { event: BatchEvent; left: number } | null = null;
+    let best: Hover | null = null;
     if (left !== undefined && left >= 0) {
       let nearest = 6;
-      for (const e of events) {
-        const x = u.valToPos(toX(e.ts, m, pitchedAt), "x");
+      const marks: Omit<Hover, "left">[] = [
+        ...events.map((e) => ({ key: `e${e.id}`, title: kindLabel(e.kind), ts: e.ts, note: e.note })),
+        ...alerts.map((a) => ({ key: `a${a.id}`, title: alertTitle(a), ts: a.raised_at, note: a.detail })),
+      ];
+      for (const mark of marks) {
+        const x = u.valToPos(toX(mark.ts, m, pitchedAt), "x");
         if (Math.abs(x - left) < nearest) {
           nearest = Math.abs(x - left);
-          best = { event: e, left: u.over.offsetLeft + x };
+          best = { ...mark, left: u.over.offsetLeft + x };
         }
       }
     }
-    if (best?.event.id !== hover?.event.id) hover = best;
+    if (best?.key !== hover?.key) hover = best;
   }
 
   /** A drag zooms at once on what is loaded, then refetches that range at full detail. */
@@ -269,6 +303,7 @@
     // Read so a new event list or new spans redraw.
     void events;
     void stability;
+    void alerts;
     untrack(() => {
       if (!p || p.drawn.length === 0) {
         chart?.destroy();
@@ -306,10 +341,12 @@
         void refresh(true);
       }
     });
+    const stopAlerts = onAlerts(() => void refresh(true));
     const resize = new ResizeObserver(() => chart?.setSize({ width: host.clientWidth, height: HEIGHT }));
     resize.observe(host);
     return () => {
       unlisten();
+      stopAlerts();
       resize.disconnect();
       chart?.destroy();
       chart = null;
@@ -334,6 +371,9 @@
     {#if stability?.spans.length}
       <span class="key"><i class="stable"></i>stable <i class="stalled"></i>stalled</span>
     {/if}
+    {#if alerts.length}
+      <span class="key">▼ alert</span>
+    {/if}
   </div>
 {/if}
 
@@ -341,9 +381,9 @@
   <div bind:this={host}></div>
   {#if hover}
     <div class="tip" style:left="{hover.left}px">
-      <strong>{kindLabel(hover.event.kind)}</strong>
-      <span>{formatTimestamp(hover.event.ts)}</span>
-      {#if hover.event.note}<p>{hover.event.note}</p>{/if}
+      <strong>{hover.title}</strong>
+      <span>{formatTimestamp(hover.ts)}</span>
+      {#if hover.note}<p>{hover.note}</p>{/if}
     </div>
   {/if}
 </div>
