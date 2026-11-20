@@ -608,7 +608,8 @@ Replaces Fermentrack as the path from sensor to `reading`. Shape:
 ESP32 (ESPHome) ─┐                      Raspberry Pi                    Desktop
                  ├─ MQTT ─► Mosquitto ─► brewd ─► journals ─ HTTP Range ─► brew-app
 iSpindle ────────┘                        │                                (SQLite)
-                                          └─ setpoints, profiles, alerts (Phase 6)
+                                          ├─ alerts → ntfy (Phase 6, built)
+                                          └─ setpoints, profiles (Phase 6, deferred)
 ```
 
 The control loop runs on the ESP32. `brewd` runs what must happen while the
@@ -1524,13 +1525,40 @@ correctly in French Excel.
 > relays, the ESPHome `thermostat`, the `Controller` trait and profiles. Alert
 > rules need no relays and can land before them.
 
-- [ ] Rule engine: condition on latest readings → action. Lives in `brewcore`,
-      runs in `brewd`
-- [ ] ~~Desktop notifications~~ — **v2:** push notifications from `brewd`
-      (proposal: ntfy). The desktop app may mirror them but is not the channel
-- [ ] Rule: fermentation finished (SG slope flat for N hours)
-- [ ] Rule: temp out of band, sensor stale, no data. "No data" includes the
-      iSpindle going silent — battery, or it sank
+**Built (2026-11-20): the alerts slice — 6a engine, 6b `brewd`, 6c desktop, 6d UI.**
+Everything that needs no relays and no new recipe model. Temp control and schedule
+steps stay below, unchecked.
+
+- [x] Rule engine: condition on latest readings → action. Lives in `brewcore`,
+      runs in `brewd`. **Refined:** `brewcore::alert`, pure. `brewd` has no
+      database, so the desktop pushes **watches** — per active batch: its journal
+      feeds (device + column + bound-since), OG, expected FG, band, target, and the
+      stability and health params — as one versioned `WatchSet` (`"v": 1`, unknown
+      or missing fields refused, as 5c's filters). `brewd` keeps a `DeviceBuffer`
+      per journal (a week plus margins, preloaded from live and rotated journals on
+      start) and judges the watches that read a device on every row it journals,
+      plus a minute tick for what changes with no row. A rule answers raise, clear
+      or can't tell; can't tell holds the alert as it is
+- [x] ~~Desktop notifications~~ — **v2:** push notifications from `brewd`
+      (proposal: ntfy). The desktop app may mirror them but is not the channel.
+      **Done:** ntfy, published as JSON to the server root (headers are ASCII; "°C"
+      and "⅓" are not). `[notify]` in `brewd.toml`; without it alerts are logged and
+      served, not pushed. Stalled, temp and silent are priority 4, the rest 3. A
+      failed push stays owed and retries after 5 min; ingest never waits on HTTP.
+      Settings → "Send a test notification" goes end to end through `brewd`
+- [x] Rule: fermentation finished (SG slope flat for N hours). **Done:** 4c's
+      `stability_history` over 4b's smoothing (`calc::smooth::smooth_runs`, now
+      shared with `db::series`) of the gravity feed, Plato converted first. A watch
+      only gets a gravity feed once `gravity.ispindel_unit` is set
+- [x] Rule: temp out of band, sensor stale, no data. "No data" includes the
+      iSpindle going silent — battery, or it sank. **Refined:** out of band raises
+      once the trailing run outside it spans 10 min (`TEMP_CONFIRM_SECS`), so a
+      lifted probe doesn't; it clears 0.3 °C back inside (`TEMP_CLEAR_MARGIN_C`).
+      Band: the batch's own ends, else the pitched yeasts' overlap (highest min,
+      lowest max) from actuals; a set end that would cross the yeast's other end
+      stands alone; no band, no rule. Silence is per device by 4f's rule, now pure
+      as `calc::health::stale_after_secs`, with 4f's battery/signal guess in the
+      detail
 - [ ] ~~Optional write-path: `setBeer=`/`setFridge=`/`setActiveProfile=` over the
       brewpi-script socket, behind a confirm; mirror it in our own records because
       Fermentrack's DB won't see it~~ — **v2:** a `Controller` trait whose first
@@ -1542,7 +1570,80 @@ correctly in French Excel.
       state file, since it has no database, and resumes it after a reboot. This is
       `brewd`'s first write endpoint, so it is where "LAN-only, no auth" gets
       revisited
-- [ ] Rules evaluated on ingest, not on a UI timer — in v2, on `brewd`'s ingest
+- [x] Rules evaluated on ingest, not on a UI timer — in v2, on `brewd`'s ingest.
+      **Done:** from `mqtt::Ingest::write`, after the journal append (and even when
+      it fails — the reading happened)
+
+**Added (2026-11-20):** gaps found against what the alerts are actually for.
+
+- [x] Rule: gravity reached — an absolute SG, a % of apparent attenuation, or the
+      ⅓ sugar break (computed from OG and expected FG). Over the smoothed series,
+      for the same reason the finished detector is. **Done:** the ⅓ break (against
+      the expected FG band's middle) and a per-batch target SG, both latched — a
+      wobble back above isn't news. % of attenuation not built: the target covers it
+- [x] Rule: stalled, as its own alert. 4c's `Stalled { since }` already tells it
+      apart from finished; the finished rule must not swallow it. **Done:** two
+      rules from one evaluation; each clears when the other raises
+- [ ] Rule: temp rate of change — more than X °C in Y hours, which catches a
+      stuck relay or an open fridge door while still inside the band
+- [ ] Rule: day N after pitch, for checks that are calendar-driven ("taste on
+      day 10")
+- [ ] Schedule steps beyond additions. `recipe_item.offset_hours` only schedules
+      ingredients, and only by time. Needs a step that can be a task (rack, degas,
+      cold crash, take a reading, ramp) as well as an addition, and a trigger that
+      is either an offset from pitch or a reading condition. The TOSNA ⅓-break
+      dose is the case `offset_hours` cannot express today
+- [ ] Rule: schedule step due, and overdue (due + grace, nothing logged). "Done"
+      is the matching `batch_ingredient` or `batch_event`, not a checkbox — the
+      log stays the one record
+- [ ] Per-batch schedule overrides — shift or skip a step without forking the
+      recipe version, and a schedule for a batch with no recipe
+- [ ] Rule scope: global defaults (temp band per beverage type, stale interval),
+      overridable per recipe version and per batch. Thresholds are config, as the
+      finished detector already says. **Partly:** per batch only — `batch_alert`
+      (`0012_alert.sql`: band ends, target SG, mute) over the yeast's band;
+      stability and health thresholds are the global config. Per beverage type and
+      per recipe version are not built; wait for batches to show they're needed
+- [x] Alert state, not just a message: one alert per rule × batch while the
+      condition holds, hysteresis on the way out so a reading hovering at the
+      edge doesn't flap, acknowledge and snooze. Without this every ingest re-fires.
+      **Done:** `alert::AlertBook`, keyed per batch × rule × device, persisted by
+      `brewd` (`alerts.json`, atomic replace). Ids start at the book's creation in
+      ms, so a lost state file never reuses an id the desktop holds. A rule the
+      watch stops producing, or a batch dropped from the watches (packaged,
+      archived, muted), is cleared with the reason. Pushed once; again once when a
+      snooze runs out; never after an ack. Ack and snooze go through `brewd`
+- [x] Alerts reach the desktop the way readings do: `brewd` writes an alert
+      journal, the app ingests it over the same `Range` fetch. The app shows an
+      inbox per batch and on Home, and marks alerts on the curve like events.
+      **Done:** `<state_dir>/alerts.csv`, written through `Journal` (same trim and
+      rotate promises), served at `GET /alerts/log` — outside `journal_dir`, so
+      it never lists as a device. The desktop folds it into `alert` keyed on
+      `brewd`'s ids, offset per base URL in `alert_sync`, moved in the same
+      transaction; a truncated log is reread from 0, and every write is an upsert.
+      Its own Tauri loop on the poll interval, not a `ReadingSource` — a refused
+      token must not back the readings off — woken early by a settings save or an
+      ack. Watches are pushed only when `GET /watches` differs, so a `brewd` that
+      lost its state gets them back next round. `alerts://changed` refreshes Home,
+      the batch screen and the curve (▼ where raised, a bar while it held)
+- [x] Every evaluation logged, fired or not — the finished-detection section asks
+      for this to tune thresholds against history. **Refined:** not every
+      evaluation — a row a second per probe would be most of the Pi's writes. 4c's
+      replay already re-evaluates every past batch under any threshold, and the
+      alert log records every transition (raised, cleared, acked, snoozed,
+      notified) with what the rule saw
+- [x] **Added:** `brewd`'s first write endpoints — `PUT /watches`,
+      `POST /alerts/<id>/ack`, `POST /alerts/<id>/snooze`, `POST /notify/test` —
+      need `Authorization: Bearer <http.token>` (≥ 16 chars, compared in constant
+      time). No token set refuses every write with 403, so an upgrade never opens
+      writes to the LAN by default. Reads stay open. The desktop's copy is
+      `brewd.token` in Settings; without it alerts are read, watches not pushed
+
+**Done when (alerts slice):** with the laptop shut, a batch whose vessel probe runs
+past its band for ten minutes buzzes the phone once, and opening the app shows the
+alert on Home, on the batch and on its curve, where acknowledging it stops any
+repeat. Verified 2026-11-20 against a local `brewd` and a stand-in ntfy; not yet
+against the Pi's broker or a real phone.
 
 ### Phase 7 — Production records
 - [ ] Cleaning / sanitation log, per vessel
