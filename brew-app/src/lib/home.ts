@@ -50,6 +50,7 @@ const METRIC_NAMES: Record<string, string> = {
   temp_c: "temp",
   gravity_temp_c: "iSpindle temp",
   setpoint_c: "setpoint",
+  fridge_temp_c: "fridge temp",
   room_temp_c: "room temp",
   battery_v: "battery",
   rssi_dbm: "signal",

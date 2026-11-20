@@ -123,6 +123,7 @@ fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
         commands::diff_recipe_versions,
         commands::list_streams,
         commands::set_vessel_streams,
+        commands::set_stream_metric,
         commands::resync,
         commands::rebuild,
         commands::sync_status,

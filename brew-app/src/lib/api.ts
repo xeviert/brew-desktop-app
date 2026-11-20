@@ -265,6 +265,10 @@ export const createVessel = (
 
 export const listStreams = (): Promise<Stream[]> => call("list_streams");
 
+/** Temperatures only. Past readings and batch bindings stay on the stream. */
+export const setStreamMetric = (streamId: number, metric: string): Promise<void> =>
+	call("set_stream_metric", { streamId, metric });
+
 /** Replaces the whole set. Batches already pitched keep what they were bound to. */
 export const setVesselStreams = (vesselId: number, streamIds: number[]): Promise<void> =>
 	call("set_vessel_streams", { vesselId, streamIds });

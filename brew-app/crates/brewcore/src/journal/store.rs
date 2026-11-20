@@ -230,7 +230,7 @@ fn fan_out<D: Dialect>(
     source_id: i64,
     rows: &[D::Row],
 ) -> Result<(Vec<tier1::NewReading>, usize)> {
-    let mut streams = tier1::stream_ids_for(tx, source_id)?;
+    let mut streams = tier1::ingest_stream_ids(tx, source_id)?;
     let known = streams.len();
     let mut out = Vec::with_capacity(rows.len() * 4);
 

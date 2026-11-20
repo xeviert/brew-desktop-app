@@ -4,6 +4,7 @@
     createVessel,
     listStreams,
     listVessels,
+    setStreamMetric,
     setVesselStreams,
     toApiError,
     type ApiError,
@@ -25,6 +26,27 @@
   // Manual streams are left out: they belong to a batch, not to the vessel it is in,
   // and packaging deliberately leaves them bound.
   const sensors = $derived(streams.filter((s) => s.source_kind !== "manual"));
+
+  // Mirrors `tier1::TEMPERATURE_METRICS`: a probe's column name says where it was
+  // expected to hang, not where it does.
+  const PLACES: [string, string][] = [
+    ["temp_c", "Fermenter (the beer)"],
+    ["fridge_temp_c", "Fridge air"],
+    ["room_temp_c", "Room"],
+    ["gravity_temp_c", "Hydrometer's own"],
+  ];
+  const thermometers = $derived(sensors.filter((s) => PLACES.some(([m]) => m === s.metric)));
+
+  async function place(stream: Stream, metric: string) {
+    error = null;
+    try {
+      await setStreamMetric(stream.id, metric);
+      stream.metric = metric;
+    } catch (e) {
+      error = toApiError(e);
+      await load();
+    }
+  }
 
   async function load() {
     try {
@@ -99,6 +121,24 @@
           {/each}
         {/if}
       </div>
+    {/each}
+  {/if}
+
+  {#if thermometers.length > 0}
+    <h3>Thermometers</h3>
+    <p class="hint">
+      Where each one measures. A probe hung in the fridge air reads the fridge, not the beer, whatever the device
+      calls it. Past readings move with it.
+    </p>
+    {#each thermometers as stream (stream.id)}
+      <label>
+        <span>{stream.source_name} <small class="metric">{stream.external_id}</small></span>
+        <select value={stream.metric} onchange={(e) => place(stream, e.currentTarget.value)}>
+          {#each PLACES as [metric, label] (metric)}
+            <option value={metric}>{label}</option>
+          {/each}
+        </select>
+      </label>
     {/each}
   {/if}
 

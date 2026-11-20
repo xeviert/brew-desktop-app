@@ -246,6 +246,48 @@ fn a_gravity_journal_waits_for_its_unit() {
     assert_eq!(rig.state().byte_offset, body.len() as u64);
 }
 
+/// The probe is said to measure room air partway through. Later rows land on the same
+/// stream under its new metric; no second `temp_c` stream appears for the column.
+#[test]
+fn a_moved_sensor_keeps_its_readings_and_gets_the_new_ones() {
+    let spec = JournalSpec {
+        rows: 10,
+        ..JournalScenario::Esp32.spec()
+    };
+    let body = spec.csv().into_bytes();
+    let half = body[..body.len() / 2]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .expect("a newline")
+        + 1;
+    let rig = Rig::new(&spec.remote_path());
+
+    rig.apply(None, fresh(&body[..half], 0)).expect("parses");
+    let probe = rig
+        .db
+        .read(|conn| tier1::stream_ids_for(conn, rig.source_id))
+        .unwrap()[&Metric::TempC];
+    rig.db
+        .write(|conn| {
+            let tx = conn.transaction()?;
+            tier1::set_stream_metric(&tx, probe, Metric::RoomTempC)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    rig.apply(None, fresh(&body[half..], half as u64)).expect("parses");
+
+    let all = rig.readings();
+    assert!(all.iter().all(|r| r.0 != Metric::TempC));
+    assert_eq!(all.iter().filter(|r| r.0 == Metric::RoomTempC).count(), 10);
+    let streams = rig
+        .db
+        .read(|conn| tier1::stream_ids_for(conn, rig.source_id))
+        .unwrap();
+    assert_eq!(streams.len(), 2);
+    assert_eq!(streams[&Metric::RoomTempC], probe);
+}
+
 fn fresh(bytes: &[u8], offset: u64) -> FetchOutcome {
     FetchOutcome::Fresh {
         bytes: bytes.to_vec(),

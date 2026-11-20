@@ -385,6 +385,20 @@ pub enum Error {
     #[error("stream {stream_id} is already bound to batch {batch_id} over that window")]
     StreamAlreadyBound { stream_id: i64, batch_id: i64 },
 
+    #[error("stream {stream_id} does not exist")]
+    NoSuchStream { stream_id: i64 },
+
+    /// See [`crate::db::tier1::set_stream_metric`]: temperatures only, and never a
+    /// manual stream.
+    #[error("stream {stream_id} can only be changed between temperatures, and not if it is manual")]
+    StreamMetricFixed { stream_id: i64 },
+
+    #[error("this sensor's source already has a {metric} stream; change that one first")]
+    StreamMetricTaken {
+        stream_id: i64,
+        metric: crate::db::Metric,
+    },
+
     // Phase 3e. `0006_manual.sql` leaves `entry_unit` and `instrument` open like every
     // vocabulary before them.
     #[error("unknown instrument '{0}' in the database")]
@@ -614,6 +628,9 @@ impl Error {
             Error::UsePitchRecorder { .. } => "db.use_pitch_recorder",
             Error::PitchEventLocked { .. } => "db.pitch_event_locked",
             Error::StreamAlreadyBound { .. } => "db.stream_already_bound",
+            Error::NoSuchStream { .. } => "db.no_such_stream",
+            Error::StreamMetricFixed { .. } => "db.stream_metric_fixed",
+            Error::StreamMetricTaken { .. } => "db.stream_metric_taken",
             Error::UnknownInstrument(_) => "db.unknown_instrument",
             Error::UnknownEntryUnit(_) => "db.unknown_entry_unit",
             Error::NoSuchMeasurement { .. } => "db.no_such_measurement",

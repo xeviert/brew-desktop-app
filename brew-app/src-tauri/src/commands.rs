@@ -957,6 +957,22 @@ pub async fn list_streams(db: tauri::State<'_, Db>) -> ApiResult<Vec<StreamRow>>
     Ok(db.read(tier1::list_streams)?)
 }
 
+/// What a sensor measures, when its column name says otherwise. Past readings and
+/// batch bindings stay on the stream; only what the chart calls them changes.
+#[tauri::command]
+pub async fn set_stream_metric(
+    db: tauri::State<'_, Db>,
+    stream_id: i64,
+    metric: Metric,
+) -> ApiResult<()> {
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        tier1::set_stream_metric(&tx, stream_id, metric)?;
+        tx.commit()?;
+        Ok(())
+    })?)
+}
+
 /// Replace a vessel's default streams. Existing bindings are untouched; the next pitch
 /// is what changes.
 #[tauri::command]

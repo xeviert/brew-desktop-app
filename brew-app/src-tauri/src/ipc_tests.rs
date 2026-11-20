@@ -223,6 +223,48 @@ fn a_vessel_is_created_and_given_default_streams() {
     );
 }
 
+#[test]
+fn a_sensor_is_told_what_it_measures() {
+    let app = Harness::new();
+    let (probe, gravity) = app
+        .db
+        .write(|conn| {
+            let tx = conn.transaction()?;
+            let source = tier1::create_source(&tx, SourceKind::BrewdJournal, "esp32-1", None)?;
+            let probe = tier1::create_stream(&tx, source, "vessel_temp", Metric::TempC)?;
+            let gravity = tier1::create_stream(&tx, source, "gravity", Metric::Sg)?;
+            tx.commit()?;
+            Ok((probe, gravity))
+        })
+        .unwrap();
+
+    app.invoke(
+        "set_stream_metric",
+        json!({ "streamId": probe, "metric": "fridge_temp_c" }),
+    )
+    .unwrap();
+    let streams = app.invoke("list_streams", json!({})).unwrap();
+    let moved = streams
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == probe)
+        .unwrap();
+    assert_eq!(moved["metric"], "fridge_temp_c");
+
+    let err = app.api_error(
+        "set_stream_metric",
+        json!({ "streamId": gravity, "metric": "temp_c" }),
+    );
+    assert_eq!(err["code"], "db.stream_metric_fixed");
+
+    let err = app.api_error(
+        "set_stream_metric",
+        json!({ "streamId": 999, "metric": "temp_c" }),
+    );
+    assert_eq!(err["code"], "db.no_such_stream");
+}
+
 /// The name is trimmed before the UNIQUE check, so padding does not make a second FV1.
 #[test]
 fn a_refused_vessel_write_comes_back_with_a_code() {

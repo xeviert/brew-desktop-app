@@ -54,6 +54,10 @@ pub const MIGRATIONS: &[Migration] = &[
         10,
         include_str!("../../migrations/0010_reference_archive.sql"),
     ),
+    plain(
+        11,
+        include_str!("../../migrations/0011_stream_source_metric.sql"),
+    ),
 ];
 
 /// The schema version this build knows about.

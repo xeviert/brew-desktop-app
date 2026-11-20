@@ -112,6 +112,67 @@ pub fn stream_ids_for(conn: &Connection, source_id: i64) -> Result<HashMap<Metri
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// [`stream_ids_for`] keyed by what the dialect calls each stream rather than what it
+/// measures, for the sync write path. A stream moved with [`set_stream_metric`] is
+/// still found under its column's metric, so its readings keep arriving on it.
+pub fn ingest_stream_ids(conn: &Connection, source_id: i64) -> Result<HashMap<Metric, i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(source_metric, metric), id FROM stream WHERE source_id = ?",
+    )?;
+    let rows = stmt.query_map([source_id], |row| {
+        Ok((row.get::<_, Metric>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The metrics a sensor stream can be moved between: all °C, so every reading already
+/// stored stays true under the new name.
+pub const TEMPERATURE_METRICS: [Metric; 4] = [
+    Metric::TempC,
+    Metric::FridgeTempC,
+    Metric::RoomTempC,
+    Metric::GravityTempC,
+];
+
+/// Say what a sensor stream actually measures: the ESP32's `vessel_temp` probe hung in
+/// the fridge air is a fridge temperature, whatever its column is called.
+///
+/// Only between [`TEMPERATURE_METRICS`], and never on a manual stream: manual entry
+/// picks its stream by metric, so moving one would split its series in two. A source
+/// carries one stream per metric — the chart and [`stream_ids_for`] both rely on it —
+/// so a metric another of its streams already has is refused.
+pub fn set_stream_metric(tx: &Transaction<'_>, stream_id: i64, metric: Metric) -> Result<()> {
+    let (source_id, current, kind): (i64, Metric, SourceKind) = tx
+        .query_row(
+            "SELECT s.source_id, s.metric, src.kind FROM stream s \
+             JOIN source src ON src.id = s.source_id WHERE s.id = ?",
+            [stream_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?
+        .ok_or(Error::NoSuchStream { stream_id })?;
+    if current == metric {
+        return Ok(());
+    }
+    if kind == SourceKind::Manual
+        || !TEMPERATURE_METRICS.contains(&current)
+        || !TEMPERATURE_METRICS.contains(&metric)
+    {
+        return Err(Error::StreamMetricFixed { stream_id });
+    }
+    if stream_ids_for(tx, source_id)?.contains_key(&metric) {
+        return Err(Error::StreamMetricTaken { stream_id, metric });
+    }
+    // `NULLIF` clears `source_metric` when a stream is moved back to its column's own
+    // metric, so "agrees with the dialect" has one spelling.
+    tx.execute(
+        "UPDATE stream SET source_metric = NULLIF(COALESCE(source_metric, metric), ?1), \
+         metric = ?1 WHERE id = ?2",
+        params![metric, stream_id],
+    )?;
+    Ok(())
+}
+
 /// A stream with the source it comes from, for the pickers that bind one to a vessel.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct StreamRow {
@@ -337,6 +398,55 @@ mod tests {
         assert_eq!(found.get(&Metric::TempC), Some(&first));
         assert_eq!(found.get(&Metric::RoomTempC), Some(&other));
         assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn a_moved_stream_is_still_where_sync_looks_for_its_column() {
+        let mut conn = db();
+        let source_id = source(&conn, "s");
+        let tx = conn.transaction().unwrap();
+        let probe = create_stream(&tx, source_id, "vessel_temp", Metric::TempC).unwrap();
+
+        set_stream_metric(&tx, probe, Metric::FridgeTempC).unwrap();
+        assert_eq!(stream_ids_for(&tx, source_id).unwrap()[&Metric::FridgeTempC], probe);
+        assert_eq!(ingest_stream_ids(&tx, source_id).unwrap()[&Metric::TempC], probe);
+
+        // Moved again, the column it came from is not forgotten; moved home, it is.
+        set_stream_metric(&tx, probe, Metric::RoomTempC).unwrap();
+        assert_eq!(ingest_stream_ids(&tx, source_id).unwrap()[&Metric::TempC], probe);
+        set_stream_metric(&tx, probe, Metric::TempC).unwrap();
+        let source_metric: Option<String> = tx
+            .query_row("SELECT source_metric FROM stream WHERE id = ?", [probe], |r| r.get(0))
+            .unwrap();
+        assert_eq!(source_metric, None);
+    }
+
+    #[test]
+    fn a_stream_cannot_take_a_metric_its_source_already_has() {
+        let mut conn = db();
+        let source_id = source(&conn, "s");
+        let tx = conn.transaction().unwrap();
+        let probe = create_stream(&tx, source_id, "vessel_temp", Metric::TempC).unwrap();
+        create_stream(&tx, source_id, "chamber_temp", Metric::FridgeTempC).unwrap();
+
+        let err = set_stream_metric(&tx, probe, Metric::FridgeTempC).unwrap_err();
+        assert_eq!(err.code(), "db.stream_metric_taken");
+        assert_eq!(stream_ids_for(&tx, source_id).unwrap()[&Metric::TempC], probe);
+    }
+
+    #[test]
+    fn only_a_sensors_temperatures_can_be_moved() {
+        let mut conn = db();
+        let journal = source(&conn, "s");
+        let manual = create_source(&conn, SourceKind::Manual, "m", None).unwrap();
+        let tx = conn.transaction().unwrap();
+        let sg = create_stream(&tx, journal, "gravity", Metric::Sg).unwrap();
+        let typed = create_stream(&tx, manual, "temp_c", Metric::TempC).unwrap();
+
+        for (stream, metric) in [(sg, Metric::TempC), (typed, Metric::FridgeTempC)] {
+            let err = set_stream_metric(&tx, stream, metric).unwrap_err();
+            assert_eq!(err.code(), "db.stream_metric_fixed", "{stream}");
+        }
     }
 
     /// The dedupe that makes a Range-ignoring proxy harmless: the same bytes arrive
