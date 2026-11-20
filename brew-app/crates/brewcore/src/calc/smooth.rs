@@ -83,6 +83,23 @@ pub fn rolling_median(points: &[(Timestamp, f64)], window_secs: i64) -> Result<S
     Ok(out)
 }
 
+/// A run of [`smooth_runs`]'s input and its smoothing.
+pub type SmoothedRun<'a> = (&'a [(Timestamp, f64)], Smoothed);
+
+/// [`rolling_median`] over each run of `points` with no step longer than `gap`, each
+/// run on its own: the level can move while the Pi is off, and a window must not span
+/// that. Every run comes back beside its smoothing.
+pub fn smooth_runs(
+    points: &[(Timestamp, f64)],
+    gap: i64,
+    window_secs: i64,
+) -> Result<Vec<SmoothedRun<'_>>> {
+    points
+        .chunk_by(|a, b| a.0.secs_until(b.0) <= gap)
+        .map(|run| Ok((run, rolling_median(run, window_secs)?)))
+        .collect()
+}
+
 /// Reorders `values`. Even counts take the mean of the two middles.
 fn median(values: &mut [f64]) -> f64 {
     let len = values.len();

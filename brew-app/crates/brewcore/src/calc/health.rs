@@ -10,6 +10,30 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::units::Timestamp;
+
+/// The least [`stale_after_secs`] returns: a 30 s probe that misses a few readings is
+/// not news.
+pub const STALE_FLOOR_SECS: i64 = 600;
+
+/// The median spacing of `times`, oldest first. `None` under two.
+pub fn median_interval(times: &[Timestamp]) -> Option<i64> {
+    let mut diffs: Vec<i64> = times.windows(2).map(|w| w[0].secs_until(w[1])).collect();
+    if diffs.is_empty() {
+        return None;
+    }
+    diffs.sort_unstable();
+    Some(diffs[diffs.len() / 2])
+}
+
+/// How long a device may go quiet before it is stale: 3× its median interval, at
+/// least [`STALE_FLOOR_SECS`]. Derived, not configured — a 30 s probe and a 15 min
+/// iSpindle can't share a threshold, and the interval is a device setting. Phase 4f's
+/// card and Phase 6's alert both judge by this.
+pub fn stale_after_secs(median_interval: Option<i64>) -> i64 {
+    median_interval.map_or(STALE_FLOOR_SECS, |m| (m * 3).max(STALE_FLOOR_SECS))
+}
+
 /// An iSpindle's LiPo is nearly flat here; below ~3.5 V it browns out mid-send.
 pub const BATTERY_WARN_V_DEFAULT: f64 = 3.6;
 /// Below this the ESP8266 drops packets and retries eat the battery.

@@ -46,6 +46,15 @@ const COLUMNS: [(&str, Option<Metric>); 9] = [
     ("room_temp", Some(Metric::RoomTempC)),
 ];
 
+/// The metric a journal column carries, by the same table the parser uses. Phase 6's
+/// alerts read journals on the Pi and need to find a device's battery and signal.
+pub fn column_metric(column: &str) -> Option<Metric> {
+    COLUMNS
+        .iter()
+        .find(|(name, _)| *name == column)
+        .and_then(|(_, metric)| *metric)
+}
+
 /// The iSpindle gravity unit a [`JournalCsv`] parses with.
 pub trait GravityUnit {
     const UNIT: Option<IspindelUnit>;

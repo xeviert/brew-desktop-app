@@ -480,6 +480,26 @@ pub enum Error {
     #[error("a saved query named '{name}' already exists")]
     SavedQueryNameTaken { name: String },
 
+    /// Phase 6. A watch set from a desktop that means something else by a watch.
+    #[error(
+        "watch set is version {found}; this build reads version {}",
+        crate::alert::WATCH_VERSION
+    )]
+    WatchVersion { found: String },
+
+    #[error("invalid watch: {reason}")]
+    InvalidWatch { reason: String },
+
+    #[error("unreadable alert log line: {detail}")]
+    InvalidAlertLog { detail: String },
+
+    #[error("alert {id} is not raised")]
+    NoSuchAlert { id: u64 },
+
+    /// Phase 6. `brewd`'s write endpoints need a token, and none is set here.
+    #[error("no brewd token is set")]
+    BrewdTokenUnset,
+
     #[error("source {source_id} has no sync_state row")]
     MissingSyncState { source_id: i64 },
 
@@ -646,6 +666,11 @@ impl Error {
             Error::NoSuchSavedQuery { .. } => "db.no_such_saved_query",
             Error::SavedQueryNameEmpty => "query.name_empty",
             Error::SavedQueryNameTaken { .. } => "query.name_taken",
+            Error::WatchVersion { .. } => "alert.watch_version",
+            Error::InvalidWatch { .. } => "alert.invalid_watch",
+            Error::InvalidAlertLog { .. } => "alert.invalid_log",
+            Error::NoSuchAlert { .. } => "alert.no_such_alert",
+            Error::BrewdTokenUnset => "alert.token_unset",
             Error::MissingSyncState { .. } => "sync.missing_state",
             Error::SourceNotScheduled { .. } => "sync.not_scheduled",
             Error::BackgroundTask { .. } => "sync.task",

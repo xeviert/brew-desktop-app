@@ -32,7 +32,8 @@ use crate::{
     Error, Result,
     calc::{
         gravity::{sg_to_brix, sg_to_plato},
-        smooth::{SG_WINDOW_DEFAULT, Smoothed, rolling_median},
+        health,
+        smooth::{SG_WINDOW_DEFAULT, Smoothed, smooth_runs},
     },
     units::{GravityDisplay, Sg, Timestamp},
 };
@@ -191,28 +192,23 @@ pub fn median_interval(
         )?
         .collect::<rusqlite::Result<_>>()?;
 
-    let mut diffs: Vec<i64> = ts.windows(2).map(|w| w[0] - w[1]).collect();
-    if diffs.is_empty() {
-        return Ok(None);
-    }
-    diffs.sort_unstable();
-    Ok(Some(diffs[diffs.len() / 2]))
+    let ts: Vec<Timestamp> = ts.into_iter().rev().map(Timestamp::from_secs).collect();
+    Ok(health::median_interval(&ts))
 }
 
-/// The least [`stale_after`] returns: a 30 s probe that misses a few readings is not
-/// news.
-pub const STALE_FLOOR_SECS: i64 = 600;
+pub use crate::calc::health::STALE_FLOOR_SECS;
 
-/// How long a stream may go quiet before it is stale: 3× its median interval over the
-/// day up to `newest`, at least [`STALE_FLOOR_SECS`]. Up to its newest reading rather
-/// than now, so a device that has gone silent still has an interval to be late by.
+/// How long a stream may go quiet before it is stale: [`health::stale_after_secs`]
+/// over the day up to `newest`. Up to its newest reading rather than now, so a device
+/// that has gone silent still has an interval to be late by.
 pub fn stale_after(conn: &Connection, stream_id: i64, newest: Timestamp) -> Result<i64> {
     let day = SeriesRange {
         start: newest.saturating_add_secs(-86_400),
         end: newest.saturating_add_secs(1),
     };
-    Ok(median_interval(conn, stream_id, day)?
-        .map_or(STALE_FLOOR_SECS, |m| (m * 3).max(STALE_FLOOR_SECS)))
+    Ok(health::stale_after_secs(median_interval(
+        conn, stream_id, day,
+    )?))
 }
 
 /// A bound stream's newest reading inside the batch's windows.
@@ -656,8 +652,7 @@ fn smoothed_rows(
     let mut out = Vec::new();
     for w in padded {
         let rows = raw_rows(conn, stream.stream_id, &[w], None)?;
-        for run in rows.chunk_by(|a, b| a.0.secs_until(b.0) <= gap) {
-            let Smoothed { points, partial } = rolling_median(run, SG_WINDOW_DEFAULT)?;
+        for (run, Smoothed { points, partial }) in smooth_runs(&rows, gap, SG_WINDOW_DEFAULT)? {
             out.extend(
                 run.iter()
                     .zip(points.into_iter().zip(partial))

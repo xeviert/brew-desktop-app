@@ -103,7 +103,7 @@ impl StabilityParams {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FgSource {
     /// `recipe_version.target_fg`.
@@ -113,7 +113,7 @@ pub enum FgSource {
 }
 
 /// Where the ferment should end, as a band. A recipe target is a band of one.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExpectedFg {
     pub lo: Sg,
     pub hi: Sg,
