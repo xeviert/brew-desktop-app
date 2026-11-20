@@ -61,6 +61,15 @@ pub struct Watch {
     pub health: HealthParams,
 }
 
+impl Watch {
+    /// Whether a row from `device` can change any of this watch's verdicts.
+    pub fn reads(&self, device: &str) -> bool {
+        self.devices.iter().any(|d| d == device)
+            || self.gravity.as_ref().is_some_and(|f| f.device == device)
+            || self.temp.as_ref().is_some_and(|f| f.device == device)
+    }
+}
+
 /// The whole set, as `PUT /watches` carries it and `brewd` stores it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

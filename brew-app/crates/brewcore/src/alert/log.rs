@@ -4,13 +4,20 @@
 //! resume as a journal (`alert::sync`), so an alert raised at 3 am is in
 //! `brewery.db` the next time the app opens. Lines are facts, never rewritten: a
 //! reader that applies them in order, twice, ends where it would have once.
-
-use std::io::Write;
+//!
+//! `brewd` writes it through the same `Journal` as a device's readings, so it gets the
+//! same promises: a header row, one record per `\n`-terminated line, a half-written
+//! last line trimmed on restart.
 
 use serde::{Deserialize, Serialize};
 
 use super::Rule;
 use crate::{Error, Result, units::Timestamp};
+
+/// Every column after `time`, in order.
+pub const LOG_COLUMNS: [&str; 7] = [
+    "alert_id", "batch_id", "rule", "device", "event", "until", "detail",
+];
 
 pub const LOG_HEADER: &str = "time,alert_id,batch_id,rule,device,event,until,detail";
 
@@ -39,17 +46,31 @@ pub struct LogRecord {
     pub detail: String,
 }
 
-/// One line per record, `\n`-terminated, no header.
-pub fn write_records(out: &mut impl Write, records: &[LogRecord]) -> Result<()> {
-    let mut csv = csv::WriterBuilder::new()
-        .has_headers(false)
-        .terminator(csv::Terminator::Any(b'\n'))
-        .from_writer(out);
-    for r in records {
-        csv.serialize(r)?;
+impl LogRecord {
+    /// The record after `time`, as [`LOG_COLUMNS`] orders them.
+    pub fn cells(&self) -> Vec<Option<String>> {
+        vec![
+            Some(self.alert_id.to_string()),
+            Some(self.batch_id.to_string()),
+            Some(self.rule.as_str().to_owned()),
+            self.device.clone(),
+            Some(self.event.as_str().to_owned()),
+            self.until.map(|t| t.as_secs().to_string()),
+            Some(self.detail.clone()).filter(|d| !d.is_empty()),
+        ]
     }
-    csv.flush()?;
-    Ok(())
+}
+
+impl LogEvent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LogEvent::Raised => "raised",
+            LogEvent::Cleared => "cleared",
+            LogEvent::Acked => "acked",
+            LogEvent::Snoozed => "snoozed",
+            LogEvent::Notified => "notified",
+        }
+    }
 }
 
 /// Records from complete lines without the header. A line that doesn't read is an
@@ -72,7 +93,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn records_round_trip_with_commas_and_empty_options() {
+    fn cells_read_back_with_commas_and_empty_options() {
         let records = vec![
             LogRecord {
                 time: Timestamp::from_secs(1_790_000_000),
@@ -95,8 +116,17 @@ mod tests {
                 detail: String::new(),
             },
         ];
-        let mut out = Vec::new();
-        write_records(&mut out, &records).unwrap();
+        let mut csv = csv::WriterBuilder::new()
+            .terminator(csv::Terminator::Any(b'\n'))
+            .from_writer(Vec::new());
+        for r in &records {
+            let time = r.time.as_secs().to_string();
+            let cells = r.cells();
+            let cells = cells.iter().map(|c| c.as_deref().unwrap_or(""));
+            csv.write_record(std::iter::once(time.as_str()).chain(cells))
+                .unwrap();
+        }
+        let out = csv.into_inner().unwrap();
         let text = String::from_utf8(out.clone()).unwrap();
         assert_eq!(
             text,

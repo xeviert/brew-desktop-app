@@ -1,27 +1,35 @@
 //! `brewd` — the Pi daemon. Subscribes to the broker, journals every reading per
 //! device, and serves the journals over HTTP for the desktop app to sync. It runs
-//! what must happen while the laptop is shut; see docs/BUILDOUT.md, Phase V.
+//! what must happen while the laptop is shut; see docs/BUILDOUT.md, Phases V and 6:
+//! since Phase 6 that includes judging every reading against the alert rules and
+//! pushing what fires to a phone.
 //!
 //! No SQLite here: `brewery.db` stays on the desktop, and `brewd` owns only its
-//! journals and its config.
+//! journals, its config, and the state files of [`alerts`].
 //!
 //! Usage: `brewd [config path]`, default `/etc/brewd/brewd.toml`.
 
+mod alerts;
 mod burst;
 mod config;
 mod http;
 mod journal;
 mod mqtt;
+mod notify;
+mod state;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
 
 use brewcore::units::Timestamp;
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 use tracing_subscriber::EnvFilter;
 
+use alerts::Alerts;
 use config::{Config, DEFAULT_CONFIG_PATH};
 use journal::Journal;
+use notify::Ntfy;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -63,7 +71,16 @@ async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             Journal::open(&config.journal_dir, &device.name, &columns, now)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let ingest = mqtt::Ingest::new(&config.devices, journals, config.burst_window());
+    let alerts = Arc::new(Mutex::new(Alerts::open(
+        &config.state_dir,
+        &config.journal_dir,
+        &config.devices,
+        now,
+    )?));
+    let wake = Arc::new(Notify::new());
+    let ntfy = config.notify.as_ref().map(Ntfy::new).transpose()?;
+    let ingest = mqtt::Ingest::new(&config.devices, journals, config.burst_window())
+        .with_alerts(alerts.clone(), wake.clone());
 
     let listener = tokio::net::TcpListener::bind(config.http.listen).await?;
     tracing::info!(
@@ -71,6 +88,9 @@ async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         listen = %config.http.listen,
         journals = %config.journal_dir.display(),
         devices = config.devices.len(),
+        state = %config.state_dir.display(),
+        notify = config.notify.is_some(),
+        writes = config.http.token.is_some(),
         "brewd started"
     );
 
@@ -82,11 +102,26 @@ async fn run(path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let mut http_stopped = stopped.clone();
-    let server = axum::serve(listener, http::router(config.journal_dir.clone()))
-        .with_graceful_shutdown(async move {
-            let _ = http_stopped.changed().await;
-        });
-    let (served, ()) = tokio::join!(server, mqtt::run(&config, ingest, stopped));
+    let app = http::AppState {
+        journal_dir: Arc::new(config.journal_dir.clone()),
+        alert_log: Arc::new(config.state_dir.join(format!(
+            "{}.{}",
+            alerts::LOG_NAME,
+            brewcore::journal::JOURNAL_EXTENSION
+        ))),
+        alerts: alerts.clone(),
+        token: config.http.token.as_deref().map(Arc::from),
+        ntfy: ntfy.clone(),
+        wake: wake.clone(),
+    };
+    let server = axum::serve(listener, http::router(app)).with_graceful_shutdown(async move {
+        let _ = http_stopped.changed().await;
+    });
+    let (served, (), ()) = tokio::join!(
+        server,
+        mqtt::run(&config, ingest, stopped.clone()),
+        alerts::run(alerts, ntfy, wake, stopped),
+    );
     served?;
     Ok(())
 }

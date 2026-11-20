@@ -1,11 +1,17 @@
-//! Read-only journal access for the desktop app. LAN-only, no auth — the trust model
-//! Fermentrack's `/data/` had. Phase 6's first write endpoint is where that gets
-//! revisited, not here.
+//! The desktop app's side of `brewd`. LAN-only.
 //!
-//! `GET /journals/` lists every journal, rotated ones included: the listing
-//! Fermentrack never had. `GET /journals/<name>` serves one through `tower-http`'s
-//! `ServeFile`, which answers `Range` with `206` + `Content-Range`, or `416` past the
-//! end — the two shapes `brewcore::journal::Client` resumes from.
+//! Reads are open, the trust model Fermentrack's `/data/` had. `GET /journals/` lists
+//! every journal, rotated ones included: the listing Fermentrack never had.
+//! `GET /journals/<name>` serves one through `tower-http`'s `ServeFile`, which answers
+//! `Range` with `206` + `Content-Range`, or `416` past the end — the two shapes
+//! `brewcore::journal::Client` resumes from. Phase 6 adds `GET /watches`,
+//! `GET /alerts` and `GET /alerts/log`, the last served the same way.
+//!
+//! Writes are Phase 6's, and the first `brewd` has: `PUT /watches`,
+//! `POST /alerts/<id>/ack`, `POST /alerts/<id>/snooze` and `POST /notify/test`. Each
+//! needs `Authorization: Bearer <http.token>`. A wrong or missing token is `401`; a
+//! `brewd` with no token configured refuses every write with `403`, so an upgrade
+//! never opens writes to the LAN by default.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,34 +19,177 @@ use std::time::UNIX_EPOCH;
 
 use axum::Json;
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode, header::AUTHORIZATION};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
+use brewcore::alert::{Alert, WatchSet};
 use brewcore::journal::{JournalEntry, is_journal_name};
 use brewcore::units::Timestamp;
+use serde::Deserialize;
+use tokio::sync::Notify;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
-type Dir = Arc<PathBuf>;
+use crate::alerts::{self, Shared};
+use crate::notify::Ntfy;
 
-pub fn router(journal_dir: PathBuf) -> Router {
+#[derive(Clone)]
+pub struct AppState {
+    pub journal_dir: Arc<PathBuf>,
+    pub alert_log: Arc<PathBuf>,
+    pub alerts: Shared,
+    pub token: Option<Arc<str>>,
+    pub ntfy: Option<Ntfy>,
+    /// Tells [`alerts::run`] something may be owed a notification.
+    pub wake: Arc<Notify>,
+}
+
+pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/journals", get(list))
         .route("/journals/", get(list))
         .route("/journals/{name}", get(journal))
-        .with_state(Arc::new(journal_dir))
+        .route("/watches", get(get_watches).put(put_watches))
+        .route("/alerts", get(get_alerts))
+        .route("/alerts/log", get(alert_log))
+        .route("/alerts/{id}/ack", post(ack))
+        .route("/alerts/{id}/snooze", post(snooze))
+        .route("/notify/test", post(notify_test))
+        .with_state(state)
 }
 
-async fn list(State(dir): State<Dir>) -> Result<Json<Vec<JournalEntry>>, StatusCode> {
+type Refusal = (StatusCode, String);
+
+fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), Refusal> {
+    let Some(token) = &state.token else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "brewd has no http.token set, so writes are off".into(),
+        ));
+    };
+    let given = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    match given {
+        Some(given) if same(given.as_bytes(), token.as_bytes()) => Ok(()),
+        _ => Err((StatusCode::UNAUTHORIZED, "wrong or missing token".into())),
+    }
+}
+
+/// Every byte compared whatever the first mismatch, so the time taken says nothing
+/// about how much of a guess was right.
+fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+async fn get_watches(State(state): State<AppState>) -> Json<WatchSet> {
+    Json(alerts::lock(&state.alerts).watches().clone())
+}
+
+async fn put_watches(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, Refusal> {
+    authorize(&state, &headers)?;
+    let set = WatchSet::from_json(&body).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("{}: {e}", e.code()),
+        )
+    })?;
+    let raised = alerts::lock(&state.alerts)
+        .set_watches(set, Timestamp::now())
+        .map_err(|e| {
+            tracing::error!(error = %e, "cannot save watches");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "cannot save watches".into(),
+            )
+        })?;
+    if raised {
+        state.wake.notify_one();
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_alerts(State(state): State<AppState>) -> Json<Vec<Alert>> {
+    Json(alerts::lock(&state.alerts).alerts().to_vec())
+}
+
+async fn alert_log(State(state): State<AppState>, request: Request) -> Response {
+    match ServeFile::new(&*state.alert_log).oneshot(request).await {
+        Ok(response) => response.map(Body::new),
+        Err(never) => match never {},
+    }
+}
+
+async fn ack(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+) -> Result<StatusCode, Refusal> {
+    authorize(&state, &headers)?;
+    if alerts::lock(&state.alerts).ack(id, Timestamp::now()) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::NOT_FOUND, format!("alert {id} is not raised")))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Snooze {
+    until: Timestamp,
+}
+
+async fn snooze(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, Refusal> {
+    authorize(&state, &headers)?;
+    let Snooze { until } = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
+    if alerts::lock(&state.alerts).snooze(id, until, Timestamp::now()) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::NOT_FOUND, format!("alert {id} is not raised")))
+    }
+}
+
+async fn notify_test(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, Refusal> {
+    authorize(&state, &headers)?;
+    let Some(ntfy) = &state.ntfy else {
+        return Err((StatusCode::CONFLICT, "brewd has no [notify] section".into()));
+    };
+    ntfy.send(
+        "brewd: test",
+        "Alerts from brewd will arrive like this.",
+        3,
+        &[],
+    )
+    .await
+    .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list(State(state): State<AppState>) -> Result<Json<Vec<JournalEntry>>, StatusCode> {
+    let dir = &state.journal_dir;
     let internal = |e: std::io::Error| {
         tracing::error!(dir = %dir.display(), error = %e, "cannot list journals");
         StatusCode::INTERNAL_SERVER_ERROR
     };
 
     let mut entries = Vec::new();
-    let mut read = tokio::fs::read_dir(&*dir).await.map_err(internal)?;
+    let mut read = tokio::fs::read_dir(dir.as_path()).await.map_err(internal)?;
     while let Some(entry) = read.next_entry().await.map_err(internal)? {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
@@ -67,12 +216,19 @@ async fn list(State(dir): State<Dir>) -> Result<Json<Vec<JournalEntry>>, StatusC
     Ok(Json(entries))
 }
 
-async fn journal(State(dir): State<Dir>, Path(name): Path<String>, request: Request) -> Response {
+async fn journal(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    request: Request,
+) -> Response {
     // `Path` has already percent-decoded, so `..%2F` arrives as `../` and fails here.
     if !is_journal_name(&name) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    match ServeFile::new(dir.join(&name)).oneshot(request).await {
+    match ServeFile::new(state.journal_dir.join(&name))
+        .oneshot(request)
+        .await
+    {
         Ok(response) => response.map(Body::new),
         Err(never) => match never {},
     }
@@ -81,6 +237,7 @@ async fn journal(State(dir): State<Dir>, Path(name): Path<String>, request: Requ
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alerts::Alerts;
     use crate::journal::Journal;
     use brewcore::journal::{Client, FetchOutcome};
     use reqwest::header::{CONTENT_RANGE, RANGE};
@@ -88,11 +245,32 @@ mod tests {
 
     const T0: Timestamp = Timestamp::from_secs(1_790_000_000);
 
-    async fn serve(dir: PathBuf) -> SocketAddr {
+    const TOKEN: &str = "0123456789abcdef";
+
+    /// State in a directory of its own beside `journal_dir`'s, so the alert log never
+    /// lands among the journals.
+    fn app(journal_dir: PathBuf, token: Option<&str>, ntfy: Option<Ntfy>) -> AppState {
+        let state_dir = tempfile::tempdir().unwrap().keep();
+        let alerts = Alerts::open(&state_dir, &journal_dir, &[], T0).unwrap();
+        AppState {
+            journal_dir: Arc::new(journal_dir),
+            alert_log: Arc::new(state_dir.join("alerts.csv")),
+            alerts: Arc::new(std::sync::Mutex::new(alerts)),
+            token: token.map(Arc::from),
+            ntfy,
+            wake: Arc::new(Notify::new()),
+        }
+    }
+
+    async fn serve_app(app: AppState) -> SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, router(dir)).await.unwrap() });
+        tokio::spawn(async move { axum::serve(listener, router(app)).await.unwrap() });
         addr
+    }
+
+    async fn serve(dir: PathBuf) -> SocketAddr {
+        serve_app(app(dir, None, None)).await
     }
 
     fn some(values: &[&str]) -> Vec<Option<String>> {
@@ -210,5 +388,157 @@ mod tests {
         };
         assert_eq!(at, offset);
         assert_eq!(bytes, b"1790000900,44.9,1.011\n");
+    }
+
+    #[tokio::test]
+    async fn writes_need_the_token_and_are_off_without_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = serde_json::to_vec(&WatchSet::new(vec![])).unwrap();
+        let http = reqwest::Client::new();
+
+        let open = serve_app(app(dir.path().to_owned(), None, None)).await;
+        let off = http
+            .put(format!("http://{open}/watches"))
+            .bearer_auth(TOKEN)
+            .body(body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(off.status(), 403);
+
+        let locked = serve_app(app(dir.path().to_owned(), Some(TOKEN), None)).await;
+        let url = format!("http://{locked}/watches");
+        for auth in [None, Some("0123456789abcdeX"), Some("short")] {
+            let mut request = http.put(&url).body(body.clone());
+            if let Some(auth) = auth {
+                request = request.bearer_auth(auth);
+            }
+            assert_eq!(request.send().await.unwrap().status(), 401, "{auth:?}");
+        }
+        let ok = http
+            .put(&url)
+            .bearer_auth(TOKEN)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), 204);
+        assert_eq!(
+            reqwest::get(&url).await.unwrap().status(),
+            200,
+            "reads stay open"
+        );
+    }
+
+    #[tokio::test]
+    async fn pushed_watches_are_served_back_and_a_bad_set_is_a_422() {
+        let dir = tempfile::tempdir().unwrap();
+        let addr = serve_app(app(dir.path().to_owned(), Some(TOKEN), None)).await;
+        let url = format!("http://{addr}/watches");
+        let http = reqwest::Client::new();
+
+        let set = WatchSet::new(vec![crate::alerts::tests::watch()]);
+        let put = http
+            .put(&url)
+            .bearer_auth(TOKEN)
+            .body(serde_json::to_vec(&set).unwrap())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(put.status(), 204);
+        let back: WatchSet = reqwest::get(&url).await.unwrap().json_bytes().await;
+        assert_eq!(back, set);
+
+        let bad = http
+            .put(&url)
+            .bearer_auth(TOKEN)
+            .body(r#"{"v":2,"watches":[]}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), 422);
+        assert!(bad.text().await.unwrap().starts_with("alert.watch_version"));
+    }
+
+    #[tokio::test]
+    async fn ack_and_snooze_answer_404_for_an_alert_not_raised() {
+        let dir = tempfile::tempdir().unwrap();
+        let addr = serve_app(app(dir.path().to_owned(), Some(TOKEN), None)).await;
+        let http = reqwest::Client::new();
+        let ack = http
+            .post(format!("http://{addr}/alerts/5/ack"))
+            .bearer_auth(TOKEN)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ack.status(), 404);
+        let snooze = http
+            .post(format!("http://{addr}/alerts/5/snooze"))
+            .bearer_auth(TOKEN)
+            .body(r#"{"until":1790000000}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(snooze.status(), 404);
+        let alerts: Vec<Alert> = reqwest::get(format!("http://{addr}/alerts"))
+            .await
+            .unwrap()
+            .json_bytes()
+            .await;
+        assert!(alerts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_alert_log_resumes_like_a_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = app(dir.path().to_owned(), None, None);
+        let addr = serve_app(app.clone()).await;
+        let client = Client::new().unwrap();
+        let url = format!("http://{addr}/alerts/log");
+
+        let FetchOutcome::Fresh { bytes, .. } = client.fetch(&url, 0).await.unwrap() else {
+            panic!("expected the header");
+        };
+        assert_eq!(
+            bytes,
+            format!("{}\n", brewcore::alert::LOG_HEADER).as_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_test_notification_reaches_ntfy_or_says_why_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let http = reqwest::Client::new();
+
+        let none = serve_app(app(dir.path().to_owned(), Some(TOKEN), None)).await;
+        let res = http
+            .post(format!("http://{none}/notify/test"))
+            .bearer_auth(TOKEN)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 409);
+
+        let (config, seen) = crate::notify::tests::fake_ntfy(StatusCode::OK).await;
+        let ntfy = Ntfy::new(&config).unwrap();
+        let some = serve_app(app(dir.path().to_owned(), Some(TOKEN), Some(ntfy))).await;
+        let res = http
+            .post(format!("http://{some}/notify/test"))
+            .bearer_auth(TOKEN)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 204);
+        assert_eq!(seen.lock().unwrap()[0]["title"], "brewd: test");
+    }
+
+    trait JsonBytes {
+        async fn json_bytes<T: serde::de::DeserializeOwned>(self) -> T;
+    }
+
+    impl JsonBytes for reqwest::Response {
+        async fn json_bytes<T: serde::de::DeserializeOwned>(self) -> T {
+            serde_json::from_slice(&self.bytes().await.unwrap()).unwrap()
+        }
     }
 }

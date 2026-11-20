@@ -25,7 +25,7 @@ pub mod watch;
 pub use book::{Alert, AlertBook};
 pub use buffer::{Buffers, DeviceBuffer};
 pub use eval::{Condition, Verdict, evaluate};
-pub use log::{LogEvent, LogRecord};
+pub use log::{LOG_COLUMNS, LOG_HEADER, LogEvent, LogRecord};
 pub use watch::{Feed, GravityFeed, WATCH_VERSION, Watch, WatchSet};
 
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,18 @@ pub enum Rule {
 }
 
 impl Rule {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Rule::Finished => "finished",
+            Rule::Stalled => "stalled",
+            Rule::TempHigh => "temp_high",
+            Rule::TempLow => "temp_low",
+            Rule::Silent => "silent",
+            Rule::SugarBreak => "sugar_break",
+            Rule::TargetSg => "target_sg",
+        }
+    }
+
     /// A notification's title, after the batch code.
     pub fn title(self) -> &'static str {
         match self {

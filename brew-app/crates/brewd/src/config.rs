@@ -14,6 +14,8 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/brewd/brewd.toml";
 
 const DEFAULT_BURST_WINDOW_MS: u64 = 2_000;
 const BURST_WINDOW_MS: std::ops::RangeInclusive<u64> = 100..=60_000;
+/// Short enough to type into the desktop's Settings, long enough not to guess.
+const MIN_TOKEN_LEN: usize = 16;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -35,6 +37,10 @@ pub enum ConfigError {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub journal_dir: PathBuf,
+    /// Phase 6: watches, alert state and the alert log. Not under `journal_dir`, so
+    /// the alert log never shows up as a device journal.
+    #[serde(default = "default_state_dir")]
+    pub state_dir: PathBuf,
     /// How long after a device's first message its burst stays open. See
     /// [`crate::burst`].
     #[serde(default = "default_burst_window_ms")]
@@ -44,20 +50,37 @@ pub struct Config {
     pub mqtt: Mqtt,
     #[serde(rename = "device", default)]
     pub devices: Vec<Device>,
+    /// Where alerts are pushed. Without it they are logged and served, not sent.
+    pub notify: Option<Notify>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Http {
     pub listen: SocketAddr,
+    /// Bearer token for the write endpoints. Reads stay open, as they always were;
+    /// without a token every write is refused.
+    pub token: Option<String>,
 }
 
 impl Default for Http {
     fn default() -> Self {
         Self {
             listen: SocketAddr::from(([0, 0, 0, 0], 8080)),
+            token: None,
         }
     }
+}
+
+/// An ntfy server and topic. The topic is the only secret on ntfy.sh: anyone who
+/// knows it can read it, so make it long and random — or set `token` on a server
+/// with access control.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Notify {
+    pub ntfy_server: String,
+    pub ntfy_topic: String,
+    pub ntfy_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -89,6 +112,10 @@ pub struct Column {
 
 fn default_burst_window_ms() -> u64 {
     DEFAULT_BURST_WINDOW_MS
+}
+
+fn default_state_dir() -> PathBuf {
+    PathBuf::from("/var/lib/brewd")
 }
 
 fn default_mqtt_port() -> u16 {
@@ -136,6 +163,35 @@ impl Config {
         }
         if self.devices.is_empty() {
             return invalid("no [[device]] is configured".to_owned());
+        }
+        if self
+            .http
+            .token
+            .as_ref()
+            .is_some_and(|t| t.trim().len() < MIN_TOKEN_LEN)
+        {
+            return invalid(format!(
+                "http.token must be at least {MIN_TOKEN_LEN} characters"
+            ));
+        }
+        if let Some(notify) = &self.notify {
+            let url = reqwest::Url::parse(&notify.ntfy_server);
+            if !url.is_ok_and(|u| matches!(u.scheme(), "http" | "https")) {
+                return invalid(format!(
+                    "notify.ntfy_server '{}' is not an http(s) URL",
+                    notify.ntfy_server
+                ));
+            }
+            let topic_ok = (1..=64).contains(&notify.ntfy_topic.len())
+                && notify
+                    .ntfy_topic
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'));
+            if !topic_ok {
+                return invalid(
+                    "notify.ntfy_topic must be 1-64 characters of [A-Za-z0-9_-]".to_owned(),
+                );
+            }
         }
 
         let mut names = HashSet::new();
@@ -238,6 +294,34 @@ mod tests {
         assert_eq!(config.http.listen.port(), 8080);
         assert_eq!(config.mqtt.port, 1883);
         assert_eq!(config.mqtt.client_id, "brewd");
+        assert_eq!(config.state_dir, PathBuf::from("/var/lib/brewd"));
+        assert!(config.http.token.is_none());
+        assert!(config.notify.is_none());
+    }
+
+    #[test]
+    fn a_short_token_or_a_bad_ntfy_target_is_rejected() {
+        let device = "[[device]]\nname = \"d\"\ncolumns = [{ topic = \"t\", column = \"c\" }]";
+        let cases = [
+            (
+                "[http]\nlisten = \"0.0.0.0:8080\"\ntoken = \"short\"",
+                "http.token",
+            ),
+            (
+                "[notify]\nntfy_server = \"ntfy.sh\"\nntfy_topic = \"t\"",
+                "not an http(s) URL",
+            ),
+            (
+                "[notify]\nntfy_server = \"https://ntfy.sh\"\nntfy_topic = \"a/b\"",
+                "ntfy_topic",
+            ),
+        ];
+        for (extra, expected) in cases {
+            let err = parse(&format!("{}\n{extra}", minimal(device)))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(expected), "{expected:?} not in {err:?}");
+        }
     }
 
     #[test]

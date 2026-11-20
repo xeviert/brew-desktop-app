@@ -6,12 +6,14 @@
 //! only thing that writes.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use brewcore::units::Timestamp;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS, SubscribeFilter};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 
+use crate::alerts::{self, Shared};
 use crate::burst::{Bursts, Row};
 use crate::config::{Config, Device};
 use crate::journal::Journal;
@@ -34,6 +36,8 @@ pub struct Ingest {
     routes: HashMap<String, (usize, usize)>,
     journals: Vec<Journal>,
     bursts: Bursts,
+    /// Phase 6: every journalled row is judged, and `wake` told when one raises.
+    alerts: Option<(Shared, Arc<Notify>)>,
 }
 
 impl Ingest {
@@ -55,7 +59,13 @@ impl Ingest {
             routes,
             journals,
             bursts: Bursts::new(widths, window),
+            alerts: None,
         }
+    }
+
+    pub fn with_alerts(mut self, alerts: Shared, wake: Arc<Notify>) -> Self {
+        self.alerts = Some((alerts, wake));
+        self
     }
 
     pub fn topics(&self) -> impl Iterator<Item = &str> {
@@ -98,6 +108,13 @@ impl Ingest {
                     error = %e,
                     "cannot append to journal, reading lost"
                 );
+            }
+            // Judged even when the journal write failed: the reading happened, and a
+            // full disk is no reason to miss a ferment running hot.
+            if let Some((shared, wake)) = &self.alerts {
+                if alerts::lock(shared).on_row(row.device, row.time, &row.cells) {
+                    wake.notify_one();
+                }
             }
         }
     }

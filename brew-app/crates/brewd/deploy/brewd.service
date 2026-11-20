@@ -8,7 +8,7 @@
 #   journalctl -u brewd -f
 
 [Unit]
-Description=brewd - MQTT to journal logger
+Description=brewd - MQTT to journal logger and alerts
 Wants=network-online.target mosquitto.service
 After=network-online.target mosquitto.service
 
@@ -18,7 +18,8 @@ Restart=on-failure
 RestartSec=5
 User=brewd
 Group=brewd
-# /var/lib/brewd, owned by brewd, kept across restarts. journal_dir lives under it.
+# /var/lib/brewd, owned by brewd, kept across restarts. journal_dir and the alert
+# state (state_dir) live under it.
 StateDirectory=brewd
 # stdout and stderr go to journald by default.
 NoNewPrivileges=true

@@ -7,13 +7,27 @@
 # systemd's StateDirectory=brewd creates this.
 journal_dir = "/var/lib/brewd/journals"
 
+# Phase 6: watches.json, alerts.json and the alert log alerts.csv. The default.
+state_dir = "/var/lib/brewd"
+
 # A device's messages within this long of its first one are one reading, stamped
 # once. The iSpindle publishes a wake cycle as a burst of one topic per field.
 burst_window_ms = 2000
 
 [http]
-# LAN-only, read-only, no auth.
+# LAN-only. Reads need no auth.
 listen = "0.0.0.0:8080"
+# Writes (the desktop pushing watches, ack, snooze) need this as a Bearer token, and
+# are refused without one. Paste the same value into the app's Settings.
+# Generate one with: openssl rand -hex 16
+token = "change-me-to-32-hex-characters!!"
+
+# Where alerts are pushed. Leave the section out to only log them. On ntfy.sh the
+# topic is the secret — anyone who knows it can read it — so make it long and random.
+[notify]
+ntfy_server = "https://ntfy.sh"
+ntfy_topic = "brewery-change-me"
+# ntfy_token = "tk_..."   # for a server with access control
 
 [mqtt]
 host = "localhost"
