@@ -56,6 +56,19 @@
   });
 
   const readonly = $derived(batch?.archived_at != null);
+
+  const tabs = [
+    { id: "schedule", label: "Schedule" },
+    { id: "ingredients", label: "Ingredients" },
+  ] as const;
+  let tab = $state<(typeof tabs)[number]["id"]>("schedule");
+
+  function arrow(event: KeyboardEvent) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const i = tabs.findIndex((t) => t.id === tab);
+    tab = tabs[(i + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length].id;
+    document.getElementById(`tab-${tab}`)?.focus();
+  }
 </script>
 
 {#if error}
@@ -71,20 +84,36 @@
         <div class="curve">
           <Curve batchId={batch.id} pitchedAt={batch.pitched_at} ui={config.ui} {revision} />
         </div>
-        <div class="actuals">
-          <Actuals
-            batchId={batch.id}
-            pitchedAt={batch.pitched_at}
-            {readonly}
-            {revision}
-            onchanged={() => void changed()}
-          />
+        <div class="tabbed">
+          <div class="tabs" role="tablist">
+            {#each tabs as t (t.id)}
+              <button
+                role="tab"
+                id="tab-{t.id}"
+                aria-selected={tab === t.id}
+                aria-controls="panel-{t.id}"
+                tabindex={tab === t.id ? 0 : -1}
+                onclick={() => (tab = t.id)}
+                onkeydown={arrow}>{t.label}</button
+              >
+            {/each}
+          </div>
+          <!-- Hidden, not unmounted: an open form survives a look at the other tab. -->
+          <div role="tabpanel" id="panel-schedule" aria-labelledby="tab-schedule" hidden={tab !== "schedule"}>
+            <Schedule batchId={batch.id} ui={config.ui} {readonly} {revision} onchanged={() => void changed()} />
+          </div>
+          <div role="tabpanel" id="panel-ingredients" aria-labelledby="tab-ingredients" hidden={tab !== "ingredients"}>
+            <Actuals
+              batchId={batch.id}
+              pitchedAt={batch.pitched_at}
+              {readonly}
+              {revision}
+              onchanged={() => void changed()}
+            />
+          </div>
         </div>
       </div>
       <div class="side">
-        <div class="schedule">
-          <Schedule batchId={batch.id} ui={config.ui} {readonly} {revision} onchanged={() => void changed()} />
-        </div>
         <div class="card">
           <StatusCard batchId={batch.id} ui={config.ui} {syncs} {revision} {readonly} />
         </div>
@@ -111,8 +140,8 @@
     color: #7ba7d4;
   }
 
-  /* Narrow: one column, the schedule and card first and the timeline before the ingredients, so
-     "Add reading" stays near the numbers it changes. */
+  /* Narrow: one column, the schedule and ingredients tabs first, then the card, so "Add reading"
+     stays near the numbers it changes. */
   .screen {
     display: flex;
     flex-direction: column;
@@ -123,7 +152,7 @@
     display: contents;
   }
 
-  .schedule {
+  .tabbed {
     order: 1;
   }
 
@@ -144,11 +173,35 @@
     order: 5;
   }
 
-  .actuals {
-    order: 6;
+  .tabs {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid #333842;
+    margin-bottom: 1rem;
   }
 
-  /* Wide: the curve and ingredients beside the schedule, card, moves and timeline. */
+  .tabs button {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 0.5rem 0.9rem;
+    color: #9aa0a6;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .tabs button:hover {
+    color: #e6e6e6;
+  }
+
+  .tabs button[aria-selected="true"] {
+    color: #e6e6e6;
+    border-bottom-color: #4fb3ff;
+  }
+
+  /* Wide: the curve and the schedule / ingredients tabs beside the card, moves and timeline. */
   @media (min-width: 1100px) {
     .screen {
       display: grid;
