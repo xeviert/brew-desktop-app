@@ -362,6 +362,20 @@ pub enum Error {
     #[error("batch event {event_id} does not exist")]
     NoSuchBatchEvent { event_id: i64 },
 
+    #[error("schedule step {step_id} does not exist")]
+    NoSuchScheduleStep { step_id: i64 },
+
+    /// Steps are done in order: a step starts when the one before it is done, so a
+    /// tick out of order would give the steps after it a start before their own.
+    #[error("schedule step {step_id} is not the current step")]
+    StepOutOfOrder { step_id: i64 },
+
+    #[error("schedule step {step_id} is done before it started")]
+    StepBeforeStart { step_id: i64 },
+
+    #[error("batch {batch_id} already has a schedule")]
+    ScheduleNotEmpty { batch_id: i64 },
+
     #[error("stream binding {binding_id} does not exist")]
     NoSuchBatchStream { binding_id: i64 },
 
@@ -648,6 +662,10 @@ impl Error {
             Error::UnknownEventKind(_) => "db.unknown_event_kind",
             Error::UnknownAnnotationChannel(_) => "db.unknown_annotation_channel",
             Error::NoSuchBatchEvent { .. } => "db.no_such_batch_event",
+            Error::NoSuchScheduleStep { .. } => "db.no_such_schedule_step",
+            Error::StepOutOfOrder { .. } => "db.step_out_of_order",
+            Error::StepBeforeStart { .. } => "db.step_before_start",
+            Error::ScheduleNotEmpty { .. } => "db.schedule_not_empty",
             Error::NoSuchBatchStream { .. } => "db.no_such_batch_stream",
             Error::UsePitchRecorder { .. } => "db.use_pitch_recorder",
             Error::PitchEventLocked { .. } => "db.pitch_event_locked",

@@ -1923,3 +1923,78 @@ fn batch_alert_settings_round_trip_in_the_display_unit() {
     let err = app.api_error("ack_alert", json!({ "id": 1 }));
     assert_eq!(err["code"], "brewd.unconfigured");
 }
+
+#[test]
+fn a_schedule_step_is_ticked_off_as_an_event() {
+    let app = Harness::new();
+    let batch_id = pitched(&app, "LAGER-001", Some(1.046));
+    let seeded = app
+        .invoke("seed_lager_schedule", json!({ "batchId": batch_id }))
+        .unwrap();
+    assert_eq!(seeded["steps"].as_array().unwrap().len(), 5);
+    assert_eq!(seeded["gravity_unit"], "SG");
+    assert_eq!(seeded["steps"][0]["target"], 1.023);
+    let first = seeded["steps"][0]["id"].as_i64().unwrap();
+
+    let err = app.api_error("seed_lager_schedule", json!({ "batchId": batch_id }));
+    assert_eq!(err["code"], "db.schedule_not_empty");
+
+    let done = app
+        .invoke(
+            "complete_schedule_step",
+            json!({ "stepId": first, "at": null, "note": "clean" }),
+        )
+        .unwrap();
+    assert!(done["steps"][0]["done_at"].is_i64());
+    let events = app
+        .invoke("list_batch_events", json!({ "batchId": batch_id }))
+        .unwrap();
+    assert!(
+        events
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "step_done")
+    );
+
+    let second = done["steps"][1]["id"].as_i64().unwrap();
+    let err = app.api_error("undo_schedule_step", json!({ "stepId": second }));
+    assert_eq!(err["code"], "db.step_out_of_order");
+    let undone = app
+        .invoke("undo_schedule_step", json!({ "stepId": first }))
+        .unwrap();
+    assert_eq!(undone["steps"][0]["done_at"], Value::Null);
+
+    let added = app
+        .invoke(
+            "add_schedule_step",
+            json!({ "batchId": batch_id, "step": {
+                "name": "Bottle", "temp_min_c": null, "temp_max_c": null,
+                "target": null, "min_hours": 1.0, "note": "",
+            }}),
+        )
+        .unwrap();
+    let last = added["steps"][5]["id"].as_i64().unwrap();
+    let moved = app
+        .invoke("move_schedule_step", json!({ "stepId": last, "up": true }))
+        .unwrap();
+    assert_eq!(moved["steps"][4]["name"], "Bottle");
+    let edited = app
+        .invoke(
+            "update_schedule_step",
+            json!({ "stepId": last, "step": {
+                "name": "Keg", "temp_min_c": 1.0, "temp_max_c": 2.0,
+                "target": null, "min_hours": null, "note": null,
+            }}),
+        )
+        .unwrap();
+    assert_eq!(edited["steps"][4]["name"], "Keg");
+    let deleted = app
+        .invoke("delete_schedule_step", json!({ "stepId": last }))
+        .unwrap();
+    assert_eq!(deleted["steps"].as_array().unwrap().len(), 5);
+    let read = app
+        .invoke("batch_schedule", json!({ "batchId": batch_id }))
+        .unwrap();
+    assert_eq!(read, deleted);
+}

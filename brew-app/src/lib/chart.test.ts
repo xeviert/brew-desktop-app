@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Curve, Series } from "./api";
-import { align, axisOf, buildPlot, toAbs, toX } from "./chart";
+import { align, axisOf, buildPlot, latest, toAbs, toX } from "./chart";
 
 const series = (over: Partial<Series>): Series => ({
 	stream_id: 1,
@@ -116,5 +116,21 @@ describe("buildPlot", () => {
 	it("puts x in hours since pitch", () => {
 		const plot = buildPlot(curve(series({ ts: [3_600, 7_200], avg: [18, 18] })), "rel", 0, "C");
 		expect(plot.data[0]).toEqual([1, 2]);
+	});
+});
+
+describe("latest", () => {
+	it("takes each column's newest value, skipping gaps and alignment holes", () => {
+		const data = [
+			[10, 20, 30],
+			[1, 2, undefined],
+			[5, null, null],
+		];
+		expect(latest(data)).toEqual([20, 2, 5]);
+	});
+
+	it("is all null with no data", () => {
+		expect(latest([[], []])).toEqual([null, null]);
+		expect(latest([[1], [null]])).toEqual([null, null]);
 	});
 });

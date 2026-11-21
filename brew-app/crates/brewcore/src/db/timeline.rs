@@ -49,6 +49,9 @@ db_enum!(
     (Carbonation, "carbonation"),
     (Package, "package"),
     (Note, "note"),
+    // A schedule step ticked off. Written by `schedule::complete_step`, which links the
+    // step to it; deleting the event un-ticks the step.
+    (StepDone, "step_done"),
 );
 
 // ----------------------------------------------------------- batch_event
@@ -628,6 +631,7 @@ mod tests {
                 "carbonation",
                 "package",
                 "note",
+                "step_done",
             ]
         );
     }

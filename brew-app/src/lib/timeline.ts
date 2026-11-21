@@ -22,8 +22,11 @@ import { formatGravityIn } from "$lib/dashboard";
 import { parseNumber, type Result } from "$lib/reference";
 import { formatGravity, formatTemp, fromDisplayTemp, toDisplayTemp, type TempDisplay } from "$lib/units";
 
-/** Everything but `pitch`, which has its own form. */
-export const EVENT_KINDS: { value: Exclude<EventKind, "pitch">; label: string }[] = [
+/** Written by their own forms, not the event editor. */
+type OwnForm = "pitch" | "step_done";
+
+/** Everything but `pitch` and `step_done`, which have their own forms. */
+export const EVENT_KINDS: { value: Exclude<EventKind, OwnForm>; label: string }[] = [
 	{ value: "note", label: "Note" },
 	{ value: "nutrient_addition", label: "Nutrient addition" },
 	{ value: "flavoring_addition", label: "Flavoring addition" },
@@ -36,7 +39,9 @@ export const EVENT_KINDS: { value: Exclude<EventKind, "pitch">; label: string }[
 ];
 
 export function eventLabel(kind: EventKind): string {
-	return kind === "pitch" ? "Pitch" : (EVENT_KINDS.find((k) => k.value === kind)?.label ?? kind);
+	if (kind === "pitch") return "Pitch";
+	if (kind === "step_done") return "Step done";
+	return EVENT_KINDS.find((k) => k.value === kind)?.label ?? kind;
 }
 
 const show = (v: number, digits = 2) => String(Number(v.toFixed(digits)));
@@ -150,14 +155,14 @@ export function toQuickEntry(form: QuickForm, temps: TempDisplay): Result<QuickE
 
 export interface EventForm {
 	at: string;
-	kind: Exclude<EventKind, "pitch">;
+	kind: Exclude<EventKind, OwnForm>;
 	note: string;
 }
 
 export function eventForm(event: { ts: number; kind: EventKind; note: string | null } | null, now: number): EventForm {
 	return {
 		at: localDateTime(event?.ts ?? now),
-		kind: event && event.kind !== "pitch" ? event.kind : "note",
+		kind: event && event.kind !== "pitch" && event.kind !== "step_done" ? event.kind : "note",
 		note: event?.note ?? "",
 	};
 }

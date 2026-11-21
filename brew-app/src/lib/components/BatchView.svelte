@@ -4,6 +4,7 @@
   import BatchHeader from "$lib/components/BatchHeader.svelte";
   import BatchLifecycle from "$lib/components/BatchLifecycle.svelte";
   import Curve from "$lib/components/Curve.svelte";
+  import Schedule from "$lib/components/Schedule.svelte";
   import StatusCard from "$lib/components/StatusCard.svelte";
   import Timeline from "$lib/components/Timeline.svelte";
   import { getBatch, toApiError, type ApiError, type BatchSummary, type Config, type SourceStatus } from "$lib/api";
@@ -81,6 +82,9 @@
         </div>
       </div>
       <div class="side">
+        <div class="schedule">
+          <Schedule batchId={batch.id} ui={config.ui} {readonly} {revision} onchanged={() => void changed()} />
+        </div>
         <div class="card">
           <StatusCard batchId={batch.id} ui={config.ui} {syncs} {revision} {readonly} />
         </div>
@@ -107,7 +111,7 @@
     color: #7ba7d4;
   }
 
-  /* Narrow: one column, the card first and the timeline before the ingredients, so
+  /* Narrow: one column, the schedule and card first and the timeline before the ingredients, so
      "Add reading" stays near the numbers it changes. */
   .screen {
     display: flex;
@@ -119,28 +123,32 @@
     display: contents;
   }
 
-  .card {
+  .schedule {
     order: 1;
+  }
+
+  .card {
+    order: 2;
   }
 
   .moves,
   .alerts {
-    order: 2;
-  }
-
-  .curve {
     order: 3;
   }
 
-  .timeline {
+  .curve {
     order: 4;
   }
 
-  .actuals {
+  .timeline {
     order: 5;
   }
 
-  /* Wide: the curve and ingredients beside the card, moves and timeline. */
+  .actuals {
+    order: 6;
+  }
+
+  /* Wide: the curve and ingredients beside the schedule, card, moves and timeline. */
   @media (min-width: 1100px) {
     .screen {
       display: grid;

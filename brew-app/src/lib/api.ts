@@ -667,7 +667,8 @@ export type EventKind =
 	| "fining"
 	| "carbonation"
 	| "package"
-	| "note";
+	| "note"
+	| "step_done";
 
 /** Mirrors `brewcore::db::timeline::BatchEventRow`. */
 export interface BatchEvent {
@@ -1560,3 +1561,58 @@ export function onAlerts(cb: (status: AlertSyncStatus) => void): () => void {
 		stop?.();
 	};
 }
+
+/** Mirrors `src-tauri`'s `StepView`: `brewcore::db::schedule::StepRow` plus `target` in `gravity_unit`. */
+export interface ScheduleStep {
+	id: number;
+	batch_id: number;
+	position: number;
+	name: string;
+	temp_min_c: number | null;
+	temp_max_c: number | null;
+	target_sg: number | null;
+	min_hours: number | null;
+	note: string | null;
+	done_event_id: number | null;
+	done_at: number | null;
+	target: number | null;
+}
+
+/** Mirrors `src-tauri`'s `ScheduleView`. */
+export interface Schedule {
+	steps: ScheduleStep[];
+	pitched_at: number | null;
+	gravity_unit: string;
+}
+
+/** Mirrors `src-tauri`'s `StepInput`. Temperatures °C, `target` in the display unit. */
+export interface StepInput {
+	name: string;
+	temp_min_c: number | null;
+	temp_max_c: number | null;
+	target: number | null;
+	min_hours: number | null;
+	note: string | null;
+}
+
+export const batchSchedule = (batchId: number): Promise<Schedule> => call("batch_schedule", { batchId });
+
+export const addScheduleStep = (batchId: number, step: StepInput): Promise<Schedule> =>
+	call("add_schedule_step", { batchId, step });
+
+export const updateScheduleStep = (stepId: number, step: StepInput): Promise<Schedule> =>
+	call("update_schedule_step", { stepId, step });
+
+export const deleteScheduleStep = (stepId: number): Promise<Schedule> => call("delete_schedule_step", { stepId });
+
+export const moveScheduleStep = (stepId: number, up: boolean): Promise<Schedule> =>
+	call("move_schedule_step", { stepId, up });
+
+/** Writes a `step_done` event. `at` null is now. */
+export const completeScheduleStep = (stepId: number, at: number | null, note: string | null): Promise<Schedule> =>
+	call("complete_schedule_step", { stepId, at, note });
+
+/** Deletes the last done step's event. */
+export const undoScheduleStep = (stepId: number): Promise<Schedule> => call("undo_schedule_step", { stepId });
+
+export const seedLagerSchedule = (batchId: number): Promise<Schedule> => call("seed_lager_schedule", { batchId });

@@ -19,7 +19,7 @@
     type StabilityView,
   } from "$lib/api";
   import { alertTitle, isUrgent } from "$lib/alerts";
-  import { buildPlot, toAbs, toX, type Drawn, type Plot, type XMode } from "$lib/chart";
+  import { buildPlot, latest, toAbs, toX, type Drawn, type Plot, type XMode } from "$lib/chart";
   import { formatTimestamp } from "$lib/units";
 
   // `revision` is bumped by every write from the batch screen — a manual reading or an
@@ -54,6 +54,8 @@
   // The zoomed range in epoch seconds; `null` is the default, pitch to now. Not state:
   // a change is a fetch, and the chart reads it when that lands.
   let view: SeriesRange | null = null;
+  // `latest(plot.data)`, read by the legend formatters. Not state: uPlot asks for it.
+  let newest: (number | null)[] = [];
 
   const nothing = $derived(curve !== null && curve.range === null);
   const plot = $derived(curve ? buildPlot(curve, mode, pitchedAt, ui.temp_display) : null);
@@ -105,8 +107,26 @@
     if (r) u.setScale("x", { min: toX(r.start, m, pitchedAt), max: toX(r.end, m, pitchedAt) });
   }
 
-  function seriesOpts(d: Drawn): uPlot.Series {
-    const base = { label: `${d.label} ${d.metric}`, scale: d.axis };
+  /** The cursor's value, else the newest one: off the chart the legend reads as "now". */
+  function legendValue(digits: number) {
+    return (_u: uPlot, v: number | null, sidx: number, idx: number | null) => {
+      const value = idx === null ? newest[sidx] : v;
+      return value == null ? "--" : value.toFixed(digits);
+    };
+  }
+
+  function xLegend(m: XMode) {
+    return (_u: uPlot, v: number | null, _sidx: number, idx: number | null) => {
+      const x = idx === null ? newest[0] : v;
+      if (x == null) return "--";
+      const at = m === "abs" ? formatTimestamp(x) : `${x.toFixed(1)} h`;
+      return idx === null ? `latest · ${at}` : at;
+    };
+  }
+
+  function seriesOpts(d: Drawn, unit: string): uPlot.Series {
+    const digits = d.axis === "grav" ? (unit === "SG" ? 3 : 1) : d.axis === "ph" ? 2 : 1;
+    const base = { label: `${d.label} ${d.metric}`, scale: d.axis, value: legendValue(digits) };
     const faint = `${d.color}66`;
     switch (d.role) {
       case "line":
@@ -265,7 +285,7 @@
         width: host.clientWidth,
         height: HEIGHT,
         scales: { x: { time: m === "abs" } },
-        series: [{}, ...p.drawn.map(seriesOpts)],
+        series: [{ value: xLegend(m) }, ...p.drawn.map((d) => seriesOpts(d, unit))],
         bands: p.bands.map(([hi, lo]) => ({
           series: [hi, lo] as [number, number],
           fill: `${p.drawn[hi - 1].color}26`,
@@ -312,8 +332,11 @@
         return;
       }
       const key = [m, ui.temp_display, unit, p.axes.join(), p.drawn.map((d) => `${d.streamId}:${d.role}`).join()].join("|");
+      newest = latest(p.data);
       if (chart && key === shape) {
         chart.setData(p.data as uPlot.AlignedData);
+        // Keeps whatever the cursor is on; off the chart, picks up the new latest.
+        chart.setLegend({}, false);
       } else {
         chart?.destroy();
         chart = build(p, m, unit);

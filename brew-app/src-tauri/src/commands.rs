@@ -39,6 +39,7 @@ use brewcore::{
             VesselKind, VesselRow, YeastStrainRow,
         },
         rollup::{self, Rollup},
+        schedule,
         series::{self, BatchSeries, SeriesRange},
         stability,
         tier1::{self, StreamRow},
@@ -2131,6 +2132,186 @@ pub async fn set_batch_alert(
     })?;
     alerts.wake();
     Ok(batch_alert_form(view, display))
+}
+
+// ---------------------------------------------------------------------------
+// Fermentation schedule
+// ---------------------------------------------------------------------------
+
+/// A step with its target also in the display gravity unit.
+#[derive(Debug, serde::Serialize)]
+pub struct StepView {
+    #[serde(flatten)]
+    pub step: schedule::StepRow,
+    pub target: Option<f64>,
+}
+
+/// Every write returns this, so the list redraws from one answer.
+#[derive(Debug, serde::Serialize)]
+pub struct ScheduleView {
+    pub steps: Vec<StepView>,
+    pub pitched_at: Option<Timestamp>,
+    pub gravity_unit: &'static str,
+}
+
+/// Temperatures in °C; `target` in the display gravity unit.
+#[derive(Debug, serde::Deserialize)]
+pub struct StepInput {
+    pub name: String,
+    pub temp_min_c: Option<f64>,
+    pub temp_max_c: Option<f64>,
+    pub target: Option<f64>,
+    pub min_hours: Option<f64>,
+    pub note: Option<String>,
+}
+
+impl StepInput {
+    fn into_new(self, display: GravityDisplay) -> brewcore::Result<schedule::NewStep> {
+        Ok(schedule::NewStep {
+            name: self.name,
+            temp_min_c: self.temp_min_c,
+            temp_max_c: self.temp_max_c,
+            target_sg: self.target.map(|v| typed_gravity(v, display)).transpose()?,
+            min_hours: self.min_hours,
+            note: self.note.filter(|n| !n.trim().is_empty()),
+        })
+    }
+}
+
+fn schedule_view(schedule: schedule::Schedule, display: GravityDisplay) -> ScheduleView {
+    ScheduleView {
+        steps: schedule
+            .steps
+            .into_iter()
+            .map(|step| StepView {
+                target: step.target_sg.map(|sg| sg_to_display(sg, display)),
+                step,
+            })
+            .collect(),
+        pitched_at: schedule.pitched_at,
+        gravity_unit: display.unit(),
+    }
+}
+
+#[tauri::command]
+pub async fn batch_schedule(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_id: i64,
+) -> ApiResult<ScheduleView> {
+    let display = config.get().ui.gravity_display;
+    let schedule = db.read(|conn| schedule::batch_schedule(conn, batch_id))?;
+    Ok(schedule_view(schedule, display))
+}
+
+#[tauri::command]
+pub async fn add_schedule_step(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_id: i64,
+    step: StepInput,
+) -> ApiResult<ScheduleView> {
+    let display = config.get().ui.gravity_display;
+    let step = step.into_new(display)?;
+    let schedule = db.write(|conn| {
+        schedule::add_step(conn, batch_id, &step)?;
+        schedule::batch_schedule(conn, batch_id)
+    })?;
+    Ok(schedule_view(schedule, display))
+}
+
+#[tauri::command]
+pub async fn update_schedule_step(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    step_id: i64,
+    step: StepInput,
+) -> ApiResult<ScheduleView> {
+    let display = config.get().ui.gravity_display;
+    let step = step.into_new(display)?;
+    let schedule = db.write(|conn| {
+        schedule::write_step(conn, step_id, |tx| {
+            schedule::update_step(tx, step_id, &step)
+        })
+    })?;
+    Ok(schedule_view(schedule, display))
+}
+
+#[tauri::command]
+pub async fn delete_schedule_step(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    step_id: i64,
+) -> ApiResult<ScheduleView> {
+    let display = config.get().ui.gravity_display;
+    let schedule = db.write(|conn| {
+        schedule::write_step(conn, step_id, |tx| schedule::delete_step(tx, step_id))
+    })?;
+    Ok(schedule_view(schedule, display))
+}
+
+#[tauri::command]
+pub async fn move_schedule_step(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    step_id: i64,
+    up: bool,
+) -> ApiResult<ScheduleView> {
+    let display = config.get().ui.gravity_display;
+    let schedule = db.write(|conn| {
+        schedule::write_step(conn, step_id, |tx| {
+            schedule::move_step(tx, step_id, up).map(|_| ())
+        })
+    })?;
+    Ok(schedule_view(schedule, display))
+}
+
+/// `at` defaults to now and may not be in the future, like any event's time.
+#[tauri::command]
+pub async fn complete_schedule_step(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    step_id: i64,
+    at: Option<Timestamp>,
+    note: Option<String>,
+) -> ApiResult<ScheduleView> {
+    let display = config.get().ui.gravity_display;
+    let at = not_in_future(at, "step")?;
+    let schedule = db.write(|conn| {
+        schedule::write_step(conn, step_id, |tx| {
+            schedule::complete_step(tx, step_id, at, note.as_deref()).map(|_| ())
+        })
+    })?;
+    Ok(schedule_view(schedule, display))
+}
+
+#[tauri::command]
+pub async fn undo_schedule_step(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    step_id: i64,
+) -> ApiResult<ScheduleView> {
+    let display = config.get().ui.gravity_display;
+    let schedule = db
+        .write(|conn| schedule::write_step(conn, step_id, |tx| schedule::undo_step(tx, step_id)))?;
+    Ok(schedule_view(schedule, display))
+}
+
+#[tauri::command]
+pub async fn seed_lager_schedule(
+    db: tauri::State<'_, Db>,
+    config: tauri::State<'_, ConfigStore>,
+    batch_id: i64,
+) -> ApiResult<ScheduleView> {
+    let display = config.get().ui.gravity_display;
+    let schedule = db.write(|conn| {
+        let tx = conn.transaction()?;
+        schedule::seed_lager_schedule(&tx, batch_id)?;
+        let schedule = schedule::batch_schedule(&tx, batch_id)?;
+        tx.commit()?;
+        Ok(schedule)
+    })?;
+    Ok(schedule_view(schedule, display))
 }
 
 #[tauri::command]

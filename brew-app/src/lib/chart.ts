@@ -99,6 +99,26 @@ export function align(tables: Table[]): (number | null | undefined)[][] {
 	return out;
 }
 
+/**
+ * The newest value in every column, `[x, ...columns]` like `Plot.data`: what the
+ * legend shows while the cursor is off the chart. `x` is the newest point any column has.
+ */
+export function latest(data: Plot["data"]): (number | null)[] {
+	const xs = data[0] ?? [];
+	let newest = -1;
+	const values = data.slice(1).map((col) => {
+		for (let i = col.length - 1; i >= 0; i--) {
+			const v = col[i];
+			if (v !== null && v !== undefined) {
+				newest = Math.max(newest, i);
+				return v;
+			}
+		}
+		return null;
+	});
+	return [newest >= 0 ? (xs[newest] ?? null) : null, ...values];
+}
+
 function columns(s: Series): { role: Role; values: (number | null)[] }[] {
 	if (s.source_kind === "manual") return [{ role: "manual", values: s.avg }];
 	const band =
