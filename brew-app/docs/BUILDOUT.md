@@ -1527,8 +1527,8 @@ correctly in French Excel.
 > rules need no relays and can land before them.
 
 **Built (2026-11-20): the alerts slice — 6a engine, 6b `brewd`, 6c desktop, 6d UI.**
-Everything that needs no relays and no new recipe model. Temp control and schedule
-steps stay below, unchecked.
+Everything that needs no relays and no new recipe model. Temp control stays below,
+unchecked. Schedule-driven alerts followed on 2026-11-22.
 
 - [x] Rule engine: condition on latest readings → action. Lives in `brewcore`,
       runs in `brewd`. **Refined:** `brewcore::alert`, pure. `brewd` has no
@@ -1587,20 +1587,45 @@ steps stay below, unchecked.
 - [x] Rule: stalled, as its own alert. 4c's `Stalled { since }` already tells it
       apart from finished; the finished rule must not swallow it. **Done:** two
       rules from one evaluation; each clears when the other raises
-- [ ] Rule: temp rate of change — more than X °C in Y hours, which catches a
-      stuck relay or an open fridge door while still inside the band
-- [ ] Rule: day N after pitch, for checks that are calendar-driven ("taste on
-      day 10")
-- [ ] Schedule steps beyond additions. `recipe_item.offset_hours` only schedules
+- [x] Rule: temp rate of change — more than X °C in Y hours, which catches a
+      stuck relay or an open fridge door while still inside the band. **Done:**
+      `temp_rate`, `[alerts]` `temp_rate_delta_c` (2 °C) within
+      `temp_rate_window_hours` (3 h), over a 10 min rolling median so a lifted probe
+      doesn't count, and only since the reading came into the band, so a ramp into a
+      new one doesn't either. Out of the band it says nothing; the band rules do.
+      Clears 0.3 °C under the threshold
+- [x] Rule: day N after pitch, for checks that are calendar-driven ("taste on
+      day 10"). **Done:** `batch_reminder` (`0014_reminder.sql`), raised by the
+      due / overdue rules below. Ticked by a `reminder_done` event, as steps are
+- [x] Schedule steps beyond additions. `recipe_item.offset_hours` only schedules
       ingredients, and only by time. Needs a step that can be a task (rack, degas,
       cold crash, take a reading, ramp) as well as an addition, and a trigger that
       is either an offset from pitch or a reading condition. The TOSNA ⅓-break
-      dose is the case `offset_hours` cannot express today
-- [ ] Rule: schedule step due, and overdue (due + grace, nothing logged). "Done"
+      dose is the case `offset_hours` cannot express today. **Done (2026-11-21):**
+      `schedule_step` (`0013_schedule.sql`), on the batch: ordered steps, each with
+      a temperature band, a gravity to fall to and a minimum time; a step starts
+      when the one before it is done, the first at the pitch. Ticked by a
+      `step_done` event, so the timeline is the record. A W-34/70 lager template.
+      **Refined:** the current step's band is the alert band, ahead of the batch's
+      own and the yeast's, and a new step's band waits until the beer gets into it
+      (or a day passes), so a free-rise or a crash doesn't raise on the way. The
+      TOSNA ⅓-break dose is a step with a gravity target
+- [x] Rule: schedule step due, and overdue (due + grace, nothing logged). "Done"
       is the matching `batch_ingredient` or `batch_event`, not a checkbox — the
-      log stays the one record
-- [ ] Per-batch schedule overrides — shift or skip a step without forking the
-      recipe version, and a schedule for a batch with no recipe
+      log stays the one record. **Done:** `due` / `overdue`, keyed per subject in
+      the alert's device slot (`step:<id>`, `reminder:<id>`,
+      `addition:<recipe_item_id>`), so the log and `alert` are unchanged. A step is
+      due once its minimum time and its gravity target (first smoothed crossing)
+      are both met; a reminder at its day; a recipe addition timed after the pitch
+      at its offset, until the additions table pairs an actual with it. Overdue
+      `[alerts].overdue_grace_hours` (12 h) later, taking over from due. Done drops
+      the subject from the watch, which clears the alert. Watch v2
+- [x] ~~Per-batch schedule overrides — shift or skip a step without forking the
+      recipe version~~, and a schedule for a batch with no recipe. **Refined:** the
+      schedule lives on the batch, so it is edited in place and a batch with no
+      recipe has one like any other; there is no recipe-level schedule to override
+- [ ] A recipe version's schedule template, copied into a batch at creation.
+      Wait for a second recipe that wants one; the lager template covers the first
 - [ ] Rule scope: global defaults (temp band per beverage type, stale interval),
       overridable per recipe version and per batch. Thresholds are config, as the
       finished detector already says. **Partly:** per batch only — `batch_alert`
