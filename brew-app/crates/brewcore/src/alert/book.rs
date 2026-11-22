@@ -29,10 +29,20 @@ pub struct Alert {
 impl Alert {
     /// What the phone shows: the batch, then what happened.
     pub fn title(&self) -> String {
-        match &self.device {
-            Some(device) => format!("{}: {device} silent", self.code),
-            None => format!("{}: {}", self.code, self.rule.title()),
+        match (self.rule, &self.device) {
+            (Rule::Silent, Some(device)) => format!("{}: {device} silent", self.code),
+            (Rule::Due | Rule::Overdue, _) => {
+                format!("{}: {} {}", self.code, self.subject(), self.rule.title())
+            }
+            _ => format!("{}: {}", self.code, self.rule.title()),
         }
+    }
+
+    /// A due alert's detail opens with what is due, up to the dash.
+    fn subject(&self) -> &str {
+        self.detail
+            .split_once(" — ")
+            .map_or(self.detail.as_str(), |(s, _)| s)
     }
 
     fn record(&self, time: Timestamp, event: LogEvent, detail: String) -> LogRecord {
@@ -272,6 +282,28 @@ mod tests {
                 .all(|r| r.batch_id == 1 && r.event == LogEvent::Cleared)
         );
         assert_eq!(book.alerts().len(), 1);
+    }
+
+    #[test]
+    fn a_due_alert_is_titled_by_its_subject_and_ends_when_the_subject_leaves() {
+        let mut book = AlertBook::new(at(0));
+        let due = |key: &str| Condition {
+            rule: Rule::Due,
+            device: Some(key.into()),
+            verdict: raise("Primary — 3 d in"),
+        };
+        book.step(&watch(1), vec![due("step:5")], at(1));
+        assert_eq!(book.alerts()[0].title(), "SELTZER-001: Primary due");
+
+        let out = book.step(&watch(1), vec![due("step:6")], at(2));
+        let events: Vec<_> = out.iter().map(|r| (r.device.as_deref(), r.event)).collect();
+        assert_eq!(
+            events,
+            [
+                (Some("step:6"), LogEvent::Raised),
+                (Some("step:5"), LogEvent::Cleared)
+            ]
+        );
     }
 
     #[test]

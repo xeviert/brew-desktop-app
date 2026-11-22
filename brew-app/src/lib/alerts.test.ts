@@ -28,6 +28,14 @@ describe("alertTitle", () => {
 	it("names the device for a silent one", () => {
 		expect(alertTitle(alert({ rule: "silent", device: "ispindel-1" }))).toBe("ispindel-1 silent");
 	});
+	it("names what is due, and an overdue one is urgent", () => {
+		const due = alert({ rule: "due", device: "step:5", detail: "Primary — 3 d 1 h in" });
+		expect(alertTitle(due)).toBe("Primary due");
+		expect(isUrgent(due)).toBe(false);
+		const overdue = { ...due, rule: "overdue" as const, detail: "Primary — due 12 h ago; 3 d 12 h in" };
+		expect(alertTitle(overdue)).toBe("Primary overdue");
+		expect(isUrgent(overdue)).toBe(true);
+	});
 });
 
 describe("alertState", () => {

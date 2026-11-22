@@ -18,7 +18,7 @@ use crate::{
     units::Timestamp,
 };
 
-use super::{Buffers, Rule, Watch, buffer::DeviceBuffer};
+use super::{Buffers, Rule, StepWatch, Watch, buffer::DeviceBuffer};
 
 /// How long a temperature must stay outside its band before it raises, so one spike —
 /// a probe lifted out of the thermowell, the fridge door — doesn't.
@@ -58,10 +58,24 @@ pub struct Condition {
 /// [`super::AlertBook::step`] reads as "no longer applies" and clears.
 pub fn evaluate(watch: &Watch, buffers: &Buffers, now: Timestamp) -> Vec<Condition> {
     let mut out = Vec::new();
-    gravity(watch, buffers, &mut out);
+    let sg = gravity(watch, buffers, &mut out);
     temperature(watch, buffers, &mut out);
     silence(watch, buffers, now, &mut out);
+    if let Some(step) = &watch.step {
+        let verdicts = step_due(step, sg.as_deref(), now, watch.params.overdue_grace_secs);
+        push_due(&mut out, format!("step:{}", step.id), verdicts);
+    }
     out
+}
+
+fn push_due(out: &mut Vec<Condition>, key: String, (due, overdue): (Verdict, Verdict)) {
+    for (rule, verdict) in [(Rule::Due, due), (Rule::Overdue, overdue)] {
+        out.push(Condition {
+            rule,
+            device: Some(key.clone()),
+            verdict,
+        });
+    }
 }
 
 fn push(out: &mut Vec<Condition>, rule: Rule, verdict: Verdict) {
@@ -72,8 +86,14 @@ fn push(out: &mut Vec<Condition>, rule: Rule, verdict: Verdict) {
     });
 }
 
-fn gravity(watch: &Watch, buffers: &Buffers, out: &mut Vec<Condition>) {
-    let Some(feed) = &watch.gravity else { return };
+/// Returns the smoothed gravity it judged, for the schedule step; `None` with no
+/// gravity feed.
+fn gravity(
+    watch: &Watch,
+    buffers: &Buffers,
+    out: &mut Vec<Condition>,
+) -> Option<Vec<(Timestamp, f64)>> {
+    let feed = watch.gravity.as_ref()?;
     let raw: Vec<(Timestamp, f64)> = buffers
         .get(&feed.device)
         .map(|b| b.series(&feed.column, feed.since))
@@ -146,6 +166,57 @@ fn gravity(watch: &Watch, buffers: &Buffers, out: &mut Vec<Condition>) {
     }
     if let Some(target) = watch.target_sg {
         push(out, Rule::TargetSg, reached(target.get(), "target"));
+    }
+    Some(smoothed)
+}
+
+/// Due once every target the step has is met (its minimum time, and the first smoothed
+/// gravity at or below its target since it started), overdue `grace` after that. Due
+/// clears when overdue raises, as finished does for stalled. A gravity target with no
+/// gravity to read, or none since the step started, can't tell.
+fn step_due(
+    step: &StepWatch,
+    sg: Option<&[(Timestamp, f64)]>,
+    now: Timestamp,
+    grace: i64,
+) -> (Verdict, Verdict) {
+    let mut at = step.started;
+    if let Some(h) = step.min_hours {
+        at = at.saturating_add_secs((h * 3_600.0).round() as i64);
+    }
+    let mut facts = format!("{} in", span(step.started.secs_until(now)));
+    if let Some(target) = step.target_sg {
+        let since = sg.map_or(&[][..], |sg| {
+            &sg[sg.partition_point(|&(t, _)| t < step.started)..]
+        });
+        let Some(&(_, latest)) = since.last() else {
+            return (Verdict::Unknown, Verdict::Unknown);
+        };
+        match since.iter().find(|&&(_, v)| v <= target.get()) {
+            Some(&(t, _)) => at = at.max(t),
+            None => return (Verdict::Clear, Verdict::Clear),
+        }
+        facts.push_str(&format!("; SG {latest:.3}, target {:.3}", target.get()));
+    }
+    due_verdicts(&step.name, at, &facts, now, grace)
+}
+
+fn due_verdicts(
+    subject: &str,
+    at: Timestamp,
+    facts: &str,
+    now: Timestamp,
+    grace: i64,
+) -> (Verdict, Verdict) {
+    let late = at.secs_until(now);
+    if late < 0 {
+        (Verdict::Clear, Verdict::Clear)
+    } else if late >= grace {
+        let detail = format!("{subject} — due {} ago; {facts}", span(late));
+        (Verdict::Clear, Verdict::Raise { detail })
+    } else {
+        let detail = format!("{subject} — {facts}");
+        (Verdict::Raise { detail }, Verdict::Clear)
     }
 }
 
@@ -718,6 +789,85 @@ mod tests {
         );
         assert_eq!(verdict(&conds, Rule::TempRate), &Verdict::Unknown);
         assert!(raised(verdict(&conds, Rule::TempHigh)), "{conds:?}");
+    }
+
+    fn step_watch(min_hours: Option<f64>, target: Option<f64>) -> Watch {
+        let mut w = sg_watch(None);
+        w.step = Some(StepWatch {
+            id: 5,
+            name: "Primary".into(),
+            started: at(0),
+            min_hours,
+            target_sg: target.map(Sg::new_unchecked),
+        });
+        w
+    }
+
+    fn due_and_overdue(conds: &[Condition]) -> (&Verdict, &Verdict) {
+        assert!(
+            conds
+                .iter()
+                .filter(|c| matches!(c.rule, Rule::Due | Rule::Overdue))
+                .all(|c| c.device.as_deref() == Some("step:5"))
+        );
+        (verdict(conds, Rule::Due), verdict(conds, Rule::Overdue))
+    }
+
+    #[test]
+    fn a_step_is_due_after_its_hours_and_overdue_after_the_grace() {
+        let w = step_watch(Some(72.0), None);
+        let b = Buffers::new();
+        let conds = evaluate(&w, &b, at(71 * HOUR));
+        assert_eq!(due_and_overdue(&conds), (&Verdict::Clear, &Verdict::Clear));
+
+        let conds = evaluate(&w, &b, at(73 * HOUR));
+        let due = Verdict::Raise {
+            detail: "Primary — 3 d 1 h in".into(),
+        };
+        assert_eq!(due_and_overdue(&conds), (&due, &Verdict::Clear));
+
+        let conds = evaluate(&w, &b, at(84 * HOUR));
+        let overdue = Verdict::Raise {
+            detail: "Primary — due 12 h ago; 3 d 12 h in".into(),
+        };
+        assert_eq!(due_and_overdue(&conds), (&Verdict::Clear, &overdue));
+    }
+
+    #[test]
+    fn a_steps_gravity_target_waits_for_the_smoothed_crossing() {
+        // 1.040 → 1.000 from 12 h to 84 h: 1.020 is crossed at 48 h.
+        let w = step_watch(Some(24.0), Some(1.020));
+        let conds = evaluate(
+            &w,
+            &buffers("ispindel", "gravity", ferment(40 * HOUR, 7)),
+            at(40 * HOUR),
+        );
+        assert_eq!(due_and_overdue(&conds), (&Verdict::Clear, &Verdict::Clear));
+
+        let conds = evaluate(
+            &w,
+            &buffers("ispindel", "gravity", ferment(52 * HOUR, 7)),
+            at(52 * HOUR),
+        );
+        let (Verdict::Raise { detail }, Verdict::Clear) = due_and_overdue(&conds) else {
+            panic!("{conds:?}");
+        };
+        assert!(
+            detail.starts_with("Primary — 2 d 4 h in; SG 1.01"),
+            "{detail}"
+        );
+        assert!(detail.ends_with(", target 1.020"), "{detail}");
+    }
+
+    #[test]
+    fn a_gravity_target_with_no_gravity_cannot_tell() {
+        let mut w = step_watch(None, Some(1.020));
+        w.gravity = None;
+        let conds = evaluate(&w, &Buffers::new(), at(100 * HOUR));
+        assert_eq!(
+            due_and_overdue(&conds),
+            (&Verdict::Unknown, &Verdict::Unknown)
+        );
     }
 
     fn device(columns: &[&str], rows: impl IntoIterator<Item = (i64, Vec<f64>)>) -> DeviceBuffer {

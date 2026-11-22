@@ -81,6 +81,11 @@ pub const DEFAULT_ALERTS_TEMP_RATE_WINDOW_HOURS: f64 =
 pub const MIN_ALERTS_TEMP_RATE_WINDOW_HOURS: f64 = 0.5;
 pub const MAX_ALERTS_TEMP_RATE_WINDOW_HOURS: f64 = 24.0;
 
+pub const DEFAULT_ALERTS_OVERDUE_GRACE_HOURS: f64 =
+    crate::alert::watch::OVERDUE_GRACE_SECS_DEFAULT as f64 / 3_600.0;
+pub const MIN_ALERTS_OVERDUE_GRACE_HOURS: f64 = 1.0;
+pub const MAX_ALERTS_OVERDUE_GRACE_HOURS: f64 = 72.0;
+
 /// Resolve the config path from `default_dir`, honouring [`CONFIG_PATH_ENV`].
 ///
 /// As with [`crate::db::resolve_db_path`], the caller supplies the directory because
@@ -255,6 +260,7 @@ impl Health {
 pub struct Alerts {
     pub temp_rate_delta_c: f64,
     pub temp_rate_window_hours: f64,
+    pub overdue_grace_hours: f64,
 }
 
 impl Default for Alerts {
@@ -262,6 +268,7 @@ impl Default for Alerts {
         Self {
             temp_rate_delta_c: DEFAULT_ALERTS_TEMP_RATE_DELTA_C,
             temp_rate_window_hours: DEFAULT_ALERTS_TEMP_RATE_WINDOW_HOURS,
+            overdue_grace_hours: DEFAULT_ALERTS_OVERDUE_GRACE_HOURS,
         }
     }
 }
@@ -271,6 +278,7 @@ impl Alerts {
         AlertParams {
             temp_rate_delta_c: self.temp_rate_delta_c,
             temp_rate_window_secs: (self.temp_rate_window_hours * 3_600.0).round() as i64,
+            overdue_grace_secs: (self.overdue_grace_hours * 3_600.0).round() as i64,
         }
     }
 }
@@ -438,6 +446,13 @@ impl Config {
                 MIN_ALERTS_TEMP_RATE_WINDOW_HOURS,
                 MAX_ALERTS_TEMP_RATE_WINDOW_HOURS,
             ),
+            (
+                "alerts.overdue_grace_hours",
+                &mut self.alerts.overdue_grace_hours,
+                DEFAULT_ALERTS_OVERDUE_GRACE_HOURS,
+                MIN_ALERTS_OVERDUE_GRACE_HOURS,
+                MAX_ALERTS_OVERDUE_GRACE_HOURS,
+            ),
         ] {
             let clamped = clamp_finite(*value, default, min, max);
             if clamped != *value {
@@ -513,6 +528,11 @@ impl Config {
                 "alerts.temp_rate_window_hours",
                 self.alerts.temp_rate_window_hours,
                 MIN_ALERTS_TEMP_RATE_WINDOW_HOURS..=MAX_ALERTS_TEMP_RATE_WINDOW_HOURS,
+            ),
+            (
+                "alerts.overdue_grace_hours",
+                self.alerts.overdue_grace_hours,
+                MIN_ALERTS_OVERDUE_GRACE_HOURS..=MAX_ALERTS_OVERDUE_GRACE_HOURS,
             ),
         ] {
             if !value.is_finite() {

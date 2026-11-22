@@ -14,18 +14,23 @@ const RULES: Record<AlertRule, string> = {
 	sugar_break: "⅓ sugar break",
 	target_sg: "Target gravity reached",
 	temp_rate: "Temperature moving fast",
+	due: "Due",
+	overdue: "Overdue",
 };
 
 /** Rules worth acting on now, as opposed to today. Matches `brewd`'s push priority. */
-const URGENT: ReadonlySet<AlertRule> = new Set(["stalled", "temp_high", "temp_low", "temp_rate", "silent"]);
+const URGENT: ReadonlySet<AlertRule> = new Set(["stalled", "temp_high", "temp_low", "temp_rate", "silent", "overdue"]);
 
 export const ruleText = (rule: AlertRule): string => RULES[rule] ?? rule.replaceAll("_", " ");
 
 export const isUrgent = (a: AlertRow): boolean => URGENT.has(a.rule);
 
-/** "Too warm", or "ispindel-1 silent" for a device. */
+/** "Too warm", "ispindel-1 silent" for a device, "Primary due" for a schedule item —
+ * whose detail opens with its name, up to the dash. */
 export function alertTitle(a: AlertRow): string {
-	return a.rule === "silent" && a.device ? `${a.device} silent` : ruleText(a.rule);
+	if (a.rule === "silent" && a.device) return `${a.device} silent`;
+	if (a.rule === "due" || a.rule === "overdue") return `${a.detail.split(" — ")[0]} ${a.rule}`;
+	return ruleText(a.rule);
 }
 
 /**

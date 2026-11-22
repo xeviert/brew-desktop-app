@@ -24,7 +24,7 @@ export interface Config {
 	gravity: { ispindel_unit: IspindelUnit | null };
 	stability: { window_hours: number; slope_sg_per_day: number; fg_band: number };
 	health: { battery_warn_v: number; rssi_warn_dbm: number };
-	alerts: { temp_rate_delta_c: number; temp_rate_window_hours: number };
+	alerts: { temp_rate_delta_c: number; temp_rate_window_hours: number; overdue_grace_hours: number };
 	export: { dialect: ExportDialect };
 	money: { default_currency: Currency };
 }
@@ -1470,7 +1470,9 @@ export type AlertRule =
 	| "silent"
 	| "sugar_break"
 	| "target_sg"
-	| "temp_rate";
+	| "temp_rate"
+	| "due"
+	| "overdue";
 
 /** Mirrors `brewcore::db::alert::AlertRow`. Timestamps are epoch seconds. */
 export interface AlertRow {
@@ -1478,7 +1480,7 @@ export interface AlertRow {
 	batch_id: number;
 	code: string;
 	rule: AlertRule;
-	/** The journal device, for `silent`. */
+	/** The journal device for `silent`; `step:<id>` and the like for `due` and `overdue`. */
 	device: string | null;
 	raised_at: number;
 	detail: string;

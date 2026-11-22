@@ -26,7 +26,7 @@ pub use book::{Alert, AlertBook};
 pub use buffer::{Buffers, DeviceBuffer};
 pub use eval::{Condition, Verdict, evaluate};
 pub use log::{LOG_COLUMNS, LOG_HEADER, LogEvent, LogRecord};
-pub use watch::{AlertParams, Feed, GravityFeed, WATCH_VERSION, Watch, WatchSet};
+pub use watch::{AlertParams, Feed, GravityFeed, StepWatch, WATCH_VERSION, Watch, WatchSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -51,10 +51,15 @@ pub enum Rule {
     /// More than the set change inside the set window while still in the band: a
     /// stuck relay, an open fridge door.
     TempRate,
+    /// Something on the schedule is ready or due. Keyed per subject (`step:<id>`), and
+    /// cleared when the subject leaves the watch, which is when it's done.
+    Due,
+    /// Due, plus the grace, and still not done. Takes over from [`Rule::Due`].
+    Overdue,
 }
 
 impl Rule {
-    pub const ALL: [Rule; 8] = [
+    pub const ALL: [Rule; 10] = [
         Rule::Finished,
         Rule::Stalled,
         Rule::TempHigh,
@@ -63,6 +68,8 @@ impl Rule {
         Rule::SugarBreak,
         Rule::TargetSg,
         Rule::TempRate,
+        Rule::Due,
+        Rule::Overdue,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -75,6 +82,8 @@ impl Rule {
             Rule::SugarBreak => "sugar_break",
             Rule::TargetSg => "target_sg",
             Rule::TempRate => "temp_rate",
+            Rule::Due => "due",
+            Rule::Overdue => "overdue",
         }
     }
 
@@ -89,6 +98,8 @@ impl Rule {
             Rule::SugarBreak => "⅓ sugar break",
             Rule::TargetSg => "target gravity reached",
             Rule::TempRate => "temperature moving fast",
+            Rule::Due => "due",
+            Rule::Overdue => "overdue",
         }
     }
 }

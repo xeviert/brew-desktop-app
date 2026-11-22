@@ -21,7 +21,7 @@ use super::{
 };
 use crate::{
     Error, Result,
-    alert::{Feed, GravityFeed, LogEvent, LogRecord, Rule, Watch},
+    alert::{Feed, GravityFeed, LogEvent, LogRecord, Rule, StepWatch, Watch},
     brewd::discovery::JOURNALS_PATH,
     config::Config,
     journal::{JOURNAL_EXTENSION, rotated_stem},
@@ -258,6 +258,7 @@ pub fn build_watches(conn: &Connection, config: &Config) -> Result<Vec<Watch>> {
             temp_min_c: band.0,
             temp_max_c: band.1,
             band_since: scheduled.map(|(_, since)| since),
+            step: step_watch(&steps, batch.pitched_at),
             stability: config.stability.params(),
             health: config.health.params(),
             params: config.alerts.params(),
@@ -284,6 +285,22 @@ fn schedule_band(steps: &[StepRow], pitched_at: Option<Timestamp>) -> Option<(Ba
 }
 
 type Band = (Option<f64>, Option<f64>);
+
+/// The first step not done, once it has started and has something that says it's done.
+fn step_watch(steps: &[StepRow], pitched_at: Option<Timestamp>) -> Option<StepWatch> {
+    let i = steps.iter().position(|s| s.done_event_id.is_none())?;
+    let step = &steps[i];
+    if step.min_hours.is_none() && step.target_sg.is_none() {
+        return None;
+    }
+    Some(StepWatch {
+        id: step.id,
+        name: step.name.clone(),
+        started: step_start(steps, i, pitched_at)?,
+        min_hours: step.min_hours,
+        target_sg: step.target_sg,
+    })
+}
 
 /// Each end from the first layer that sets it — schedule step, the batch's own, the
 /// yeast's. Where that crosses, the last layer is dropped, then the next: the more
@@ -711,6 +728,50 @@ mod tests {
             (Some(16.0), Some(18.0), Some(rested)),
             "and once all are done"
         );
+    }
+
+    #[test]
+    fn the_current_step_is_watched_once_it_has_a_target() {
+        use crate::db::schedule::{NewStep, add_step, complete_step};
+        let mut conn = db();
+        let id = pitched(&conn, "LAGER-001");
+        let probe = journal(&mut conn, "esp32-1.csv", &[("vessel_temp", Metric::TempC)]);
+        bind(&conn, id, &probe);
+        let watched =
+            |conn: &Connection| build_watches(conn, &config(None)).unwrap().remove(0).step;
+
+        let primary = add_step(
+            &conn,
+            id,
+            &NewStep {
+                name: "Primary".into(),
+                min_hours: Some(72.0),
+                target_sg: Some(Sg::new_unchecked(1.020)),
+                ..NewStep::default()
+            },
+        )
+        .unwrap();
+        add_step(
+            &conn,
+            id,
+            &NewStep {
+                name: "Package".into(),
+                ..NewStep::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            watched(&conn),
+            Some(StepWatch {
+                id: primary,
+                name: "Primary".into(),
+                started: T0,
+                min_hours: Some(72.0),
+                target_sg: Some(Sg::new_unchecked(1.020)),
+            })
+        );
+        complete_step(&conn, primary, T0.saturating_add_secs(80 * 3_600), None).unwrap();
+        assert_eq!(watched(&conn), None, "nothing says when packaging is due");
     }
 
     #[test]

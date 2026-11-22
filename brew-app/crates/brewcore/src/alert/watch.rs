@@ -44,6 +44,7 @@ pub struct GravityFeed {
 
 pub const TEMP_RATE_DELTA_C_DEFAULT: f64 = 2.0;
 pub const TEMP_RATE_WINDOW_SECS_DEFAULT: i64 = 3 * 3_600;
+pub const OVERDUE_GRACE_SECS_DEFAULT: i64 = 12 * 3_600;
 
 /// The alert rules' own thresholds, from `[alerts]` in the desktop's config.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -53,6 +54,8 @@ pub struct AlertParams {
     pub temp_rate_delta_c: f64,
     /// …within this long.
     pub temp_rate_window_secs: i64,
+    /// [`super::Rule::Overdue`]: this long past due.
+    pub overdue_grace_secs: i64,
 }
 
 impl Default for AlertParams {
@@ -60,8 +63,21 @@ impl Default for AlertParams {
         Self {
             temp_rate_delta_c: TEMP_RATE_DELTA_C_DEFAULT,
             temp_rate_window_secs: TEMP_RATE_WINDOW_SECS_DEFAULT,
+            overdue_grace_secs: OVERDUE_GRACE_SECS_DEFAULT,
         }
     }
+}
+
+/// The batch's current schedule step, when something says it's done: a minimum time,
+/// a gravity, or both.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepWatch {
+    pub id: i64,
+    pub name: String,
+    pub started: Timestamp,
+    pub min_hours: Option<f64>,
+    pub target_sg: Option<Sg>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -82,6 +98,7 @@ pub struct Watch {
     /// When the band began, if it comes from a schedule step: a newly ticked step's
     /// band isn't judged until the beer gets there.
     pub band_since: Option<Timestamp>,
+    pub step: Option<StepWatch>,
     pub stability: StabilityParams,
     pub health: HealthParams,
     pub params: AlertParams,
@@ -159,6 +176,14 @@ impl WatchSet {
             {
                 return invalid(format!("batch {}: temp rate is not positive", w.batch_id));
             }
+            if p.overdue_grace_secs < 0 {
+                return invalid(format!("batch {}: overdue grace is negative", w.batch_id));
+            }
+            if let Some(h) = w.step.as_ref().and_then(|s| s.min_hours) {
+                if !(h.is_finite() && h >= 0.0) {
+                    return invalid(format!("batch {}: step min_hours is {h}", w.batch_id));
+                }
+            }
         }
         Ok(())
     }
@@ -190,6 +215,7 @@ pub(crate) mod tests {
             temp_min_c: Some(16.0),
             temp_max_c: Some(20.0),
             band_since: None,
+            step: None,
             stability: StabilityParams::default(),
             health: HealthParams::default(),
             params: AlertParams::default(),

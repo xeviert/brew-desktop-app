@@ -43,10 +43,15 @@ impl Ntfy {
     pub async fn send_alert(&self, alert: &Alert) -> Result<(), String> {
         // Something to act on now is high; something to act on today is default.
         let (priority, tags): (u8, &[&str]) = match alert.rule {
-            Rule::Stalled | Rule::TempHigh | Rule::TempLow | Rule::TempRate | Rule::Silent => {
-                (4, &["warning"])
+            Rule::Stalled
+            | Rule::TempHigh
+            | Rule::TempLow
+            | Rule::TempRate
+            | Rule::Silent
+            | Rule::Overdue => (4, &["warning"]),
+            Rule::Finished | Rule::SugarBreak | Rule::TargetSg | Rule::Due => {
+                (3, &["white_check_mark"])
             }
-            Rule::Finished | Rule::SugarBreak | Rule::TargetSg => (3, &["white_check_mark"]),
         };
         self.send(&alert.title(), &alert.detail, priority, tags)
             .await

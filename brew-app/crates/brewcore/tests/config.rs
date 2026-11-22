@@ -141,6 +141,7 @@ fn save_then_load_round_trips() {
         alerts: Alerts {
             temp_rate_delta_c: 3.0,
             temp_rate_window_hours: 2.0,
+            overdue_grace_hours: 6.0,
         },
         export: Export {
             dialect: ExportDialect::ExcelFr,
