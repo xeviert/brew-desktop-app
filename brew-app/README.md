@@ -1,16 +1,10 @@
-# fermentation-tools
+# brew-app
 
-Tools for a small home brewery, focused on hard seltzer. Beer and other fermented drinks work too.
-
-[`brew-app/`](brew-app/) is a desktop app (Tauri + Rust + Svelte) for batches, recipes, ingredient lots, fermentation curves, analytics and alerts. It also contains `brewd`, a daemon that runs on a Raspberry Pi, and the ESPHome firmware for the sensors.
-
----
-
-## brew-app
+A desktop app (Tauri + Rust + Svelte) for a small home brewery, focused on hard seltzer; beer and other fermented drinks work too. It covers batches, recipes, ingredient lots, fermentation curves, analytics and alerts. It also contains `brewd`, a daemon that runs on a Raspberry Pi, and the ESPHome firmware for the sensors.
 
 The app is meant to be the operating system for the brewery. Sensors report fermentation data, and the app ties that data to batches, recipes, ingredient lots, schedules and production records. Everything is stored in a single local SQLite file.
 
-### How the pieces connect
+## How the pieces connect
 
 ```mermaid
 flowchart LR
@@ -48,9 +42,9 @@ flowchart LR
 
 - **`brewd`** is the logger of record. It runs all the time, subscribes to the broker, and appends each device's readings to a CSV journal. It also evaluates alert watches and sends notifications through [ntfy](https://ntfy.sh).
 - **The desktop app** only needs to be open when you use it. When it starts, it fetches whatever was added to the journals since the last sync, using byte-offset `Range` requests, so nothing is lost while it is closed.
-- **Fermentrack** was the original plan (v1). That code is kept in `brewcore::fermentrack` and still tested, but the project now uses v2. [ARCHITECTURE.md](brew-app/ARCHITECTURE.md) explains why.
+- **Fermentrack** was the original plan (v1). That code is kept in `brewcore::fermentrack` and still tested, but the project now uses v2. [ARCHITECTURE.md](ARCHITECTURE.md) explains why.
 
-### Features
+## Features
 
 - **Batches:** lifecycle from planned to packaged, a timeline of events (pitch, additions, measurements, notes), streams bound to vessels, and quick entry for manual readings.
 - **Recipes:** immutable versions once used, diffs between versions, and the recipe plan kept separate from batch actuals.
@@ -58,11 +52,12 @@ flowchart LR
 - **Calculators:** ABV, attenuation, hydrometer and refractometer corrections, sugar additions, YAN and nutrient dosing, pitch rate, and cost per litre.
 - **Dashboard and curves:** live status cards, gravity and temperature charts (uPlot), smoothing, and detection of when fermentation is stable or finished.
 - **Analytics:** overlays comparing batches, saved queries, per-strain rollups, and CSV export.
+- **Production records:** vessel cleaning, packaging, inventory with lot adjustments, and batch reports.
 - **Alerts:** temperature-band and rate-of-change rules, stale sensors, schedule steps that are due or overdue, and day-N reminders. Alerts are evaluated on the Pi, so they fire even when the desktop is off, and can be acknowledged or snoozed from the app.
 
-Phases 0–6 of [docs/BUILDOUT.md](brew-app/docs/BUILDOUT.md) are built. Phase 7 (production records: cleaning, packaging, inventory, batch reports) has not started. Temperature control (relays driven by the ESPHome `thermostat`) is deferred.
+Phases 0–7 of [docs/BUILDOUT.md](docs/BUILDOUT.md) are built. Temperature control (relays driven by the ESPHome `thermostat`) is deferred.
 
-### Layout
+## Layout
 
 ```text
 brew-app/
@@ -88,7 +83,7 @@ brew-app/
 └── docs/           # build plan, hardware, network, Fermentrack notes
 ```
 
-### Requirements
+## Requirements
 
 - Rust stable (MSRV 1.85, edition 2024)
 - Node 24 and npm 11
@@ -98,10 +93,9 @@ brew-app/
 
 npm 11 blocks dependency install scripts by default. `package.json#allowScripts` explicitly allows `esbuild`, which Vite needs. Keep that entry when upgrading esbuild.
 
-### Build and run
+## Build and run
 
 ```sh
-cd brew-app
 npm ci
 npm run build          # do this first: Tauri's build reads ../dist at compile time
 npm run tauri dev      # run the desktop app with hot reload
@@ -118,7 +112,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-### Dev helpers
+## Dev helpers
 
 ```sh
 cargo xtask demo-db [path]       # seed a database with demo batches, recipes and curves
@@ -128,7 +122,7 @@ cargo xtask db-status [path]     # print schema version and table counts
 cargo xtask build-pi             # cross-compile brewd for aarch64-unknown-linux-gnu
 ```
 
-### Configuration and data
+## Configuration and data
 
 | | Default | Override |
 |---|---|---|
@@ -137,12 +131,12 @@ cargo xtask build-pi             # cross-compile brewd for aarch64-unknown-linux
 
 Sources (brewd journals or Fermentrack), units, poll interval, and the brewd token are all set on the app's Settings and Sources screens.
 
-### Deploying brewd on the Pi
+## Deploying brewd on the Pi
 
 1. Build it: `cargo xtask build-pi`.
 2. Copy `target/aarch64-unknown-linux-gnu/release/brewd` to the Pi.
-3. Follow the install commands at the top of [`crates/brewd/deploy/brewd.service`](brew-app/crates/brewd/deploy/brewd.service).
-4. Copy [`brewd.example.toml`](brew-app/crates/brewd/deploy/brewd.example.toml) to `/etc/brewd/brewd.toml` and fill in:
+3. Follow the install commands at the top of [`crates/brewd/deploy/brewd.service`](crates/brewd/deploy/brewd.service).
+4. Copy [`brewd.example.toml`](crates/brewd/deploy/brewd.example.toml) to `/etc/brewd/brewd.toml` and fill in:
    - `mqtt.password` for the broker user
    - `http.token`, which is required for writes. Generate one with `openssl rand -hex 16` and paste the same value into the app's Settings.
    - `notify.ntfy_topic`, which is optional. Use a long random string: anyone who knows the topic can read it.
@@ -150,7 +144,7 @@ Sources (brewd journals or Fermentrack), units, poll interval, and the brewd tok
 
 The HTTP API is meant for the LAN only. Reads require no auth.
 
-### Hardware
+## Hardware
 
 | Part | Details |
 |---|---|
@@ -160,7 +154,7 @@ The HTTP API is meant for the LAN only. Reads require no auth.
 | Gravity | iSpindel (Wemos board, stock firmware). Publishes tilt, gravity, temperature, battery and RSSI over MQTT. Gravity comes out as SG or °P depending on its calibration polynomial; set `gravity.ispindel_unit` in the app to match. |
 | Heating / cooling | Not built yet. Planned: relays or SSRs driven by ESPHome's `thermostat`. |
 
-#### Wiring
+### Wiring
 
 ```text
 ESP32 3V3  ──► + rail
@@ -172,7 +166,7 @@ DS18B20 yellow (DQ)  ──► DQ row
 4.7 kΩ               DQ row ↔ + rail   (the bus doesn't work without it)
 ```
 
-### Setup
+## Setup
 
 Set up the Pi first, then the ESP32: ESPHome's MQTT output can't be checked until a broker exists.
 
@@ -191,7 +185,7 @@ Set up the Pi first, then the ESP32: ESPHome's MQTT output can't be checked unti
    Persistence is off because `brewd`'s journal is the record, not the broker. To check it works, run `mosquitto_sub -v -t '#' -u brewd -P …` in one session and `mosquitto_pub -t test/hello -m hi -u devices -P …` in another. The same `pub` without `-u` must fail with `not authorised`.
 3. **ESP32 firmware.**
    ```sh
-   cd brew-app/firmware
+   cd firmware
    cp secrets.example.yaml secrets.yaml   # gitignored; fill in Wi-Fi, MQTT (devices user) and OTA passwords
    esphome run esp32-1.yaml               # USB the first time, OTA after
    ```
@@ -206,11 +200,11 @@ Set up the Pi first, then the ESP32: ESPHome's MQTT output can't be checked unti
    - Don't plug the Wemos's USB-C into a computer while the battery is in.
    - Charge it with a plain USB-C charger. Smart chargers aren't supported.
 
-### Docs
+## Docs
 
-- [ARCHITECTURE.md](brew-app/ARCHITECTURE.md): the options that were considered, and why the project went straight to v2
-- [docs/BUILDOUT.md](brew-app/docs/BUILDOUT.md): phase-by-phase plan and checklist, stack choices, data model
-- [docs/FERMENTRACK-API.md](brew-app/docs/FERMENTRACK-API.md): what Fermentrack actually exposes (v1 reference)
+- [ARCHITECTURE.md](ARCHITECTURE.md): the options that were considered, and why the project went straight to v2
+- [docs/BUILDOUT.md](docs/BUILDOUT.md): phase-by-phase plan and checklist, stack choices, data model
+- [docs/FERMENTRACK-API.md](docs/FERMENTRACK-API.md): what Fermentrack actually exposes (v1 reference)
 
 ---
 
