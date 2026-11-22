@@ -38,6 +38,7 @@ use brewcore::{
             self, Category, IngredientRow, LotRow, NewIngredient, NewLot, NewYeastStrain,
             VesselKind, VesselRow, YeastStrainRow,
         },
+        reminder,
         rollup::{self, Rollup},
         schedule,
         series::{self, BatchSeries, SeriesRange},
@@ -2266,11 +2267,13 @@ pub async fn move_schedule_step(
     Ok(schedule_view(schedule, display))
 }
 
-/// `at` defaults to now and may not be in the future, like any event's time.
+/// `at` defaults to now and may not be in the future, like any event's time. Wakes the
+/// alert round: the step's due alert clears and the next step's band applies at once.
 #[tauri::command]
 pub async fn complete_schedule_step(
     db: tauri::State<'_, Db>,
     config: tauri::State<'_, ConfigStore>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
     step_id: i64,
     at: Option<Timestamp>,
     note: Option<String>,
@@ -2282,6 +2285,7 @@ pub async fn complete_schedule_step(
             schedule::complete_step(tx, step_id, at, note.as_deref()).map(|_| ())
         })
     })?;
+    alerts.wake();
     Ok(schedule_view(schedule, display))
 }
 
@@ -2289,11 +2293,13 @@ pub async fn complete_schedule_step(
 pub async fn undo_schedule_step(
     db: tauri::State<'_, Db>,
     config: tauri::State<'_, ConfigStore>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
     step_id: i64,
 ) -> ApiResult<ScheduleView> {
     let display = config.get().ui.gravity_display;
     let schedule = db
         .write(|conn| schedule::write_step(conn, step_id, |tx| schedule::undo_step(tx, step_id)))?;
+    alerts.wake();
     Ok(schedule_view(schedule, display))
 }
 
@@ -2312,6 +2318,101 @@ pub async fn seed_lager_schedule(
         Ok(schedule)
     })?;
     Ok(schedule_view(schedule, display))
+}
+
+// ---------------------------------------------------------------------------
+// Day-N reminders. Every write wakes the alert round, so `brewd` hears of it at once.
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn batch_reminders(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+) -> ApiResult<reminder::Reminders> {
+    Ok(db.read(|conn| reminder::batch_reminders(conn, batch_id))?)
+}
+
+#[tauri::command]
+pub async fn add_reminder(
+    db: tauri::State<'_, Db>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
+    batch_id: i64,
+    reminder: reminder::NewReminder,
+) -> ApiResult<reminder::Reminders> {
+    let reminders = db.write(|conn| {
+        let tx = conn.transaction()?;
+        reminder::add_reminder(&tx, batch_id, &reminder)?;
+        let reminders = reminder::batch_reminders(&tx, batch_id)?;
+        tx.commit()?;
+        Ok(reminders)
+    })?;
+    alerts.wake();
+    Ok(reminders)
+}
+
+#[tauri::command]
+pub async fn update_reminder(
+    db: tauri::State<'_, Db>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
+    reminder_id: i64,
+    reminder: reminder::NewReminder,
+) -> ApiResult<reminder::Reminders> {
+    let reminders = db.write(|conn| {
+        reminder::write_reminder(conn, reminder_id, |tx| {
+            reminder::update_reminder(tx, reminder_id, &reminder)
+        })
+    })?;
+    alerts.wake();
+    Ok(reminders)
+}
+
+#[tauri::command]
+pub async fn delete_reminder(
+    db: tauri::State<'_, Db>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
+    reminder_id: i64,
+) -> ApiResult<reminder::Reminders> {
+    let reminders = db.write(|conn| {
+        reminder::write_reminder(conn, reminder_id, |tx| {
+            reminder::delete_reminder(tx, reminder_id)
+        })
+    })?;
+    alerts.wake();
+    Ok(reminders)
+}
+
+/// `at` defaults to now and may not be in the future.
+#[tauri::command]
+pub async fn complete_reminder(
+    db: tauri::State<'_, Db>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
+    reminder_id: i64,
+    at: Option<Timestamp>,
+    note: Option<String>,
+) -> ApiResult<reminder::Reminders> {
+    let at = not_in_future(at, "reminder")?;
+    let reminders = db.write(|conn| {
+        reminder::write_reminder(conn, reminder_id, |tx| {
+            reminder::complete_reminder(tx, reminder_id, at, note.as_deref()).map(|_| ())
+        })
+    })?;
+    alerts.wake();
+    Ok(reminders)
+}
+
+#[tauri::command]
+pub async fn undo_reminder(
+    db: tauri::State<'_, Db>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
+    reminder_id: i64,
+) -> ApiResult<reminder::Reminders> {
+    let reminders = db.write(|conn| {
+        reminder::write_reminder(conn, reminder_id, |tx| {
+            reminder::undo_reminder(tx, reminder_id)
+        })
+    })?;
+    alerts.wake();
+    Ok(reminders)
 }
 
 #[tauri::command]

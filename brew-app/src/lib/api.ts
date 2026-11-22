@@ -669,7 +669,8 @@ export type EventKind =
 	| "carbonation"
 	| "package"
 	| "note"
-	| "step_done";
+	| "step_done"
+	| "reminder_done";
 
 /** Mirrors `brewcore::db::timeline::BatchEventRow`. */
 export interface BatchEvent {
@@ -1620,3 +1621,43 @@ export const completeScheduleStep = (stepId: number, at: number | null, note: st
 export const undoScheduleStep = (stepId: number): Promise<Schedule> => call("undo_schedule_step", { stepId });
 
 export const seedLagerSchedule = (batchId: number): Promise<Schedule> => call("seed_lager_schedule", { batchId });
+
+/** Mirrors `brewcore::db::reminder::ReminderRow`. */
+export interface Reminder {
+	id: number;
+	batch_id: number;
+	/** Since the pitch. */
+	after_hours: number;
+	text: string;
+	done_event_id: number | null;
+	done_at: number | null;
+}
+
+/** Mirrors `brewcore::db::reminder::Reminders`. */
+export interface Reminders {
+	reminders: Reminder[];
+	pitched_at: number | null;
+}
+
+/** Mirrors `brewcore::db::reminder::NewReminder`. */
+export interface ReminderInput {
+	after_hours: number;
+	text: string;
+}
+
+export const batchReminders = (batchId: number): Promise<Reminders> => call("batch_reminders", { batchId });
+
+export const addReminder = (batchId: number, reminder: ReminderInput): Promise<Reminders> =>
+	call("add_reminder", { batchId, reminder });
+
+export const updateReminder = (reminderId: number, reminder: ReminderInput): Promise<Reminders> =>
+	call("update_reminder", { reminderId, reminder });
+
+export const deleteReminder = (reminderId: number): Promise<Reminders> => call("delete_reminder", { reminderId });
+
+/** Writes a `reminder_done` event. `at` null is now. */
+export const completeReminder = (reminderId: number, at: number | null, note: string | null): Promise<Reminders> =>
+	call("complete_reminder", { reminderId, at, note });
+
+/** Deletes its `reminder_done` event. */
+export const undoReminder = (reminderId: number): Promise<Reminders> => call("undo_reminder", { reminderId });

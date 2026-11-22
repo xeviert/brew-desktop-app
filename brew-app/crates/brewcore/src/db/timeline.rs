@@ -52,6 +52,8 @@ db_enum!(
     // A schedule step ticked off. Written by `schedule::complete_step`, which links the
     // step to it; deleting the event un-ticks the step.
     (StepDone, "step_done"),
+    // A day-N reminder ticked off, by `reminder::complete_reminder`, the same way.
+    (ReminderDone, "reminder_done"),
 );
 
 // ----------------------------------------------------------- batch_event
@@ -632,6 +634,7 @@ mod tests {
                 "package",
                 "note",
                 "step_done",
+                "reminder_done",
             ]
         );
     }

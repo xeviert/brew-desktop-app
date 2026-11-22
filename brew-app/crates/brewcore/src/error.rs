@@ -376,6 +376,15 @@ pub enum Error {
     #[error("batch {batch_id} already has a schedule")]
     ScheduleNotEmpty { batch_id: i64 },
 
+    #[error("reminder {reminder_id} does not exist")]
+    NoSuchReminder { reminder_id: i64 },
+
+    #[error("reminder {reminder_id} is already done")]
+    ReminderDone { reminder_id: i64 },
+
+    #[error("reminder {reminder_id} is not done")]
+    ReminderNotDone { reminder_id: i64 },
+
     #[error("stream binding {binding_id} does not exist")]
     NoSuchBatchStream { binding_id: i64 },
 
@@ -666,6 +675,9 @@ impl Error {
             Error::StepOutOfOrder { .. } => "db.step_out_of_order",
             Error::StepBeforeStart { .. } => "db.step_before_start",
             Error::ScheduleNotEmpty { .. } => "db.schedule_not_empty",
+            Error::NoSuchReminder { .. } => "db.no_such_reminder",
+            Error::ReminderDone { .. } => "db.reminder_done",
+            Error::ReminderNotDone { .. } => "db.reminder_not_done",
             Error::NoSuchBatchStream { .. } => "db.no_such_batch_stream",
             Error::UsePitchRecorder { .. } => "db.use_pitch_recorder",
             Error::PitchEventLocked { .. } => "db.pitch_event_locked",

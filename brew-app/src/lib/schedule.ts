@@ -2,7 +2,7 @@
  * The fermentation schedule's reading of a batch: which step it's on, and how far that
  * step is from its targets. Pure, so it is tested without a component.
  */
-import type { ScheduleStep } from "$lib/api";
+import type { Reminder, ScheduleStep } from "$lib/api";
 import { formatGravityIn, span } from "$lib/dashboard";
 import { formatTemp, type TempDisplay } from "$lib/units";
 
@@ -93,4 +93,27 @@ export function progress(step: ScheduleStep, start: number | null, now: Now): Pr
 		});
 	}
 	return { checks, ready: checks.length > 0 && checks.every((c) => c.met === true) };
+}
+
+// ------------------------------------------------------------- reminders
+
+/** "day 10", "day 1.5". */
+export function reminderDay(r: Reminder): string {
+	return `day ${Number((r.after_hours / 24).toFixed(2))}`;
+}
+
+export type ReminderState = "done" | "overdue" | "due" | "upcoming";
+
+/** Where a reminder stands at `now`, and the time it falls due (`null` before the
+ * pitch). Overdue past `graceHours`, as `brewd` judges it. */
+export function reminderState(
+	r: Reminder,
+	pitchedAt: number | null,
+	now: number,
+	graceHours: number,
+): { state: ReminderState; due: number | null } {
+	const due = pitchedAt === null ? null : pitchedAt + r.after_hours * 3_600;
+	if (r.done_at !== null) return { state: "done", due };
+	if (due === null || now < due) return { state: "upcoming", due };
+	return { state: now - due >= graceHours * 3_600 ? "overdue" : "due", due };
 }

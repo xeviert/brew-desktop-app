@@ -65,6 +65,11 @@ pub fn evaluate(watch: &Watch, buffers: &Buffers, now: Timestamp) -> Vec<Conditi
         let verdicts = step_due(step, sg.as_deref(), now, watch.params.overdue_grace_secs);
         push_due(&mut out, format!("step:{}", step.id), verdicts);
     }
+    for r in &watch.reminders {
+        let grace = watch.params.overdue_grace_secs;
+        let verdicts = due_verdicts(&r.text, r.due, &r.when, now, grace);
+        push_due(&mut out, r.key.clone(), verdicts);
+    }
     out
 }
 
@@ -867,6 +872,43 @@ mod tests {
         assert_eq!(
             due_and_overdue(&conds),
             (&Verdict::Unknown, &Verdict::Unknown)
+        );
+    }
+
+    #[test]
+    fn a_reminder_is_due_at_its_time_keyed_by_its_subject() {
+        let mut w = sg_watch(None);
+        w.reminders = vec![crate::alert::ReminderWatch {
+            key: "reminder:3".into(),
+            text: "Taste".into(),
+            when: "day 10".into(),
+            due: at(240 * HOUR),
+        }];
+        let b = Buffers::new();
+        let pick = |conds: &[Condition]| {
+            conds
+                .iter()
+                .filter(|c| c.device.as_deref() == Some("reminder:3"))
+                .map(|c| (c.rule, c.verdict.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            pick(&evaluate(&w, &b, at(239 * HOUR))),
+            [(Rule::Due, Verdict::Clear), (Rule::Overdue, Verdict::Clear)]
+        );
+        let due = Verdict::Raise {
+            detail: "Taste — day 10".into(),
+        };
+        assert_eq!(
+            pick(&evaluate(&w, &b, at(240 * HOUR))),
+            [(Rule::Due, due), (Rule::Overdue, Verdict::Clear)]
+        );
+        let overdue = Verdict::Raise {
+            detail: "Taste — due 12 h ago; day 10".into(),
+        };
+        assert_eq!(
+            pick(&evaluate(&w, &b, at(252 * HOUR))),
+            [(Rule::Due, Verdict::Clear), (Rule::Overdue, overdue)]
         );
     }
 

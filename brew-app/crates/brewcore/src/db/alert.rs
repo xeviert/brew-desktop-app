@@ -15,13 +15,20 @@ use rusqlite::{Connection, OptionalExtension, params, types::FromSql, types::ToS
 
 use super::{
     Metric, SourceKind,
-    batch::{BATCH_COLUMNS, BatchStatus, batch_from_row, get_batch},
+    batch::{
+        BATCH_COLUMNS, BatchRow, BatchStatus, PlanVsActualRow, batch_from_row, get_batch,
+        plan_vs_actual,
+    },
+    reference::get_ingredient,
+    reminder::list_reminders,
     schedule::{StepRow, list_steps, step_start},
     stability::expected_fg,
 };
 use crate::{
     Error, Result,
-    alert::{Feed, GravityFeed, LogEvent, LogRecord, Rule, StepWatch, Watch},
+    alert::{
+        Feed, GravityFeed, LogEvent, LogRecord, ReminderWatch, Rule, StepWatch, Watch, eval::span,
+    },
     brewd::discovery::JOURNALS_PATH,
     config::Config,
     journal::{JOURNAL_EXTENSION, rotated_stem},
@@ -239,6 +246,7 @@ pub fn build_watches(conn: &Connection, config: &Config) -> Result<Vec<Watch>> {
             });
         let devices: BTreeSet<String> = feeds.iter().map(|f| f.device.clone()).collect();
 
+        let reminders = reminder_watches(conn, &batch)?;
         let steps = list_steps(conn, batch.id)?;
         let scheduled = schedule_band(&steps, batch.pitched_at);
         let mut layers: Vec<_> = scheduled.map(|(band, _)| band).into_iter().collect();
@@ -259,6 +267,7 @@ pub fn build_watches(conn: &Connection, config: &Config) -> Result<Vec<Watch>> {
             temp_max_c: band.1,
             band_since: scheduled.map(|(_, since)| since),
             step: step_watch(&steps, batch.pitched_at),
+            reminders,
             stability: config.stability.params(),
             health: config.health.params(),
             params: config.alerts.params(),
@@ -285,6 +294,45 @@ fn schedule_band(steps: &[StepRow], pitched_at: Option<Timestamp>) -> Option<(Ba
 }
 
 type Band = (Option<f64>, Option<f64>);
+
+/// What's on the calendar and not done: the batch's own reminders, and the additions its
+/// recipe times after the pitch that it hasn't had, paired as the additions table pairs
+/// them. An addition timed before the pitch is prep, not something to be woken for.
+fn reminder_watches(conn: &Connection, batch: &BatchRow) -> Result<Vec<ReminderWatch>> {
+    let Some(pitch) = batch.pitched_at else {
+        return Ok(Vec::new());
+    };
+    let after = |hours: f64| pitch.saturating_add_secs((hours * 3_600.0).round() as i64);
+    let mut out: Vec<ReminderWatch> = list_reminders(conn, batch.id)?
+        .into_iter()
+        .filter(|r| r.done_event_id.is_none())
+        .map(|r| ReminderWatch {
+            key: format!("reminder:{}", r.id),
+            when: format!("day {}", (r.after_hours / 24.0 * 100.0).round() / 100.0),
+            due: after(r.after_hours),
+            text: r.text,
+        })
+        .collect();
+    for row in plan_vs_actual(conn, batch.id)?.rows {
+        let PlanVsActualRow::Missing(item) = row else {
+            continue;
+        };
+        let Some(hours) = item.offset_hours.filter(|h| *h > 0.0) else {
+            continue;
+        };
+        out.push(ReminderWatch {
+            key: format!("addition:{}", item.id),
+            text: format!(
+                "Add {} {}",
+                item.entry,
+                get_ingredient(conn, item.ingredient_id)?.name
+            ),
+            when: format!("{} after the pitch", span(pitch.secs_until(after(hours)))),
+            due: after(hours),
+        });
+    }
+    Ok(out)
+}
 
 /// The first step not done, once it has started and has something that says it's done.
 fn step_watch(steps: &[StepRow], pitched_at: Option<Timestamp>) -> Option<StepWatch> {
@@ -772,6 +820,139 @@ mod tests {
         );
         complete_step(&conn, primary, T0.saturating_add_secs(80 * 3_600), None).unwrap();
         assert_eq!(watched(&conn), None, "nothing says when packaging is due");
+    }
+
+    #[test]
+    fn reminders_and_timed_additions_are_watched_until_done() {
+        use crate::db::{
+            recipe::{
+                NewRecipeItem, NewRecipeVersion, add_recipe_item, create_recipe,
+                create_recipe_version,
+            },
+            reminder::{NewReminder, add_reminder, complete_reminder},
+        };
+        let mut conn = db();
+        let recipe = create_recipe(&conn, "Traditional", BeverageType::Mead, None).unwrap();
+        let version = create_recipe_version(&conn, recipe, &NewRecipeVersion::default()).unwrap();
+        let fermaid = create_ingredient(
+            &conn,
+            &NewIngredient {
+                name: "Fermaid O".into(),
+                category: Category::Nutrient,
+                default_unit: Unit::G,
+                yeast_strain_id: None,
+                attrs: None,
+                notes: None,
+            },
+        )
+        .unwrap();
+        let lot = create_lot(
+            &conn,
+            &NewLot {
+                ingredient_id: fermaid,
+                supplier: None,
+                lot_code: None,
+                entry: Quantity::new(100.0, Unit::G).unwrap(),
+                cost: None,
+                purchased_at: None,
+                expires_at: None,
+                notes: None,
+            },
+        )
+        .unwrap();
+        let dose = |hours: f64| NewRecipeItem {
+            ingredient_id: fermaid,
+            entry: Quantity::new(2.0, Unit::G).unwrap(),
+            stage: Stage::Fermentation,
+            offset_hours: Some(hours),
+            notes: None,
+        };
+        add_recipe_item(&conn, version, &dose(-2.0)).unwrap();
+        let first = add_recipe_item(&conn, version, &dose(24.0)).unwrap();
+        let second = add_recipe_item(&conn, version, &dose(48.0)).unwrap();
+
+        let id = create_batch(
+            &conn,
+            &NewBatch {
+                code: "MEAD-001".into(),
+                recipe_version_id: Some(version),
+                beverage_type: BeverageType::Mead,
+                vessel_id: None,
+                volume_l: None,
+                og: None,
+                notes: None,
+            },
+            T0,
+        )
+        .unwrap();
+        record_pitch(&conn, id, T0, None).unwrap();
+        let probe = journal(&mut conn, "esp32-1.csv", &[("vessel_temp", Metric::TempC)]);
+        bind(&conn, id, &probe);
+        let taste = add_reminder(
+            &conn,
+            id,
+            &NewReminder {
+                after_hours: 240.0,
+                text: "Taste".into(),
+            },
+        )
+        .unwrap();
+        let watched = |conn: &Connection| {
+            let w = build_watches(conn, &config(None)).unwrap().remove(0);
+            w.reminders
+                .into_iter()
+                .map(|r| (r.key, r.text, r.when, T0.secs_until(r.due) / 3_600))
+                .collect::<Vec<_>>()
+        };
+        let reminder = |key: String, text: &str, when: &str, hours: i64| {
+            (key, text.to_owned(), when.to_owned(), hours)
+        };
+
+        // The -2 h dose is prep; the batch hasn't had any of the three.
+        assert_eq!(
+            watched(&conn),
+            [
+                reminder(format!("reminder:{taste}"), "Taste", "day 10", 240),
+                reminder(
+                    format!("addition:{first}"),
+                    "Add 2 g Fermaid O",
+                    "1 d after the pitch",
+                    24
+                ),
+                reminder(
+                    format!("addition:{second}"),
+                    "Add 2 g Fermaid O",
+                    "2 d after the pitch",
+                    48
+                ),
+            ]
+        );
+
+        complete_reminder(&conn, taste, T0.saturating_add_secs(3_600), None).unwrap();
+        for _ in 0..2 {
+            add_batch_ingredient(
+                &conn,
+                id,
+                &NewBatchIngredient {
+                    ingredient_lot_id: lot,
+                    entry: Quantity::new(2.0, Unit::G).unwrap(),
+                    stage: Stage::Fermentation,
+                    added_at: None,
+                    notes: None,
+                },
+            )
+            .unwrap();
+        }
+        // Paired by order: the prep dose and the 24 h one are had, the 48 h one isn't.
+        assert_eq!(
+            watched(&conn),
+            [reminder(
+                format!("addition:{second}"),
+                "Add 2 g Fermaid O",
+                "2 d after the pitch",
+                48
+            )]
+        );
     }
 
     #[test]

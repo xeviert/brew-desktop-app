@@ -142,7 +142,7 @@
               <span>{e.note ?? ""}</span>
               {#if !readonly && e.kind !== "pitch"}
                 <span class="actions">
-                  {#if e.kind !== "step_done"}
+                  {#if e.kind !== "step_done" && e.kind !== "reminder_done"}
                     <button class="link" disabled={busy} onclick={() => ((open = null), (editing = e))}>Edit</button>
                   {/if}
                   <button class="link" disabled={busy} onclick={() => remove(e)}>Delete</button>

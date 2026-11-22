@@ -296,6 +296,7 @@ pub(crate) mod tests {
             temp_max_c: Some(20.0),
             band_since: None,
             step: None,
+            reminders: Vec::new(),
             stability: StabilityParams::default(),
             health: HealthParams::default(),
             params: Default::default(),

@@ -26,7 +26,9 @@ pub use book::{Alert, AlertBook};
 pub use buffer::{Buffers, DeviceBuffer};
 pub use eval::{Condition, Verdict, evaluate};
 pub use log::{LOG_COLUMNS, LOG_HEADER, LogEvent, LogRecord};
-pub use watch::{AlertParams, Feed, GravityFeed, StepWatch, WATCH_VERSION, Watch, WatchSet};
+pub use watch::{
+    AlertParams, Feed, GravityFeed, ReminderWatch, StepWatch, WATCH_VERSION, Watch, WatchSet,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -51,8 +53,9 @@ pub enum Rule {
     /// More than the set change inside the set window while still in the band: a
     /// stuck relay, an open fridge door.
     TempRate,
-    /// Something on the schedule is ready or due. Keyed per subject (`step:<id>`), and
-    /// cleared when the subject leaves the watch, which is when it's done.
+    /// Something on the schedule is ready or due. Keyed per subject (`step:<id>`,
+    /// `reminder:<id>`, `addition:<recipe_item_id>`), and cleared when the subject
+    /// leaves the watch, which is when it's done.
     Due,
     /// Due, plus the grace, and still not done. Takes over from [`Rule::Due`].
     Overdue,

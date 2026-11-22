@@ -80,6 +80,20 @@ pub struct StepWatch {
     pub target_sg: Option<Sg>,
 }
 
+/// Something due at a set time and not done yet: a day-N reminder, a timed addition the
+/// recipe plans and the batch hasn't had.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReminderWatch {
+    /// The alert's subject: `reminder:<id>` or `addition:<recipe_item_id>`.
+    pub key: String,
+    /// What to do, as the title shows it.
+    pub text: String,
+    /// When, as the detail shows it: "day 10".
+    pub when: String,
+    pub due: Timestamp,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Watch {
@@ -99,6 +113,7 @@ pub struct Watch {
     /// band isn't judged until the beer gets there.
     pub band_since: Option<Timestamp>,
     pub step: Option<StepWatch>,
+    pub reminders: Vec<ReminderWatch>,
     pub stability: StabilityParams,
     pub health: HealthParams,
     pub params: AlertParams,
@@ -179,6 +194,13 @@ impl WatchSet {
             if p.overdue_grace_secs < 0 {
                 return invalid(format!("batch {}: overdue grace is negative", w.batch_id));
             }
+            let mut keys = std::collections::HashSet::new();
+            if let Some(dup) = w.reminders.iter().find(|r| !keys.insert(&r.key)) {
+                return invalid(format!(
+                    "batch {}: {} is watched twice",
+                    w.batch_id, dup.key
+                ));
+            }
             if let Some(h) = w.step.as_ref().and_then(|s| s.min_hours) {
                 if !(h.is_finite() && h >= 0.0) {
                     return invalid(format!("batch {}: step min_hours is {h}", w.batch_id));
@@ -216,6 +238,7 @@ pub(crate) mod tests {
             temp_max_c: Some(20.0),
             band_since: None,
             step: None,
+            reminders: Vec::new(),
             stability: StabilityParams::default(),
             health: HealthParams::default(),
             params: AlertParams::default(),
@@ -258,6 +281,21 @@ pub(crate) mod tests {
         let twice = WatchSet::new(vec![watch(1), watch(1)]);
         let err = WatchSet::from_json(&serde_json::to_vec(&twice).unwrap()).unwrap_err();
         assert!(err.to_string().contains("twice"), "{err}");
+
+        let mut twice = watch(1);
+        let reminder = ReminderWatch {
+            key: "reminder:1".into(),
+            text: "Taste".into(),
+            when: "day 10".into(),
+            due: Timestamp::from_secs(0),
+        };
+        twice.reminders = vec![reminder.clone(), reminder];
+        let set = WatchSet::new(vec![twice]);
+        let err = WatchSet::from_json(&serde_json::to_vec(&set).unwrap()).unwrap_err();
+        assert!(
+            err.to_string().contains("reminder:1 is watched twice"),
+            "{err}"
+        );
 
         let mut inverted = watch(1);
         inverted.temp_min_c = Some(22.0);

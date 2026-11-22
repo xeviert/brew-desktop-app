@@ -23,9 +23,9 @@ import { parseNumber, type Result } from "$lib/reference";
 import { formatGravity, formatTemp, fromDisplayTemp, toDisplayTemp, type TempDisplay } from "$lib/units";
 
 /** Written by their own forms, not the event editor. */
-type OwnForm = "pitch" | "step_done";
+type OwnForm = "pitch" | "step_done" | "reminder_done";
 
-/** Everything but `pitch` and `step_done`, which have their own forms. */
+/** Everything but `pitch` and the ticks, which have their own forms. */
 export const EVENT_KINDS: { value: Exclude<EventKind, OwnForm>; label: string }[] = [
 	{ value: "note", label: "Note" },
 	{ value: "nutrient_addition", label: "Nutrient addition" },
@@ -41,6 +41,7 @@ export const EVENT_KINDS: { value: Exclude<EventKind, OwnForm>; label: string }[
 export function eventLabel(kind: EventKind): string {
 	if (kind === "pitch") return "Pitch";
 	if (kind === "step_done") return "Step done";
+	if (kind === "reminder_done") return "Reminder done";
 	return EVENT_KINDS.find((k) => k.value === kind)?.label ?? kind;
 }
 
@@ -162,7 +163,9 @@ export interface EventForm {
 export function eventForm(event: { ts: number; kind: EventKind; note: string | null } | null, now: number): EventForm {
 	return {
 		at: localDateTime(event?.ts ?? now),
-		kind: event && event.kind !== "pitch" && event.kind !== "step_done" ? event.kind : "note",
+		kind: event && event.kind !== "pitch" && event.kind !== "step_done" && event.kind !== "reminder_done"
+			? event.kind
+			: "note",
 		note: event?.note ?? "",
 	};
 }

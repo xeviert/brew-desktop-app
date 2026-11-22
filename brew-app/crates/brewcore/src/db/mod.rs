@@ -16,6 +16,7 @@ mod paths;
 pub mod query;
 pub mod recipe;
 pub mod reference;
+pub mod reminder;
 pub mod rollup;
 pub mod schedule;
 pub mod series;

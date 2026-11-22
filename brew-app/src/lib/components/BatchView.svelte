@@ -4,6 +4,7 @@
   import BatchHeader from "$lib/components/BatchHeader.svelte";
   import BatchLifecycle from "$lib/components/BatchLifecycle.svelte";
   import Curve from "$lib/components/Curve.svelte";
+  import Reminders from "$lib/components/Reminders.svelte";
   import Schedule from "$lib/components/Schedule.svelte";
   import StatusCard from "$lib/components/StatusCard.svelte";
   import Timeline from "$lib/components/Timeline.svelte";
@@ -101,6 +102,13 @@
           <!-- Hidden, not unmounted: an open form survives a look at the other tab. -->
           <div role="tabpanel" id="panel-schedule" aria-labelledby="tab-schedule" hidden={tab !== "schedule"}>
             <Schedule batchId={batch.id} ui={config.ui} {readonly} {revision} onchanged={() => void changed()} />
+            <Reminders
+              batchId={batch.id}
+              graceHours={config.alerts.overdue_grace_hours}
+              {readonly}
+              {revision}
+              onchanged={() => void changed()}
+            />
           </div>
           <div role="tabpanel" id="panel-ingredients" aria-labelledby="tab-ingredients" hidden={tab !== "ingredients"}>
             <Actuals

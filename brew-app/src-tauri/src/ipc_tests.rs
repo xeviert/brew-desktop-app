@@ -1925,6 +1925,67 @@ fn batch_alert_settings_round_trip_in_the_display_unit() {
 }
 
 #[test]
+fn a_reminder_is_ticked_off_as_an_event() {
+    let app = Harness::new();
+    let batch_id = pitched(&app, "MEAD-001", None);
+    let added = app
+        .invoke(
+            "add_reminder",
+            json!({ "batchId": batch_id, "reminder": { "after_hours": 240.0, "text": "Taste" } }),
+        )
+        .unwrap();
+    assert!(added["pitched_at"].is_i64());
+    let id = added["reminders"][0]["id"].as_i64().unwrap();
+
+    let err = app.api_error(
+        "add_reminder",
+        json!({ "batchId": batch_id, "reminder": { "after_hours": -1.0, "text": "x" } }),
+    );
+    assert_eq!(err["code"], "units.not_positive");
+
+    let done = app
+        .invoke(
+            "complete_reminder",
+            json!({ "reminderId": id, "at": null, "note": null }),
+        )
+        .unwrap();
+    assert!(done["reminders"][0]["done_at"].is_i64());
+    let events = app
+        .invoke("list_batch_events", json!({ "batchId": batch_id }))
+        .unwrap();
+    assert!(
+        events
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "reminder_done" && e["note"] == "Taste")
+    );
+    let err = app.api_error(
+        "complete_reminder",
+        json!({ "reminderId": id, "at": null, "note": null }),
+    );
+    assert_eq!(err["code"], "db.reminder_done");
+
+    let undone = app
+        .invoke("undo_reminder", json!({ "reminderId": id }))
+        .unwrap();
+    assert_eq!(undone["reminders"][0]["done_at"], Value::Null);
+    let edited = app
+        .invoke(
+            "update_reminder",
+            json!({ "reminderId": id, "reminder": { "after_hours": 48.0, "text": "Degas" } }),
+        )
+        .unwrap();
+    assert_eq!(edited["reminders"][0]["text"], "Degas");
+    let gone = app
+        .invoke("delete_reminder", json!({ "reminderId": id }))
+        .unwrap();
+    assert_eq!(gone["reminders"], json!([]));
+    let err = app.api_error("delete_reminder", json!({ "reminderId": id }));
+    assert_eq!(err["code"], "db.no_such_reminder");
+}
+
+#[test]
 fn a_schedule_step_is_ticked_off_as_an_event() {
     let app = Harness::new();
     let batch_id = pitched(&app, "LAGER-001", Some(1.046));
