@@ -12,20 +12,38 @@ The app is meant to be the operating system for the brewery. Sensors report ferm
 
 ### How the pieces connect
 
-```text
-  ESP32 (ESPHome, DS18B20)  ─┐
-                             ├─ MQTT ─▶  Raspberry Pi Zero 2 W
-  iSpindel (gravity, tilt)  ─┘           ├─ Mosquitto (broker)
-                                         └─ brewd
-                                              ├─ one CSV journal per device
-                                              ├─ evaluates alerts, pushes to ntfy
-                                              └─ HTTP: /journals, /watches, /alerts
-                                                      │
-                                                      │  HTTP Range polling (LAN)
-                                                      ▼
-                                     Desktop app (Tauri, Windows)
-                                       ├─ brewcore: ingest, SQLite, calculations
-                                       └─ Svelte UI
+```mermaid
+flowchart LR
+    subgraph Devices
+        ESP["ESP32 · ESPHome<br/>DS18B20 temperature"]
+        ISP["iSpindel<br/>gravity, tilt, battery"]
+    end
+
+    subgraph Pi["Raspberry Pi Zero 2 W (always on)"]
+        MQ[("Mosquitto<br/>MQTT broker")]
+        BD["brewd"]
+        J[("CSV journals<br/>one per device")]
+        AL["alert rules<br/>watches.json, alerts.csv"]
+    end
+
+    subgraph Desktop["Desktop app (Tauri, Windows)"]
+        UI["Svelte UI"]
+        CORE["brewcore<br/>ingest, calculations"]
+        DB[("brewery.db<br/>SQLite")]
+    end
+
+    NTFY["ntfy<br/>phone notifications"]
+
+    ESP -- MQTT --> MQ
+    ISP -- MQTT --> MQ
+    MQ --> BD
+    BD -- "append, timestamped on receipt" --> J
+    BD --> AL
+    AL -- push --> NTFY
+    J -- "HTTP Range polling (LAN)" --> CORE
+    CORE -- "watches, ack, snooze (Bearer token)" --> AL
+    CORE <--> DB
+    UI <-->|Tauri IPC| CORE
 ```
 
 - **`brewd`** is the logger of record. It runs all the time, subscribes to the broker, and appends each device's readings to a CSV journal. It also evaluates alert watches and sends notifications through [ntfy](https://ntfy.sh).
