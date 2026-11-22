@@ -23,9 +23,10 @@
    * `ApiError`, and the pane shows "invalid args `config` for command `set_config`".
    * Modelling the hole instead lets Save refuse it with something readable.
    */
-  type Draft = Omit<Config, "sync" | "health"> & {
+  type Draft = Omit<Config, "sync" | "health" | "alerts"> & {
     sync: { poll_interval_secs: number | null };
     health: { battery_warn_v: number | null; rssi_warn_dbm: number | null };
+    alerts: { temp_rate_delta_c: number | null; temp_rate_window_hours: number | null };
   };
 
   // A working copy behind an explicit Save, not save-on-keystroke: every save is an
@@ -72,6 +73,9 @@
   const intervalMissing = $derived(!Number.isFinite(draft.sync.poll_interval_secs));
   const batteryMissing = $derived(!Number.isFinite(draft.health.battery_warn_v));
   const rssiMissing = $derived(!Number.isFinite(draft.health.rssi_warn_dbm));
+  const rateMissing = $derived(
+    !Number.isFinite(draft.alerts.temp_rate_delta_c) || !Number.isFinite(draft.alerts.temp_rate_window_hours),
+  );
   // The Rust side refuses anything but three letters, and refuses it in serde, as a raw string.
   const currencyInvalid = $derived(!/^[A-Za-z]{3}$/.test(draft.money.default_currency.trim()));
 
@@ -94,12 +98,15 @@
       const snapshot = $state.snapshot(draft);
       const poll_interval_secs = snapshot.sync.poll_interval_secs;
       const { battery_warn_v, rssi_warn_dbm } = snapshot.health;
+      const { temp_rate_delta_c, temp_rate_window_hours } = snapshot.alerts;
       if (poll_interval_secs === null || battery_warn_v === null || rssi_warn_dbm === null) return;
+      if (temp_rate_delta_c === null || temp_rate_window_hours === null) return;
       // Adopt what was stored: the URL may come back trimmed, the interval clamped.
       const stored = await setConfig({
         ...snapshot,
         sync: { poll_interval_secs },
         health: { battery_warn_v, rssi_warn_dbm },
+        alerts: { temp_rate_delta_c, temp_rate_window_hours },
       });
       onsaved(stored);
       saved = true;
@@ -275,6 +282,21 @@
     </small>
   </div>
 
+  <label>
+    <span>Temperature moves</span>
+    <div class="pair">
+      <input type="number" min="0.5" max="10" step="0.5" bind:value={draft.alerts.temp_rate_delta_c} />
+      °C within
+      <input type="number" min="0.5" max="24" step="0.5" bind:value={draft.alerts.temp_rate_window_hours} />
+      h
+    </div>
+    {#if rateMissing}
+      <small class="warn">required — 0.5 to 10 °C within 0.5 to 24 h</small>
+    {:else}
+      <small>while still in the batch's range: a stuck relay or a fridge door left open</small>
+    {/if}
+  </label>
+
   <h3 id="settings-devices">iSpindle and wireless sensors</h3>
   <p class="intro">How to read the iSpindle, and when the home screen flags a sensor's battery or Wi-Fi.</p>
 
@@ -313,7 +335,7 @@
   </label>
 
   <div class="actions">
-    <button onclick={save} disabled={!dirty || saving || intervalMissing || batteryMissing || rssiMissing || currencyInvalid}>
+    <button onclick={save} disabled={!dirty || saving || intervalMissing || batteryMissing || rssiMissing || rateMissing || currencyInvalid}>
       {saving ? "Saving…" : "Save settings"}
     </button>
     {#if saved && !dirty}
@@ -396,6 +418,16 @@
 
   .status-row > span:first-child {
     color: #9aa0a6;
+  }
+
+  .pair {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .pair input {
+    width: 4.5rem;
   }
 
   small.warn {

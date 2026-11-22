@@ -297,6 +297,7 @@ pub(crate) mod tests {
             band_since: None,
             stability: StabilityParams::default(),
             health: HealthParams::default(),
+            params: Default::default(),
         }
     }
 

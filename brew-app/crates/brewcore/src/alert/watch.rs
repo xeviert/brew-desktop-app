@@ -42,6 +42,28 @@ pub struct GravityFeed {
     pub unit: IspindelUnit,
 }
 
+pub const TEMP_RATE_DELTA_C_DEFAULT: f64 = 2.0;
+pub const TEMP_RATE_WINDOW_SECS_DEFAULT: i64 = 3 * 3_600;
+
+/// The alert rules' own thresholds, from `[alerts]` in the desktop's config.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AlertParams {
+    /// [`super::Rule::TempRate`]: more than this change…
+    pub temp_rate_delta_c: f64,
+    /// …within this long.
+    pub temp_rate_window_secs: i64,
+}
+
+impl Default for AlertParams {
+    fn default() -> Self {
+        Self {
+            temp_rate_delta_c: TEMP_RATE_DELTA_C_DEFAULT,
+            temp_rate_window_secs: TEMP_RATE_WINDOW_SECS_DEFAULT,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Watch {
@@ -62,6 +84,7 @@ pub struct Watch {
     pub band_since: Option<Timestamp>,
     pub stability: StabilityParams,
     pub health: HealthParams,
+    pub params: AlertParams,
 }
 
 impl Watch {
@@ -130,6 +153,12 @@ impl WatchSet {
             if bounds.iter().flatten().any(|t| !t.is_finite()) {
                 return invalid(format!("batch {}: temp band is not finite", w.batch_id));
             }
+            let p = &w.params;
+            if !(p.temp_rate_delta_c.is_finite() && p.temp_rate_delta_c > 0.0)
+                || p.temp_rate_window_secs <= 0
+            {
+                return invalid(format!("batch {}: temp rate is not positive", w.batch_id));
+            }
         }
         Ok(())
     }
@@ -163,6 +192,7 @@ pub(crate) mod tests {
             band_since: None,
             stability: StabilityParams::default(),
             health: HealthParams::default(),
+            params: AlertParams::default(),
         }
     }
 

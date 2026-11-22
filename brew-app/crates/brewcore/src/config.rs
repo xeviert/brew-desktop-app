@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, Result,
+    alert::AlertParams,
     calc::{health::HealthParams, stability::StabilityParams},
     units::{Currency, GravityDisplay, TempDisplay},
 };
@@ -70,6 +71,16 @@ pub const DEFAULT_HEALTH_RSSI_WARN_DBM: f64 = crate::calc::health::RSSI_WARN_DBM
 pub const MIN_HEALTH_RSSI_WARN_DBM: f64 = -100.0;
 pub const MAX_HEALTH_RSSI_WARN_DBM: f64 = -50.0;
 
+/// Phase 6. The alert rules' own thresholds, pushed to `brewd` in every watch.
+pub const DEFAULT_ALERTS_TEMP_RATE_DELTA_C: f64 = crate::alert::watch::TEMP_RATE_DELTA_C_DEFAULT;
+pub const MIN_ALERTS_TEMP_RATE_DELTA_C: f64 = 0.5;
+pub const MAX_ALERTS_TEMP_RATE_DELTA_C: f64 = 10.0;
+
+pub const DEFAULT_ALERTS_TEMP_RATE_WINDOW_HOURS: f64 =
+    crate::alert::watch::TEMP_RATE_WINDOW_SECS_DEFAULT as f64 / 3_600.0;
+pub const MIN_ALERTS_TEMP_RATE_WINDOW_HOURS: f64 = 0.5;
+pub const MAX_ALERTS_TEMP_RATE_WINDOW_HOURS: f64 = 24.0;
+
 /// Resolve the config path from `default_dir`, honouring [`CONFIG_PATH_ENV`].
 ///
 /// As with [`crate::db::resolve_db_path`], the caller supplies the directory because
@@ -104,6 +115,7 @@ pub struct Config {
     pub gravity: Gravity,
     pub stability: Stability,
     pub health: Health,
+    pub alerts: Alerts,
     pub export: Export,
     pub money: MoneyConfig,
 }
@@ -233,6 +245,32 @@ impl Health {
         HealthParams {
             battery_warn_v: self.battery_warn_v,
             rssi_warn_dbm: self.rssi_warn_dbm,
+        }
+    }
+}
+
+/// Phase 6. Passed to `brewd` in each watch via [`Alerts::params`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Alerts {
+    pub temp_rate_delta_c: f64,
+    pub temp_rate_window_hours: f64,
+}
+
+impl Default for Alerts {
+    fn default() -> Self {
+        Self {
+            temp_rate_delta_c: DEFAULT_ALERTS_TEMP_RATE_DELTA_C,
+            temp_rate_window_hours: DEFAULT_ALERTS_TEMP_RATE_WINDOW_HOURS,
+        }
+    }
+}
+
+impl Alerts {
+    pub fn params(&self) -> AlertParams {
+        AlertParams {
+            temp_rate_delta_c: self.temp_rate_delta_c,
+            temp_rate_window_secs: (self.temp_rate_window_hours * 3_600.0).round() as i64,
         }
     }
 }
@@ -386,6 +424,20 @@ impl Config {
                 MIN_HEALTH_RSSI_WARN_DBM,
                 MAX_HEALTH_RSSI_WARN_DBM,
             ),
+            (
+                "alerts.temp_rate_delta_c",
+                &mut self.alerts.temp_rate_delta_c,
+                DEFAULT_ALERTS_TEMP_RATE_DELTA_C,
+                MIN_ALERTS_TEMP_RATE_DELTA_C,
+                MAX_ALERTS_TEMP_RATE_DELTA_C,
+            ),
+            (
+                "alerts.temp_rate_window_hours",
+                &mut self.alerts.temp_rate_window_hours,
+                DEFAULT_ALERTS_TEMP_RATE_WINDOW_HOURS,
+                MIN_ALERTS_TEMP_RATE_WINDOW_HOURS,
+                MAX_ALERTS_TEMP_RATE_WINDOW_HOURS,
+            ),
         ] {
             let clamped = clamp_finite(*value, default, min, max);
             if clamped != *value {
@@ -451,6 +503,16 @@ impl Config {
                 "health.rssi_warn_dbm",
                 self.health.rssi_warn_dbm,
                 MIN_HEALTH_RSSI_WARN_DBM..=MAX_HEALTH_RSSI_WARN_DBM,
+            ),
+            (
+                "alerts.temp_rate_delta_c",
+                self.alerts.temp_rate_delta_c,
+                MIN_ALERTS_TEMP_RATE_DELTA_C..=MAX_ALERTS_TEMP_RATE_DELTA_C,
+            ),
+            (
+                "alerts.temp_rate_window_hours",
+                self.alerts.temp_rate_window_hours,
+                MIN_ALERTS_TEMP_RATE_WINDOW_HOURS..=MAX_ALERTS_TEMP_RATE_WINDOW_HOURS,
             ),
         ] {
             if !value.is_finite() {

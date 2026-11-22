@@ -24,6 +24,7 @@ export interface Config {
 	gravity: { ispindel_unit: IspindelUnit | null };
 	stability: { window_hours: number; slope_sg_per_day: number; fg_band: number };
 	health: { battery_warn_v: number; rssi_warn_dbm: number };
+	alerts: { temp_rate_delta_c: number; temp_rate_window_hours: number };
 	export: { dialect: ExportDialect };
 	money: { default_currency: Currency };
 }
@@ -1468,7 +1469,8 @@ export type AlertRule =
 	| "temp_low"
 	| "silent"
 	| "sugar_break"
-	| "target_sg";
+	| "target_sg"
+	| "temp_rate";
 
 /** Mirrors `brewcore::db::alert::AlertRow`. Timestamps are epoch seconds. */
 export interface AlertRow {

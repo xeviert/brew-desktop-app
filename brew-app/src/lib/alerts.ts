@@ -13,10 +13,11 @@ const RULES: Record<AlertRule, string> = {
 	silent: "Device silent",
 	sugar_break: "⅓ sugar break",
 	target_sg: "Target gravity reached",
+	temp_rate: "Temperature moving fast",
 };
 
 /** Rules worth acting on now, as opposed to today. Matches `brewd`'s push priority. */
-const URGENT: ReadonlySet<AlertRule> = new Set(["stalled", "temp_high", "temp_low", "silent"]);
+const URGENT: ReadonlySet<AlertRule> = new Set(["stalled", "temp_high", "temp_low", "temp_rate", "silent"]);
 
 export const ruleText = (rule: AlertRule): string => RULES[rule] ?? rule.replaceAll("_", " ");
 

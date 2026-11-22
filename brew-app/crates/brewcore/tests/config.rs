@@ -3,9 +3,9 @@
 
 use brewcore::{
     config::{
-        self, Brewd, Config, Export, ExportDialect, Fermentrack, Gravity, Health, IspindelUnit,
-        MAX_POLL_INTERVAL_SECS, MIN_POLL_INTERVAL_SECS, Measurement, MoneyConfig, Stability,
-        SyncConfig, Ui,
+        self, Alerts, Brewd, Config, Export, ExportDialect, Fermentrack, Gravity, Health,
+        IspindelUnit, MAX_POLL_INTERVAL_SECS, MIN_POLL_INTERVAL_SECS, Measurement, MoneyConfig,
+        Stability, SyncConfig, Ui,
     },
     units::{Currency, GravityDisplay, TempDisplay},
 };
@@ -137,6 +137,10 @@ fn save_then_load_round_trips() {
         health: Health {
             battery_warn_v: 3.5,
             rssi_warn_dbm: -85.0,
+        },
+        alerts: Alerts {
+            temp_rate_delta_c: 3.0,
+            temp_rate_window_hours: 2.0,
         },
         export: Export {
             dialect: ExportDialect::ExcelFr,

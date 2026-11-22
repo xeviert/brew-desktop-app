@@ -26,7 +26,7 @@ pub use book::{Alert, AlertBook};
 pub use buffer::{Buffers, DeviceBuffer};
 pub use eval::{Condition, Verdict, evaluate};
 pub use log::{LOG_COLUMNS, LOG_HEADER, LogEvent, LogRecord};
-pub use watch::{Feed, GravityFeed, WATCH_VERSION, Watch, WatchSet};
+pub use watch::{AlertParams, Feed, GravityFeed, WATCH_VERSION, Watch, WatchSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -48,10 +48,13 @@ pub enum Rule {
     SugarBreak,
     /// The batch's own target gravity. Latched.
     TargetSg,
+    /// More than the set change inside the set window while still in the band: a
+    /// stuck relay, an open fridge door.
+    TempRate,
 }
 
 impl Rule {
-    pub const ALL: [Rule; 7] = [
+    pub const ALL: [Rule; 8] = [
         Rule::Finished,
         Rule::Stalled,
         Rule::TempHigh,
@@ -59,6 +62,7 @@ impl Rule {
         Rule::Silent,
         Rule::SugarBreak,
         Rule::TargetSg,
+        Rule::TempRate,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -70,6 +74,7 @@ impl Rule {
             Rule::Silent => "silent",
             Rule::SugarBreak => "sugar_break",
             Rule::TargetSg => "target_sg",
+            Rule::TempRate => "temp_rate",
         }
     }
 
@@ -83,6 +88,7 @@ impl Rule {
             Rule::Silent => "device silent",
             Rule::SugarBreak => "⅓ sugar break",
             Rule::TargetSg => "target gravity reached",
+            Rule::TempRate => "temperature moving fast",
         }
     }
 }

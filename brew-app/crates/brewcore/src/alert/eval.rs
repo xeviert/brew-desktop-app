@@ -172,10 +172,10 @@ fn temperature(watch: &Watch, buffers: &Buffers, out: &mut Vec<Condition>) {
         .get(&feed.device)
         .map(|b| b.series(&feed.column, feed.since))
         .unwrap_or_default();
+    let inside = |v: f64| {
+        watch.temp_min_c.is_none_or(|lo| v >= lo) && watch.temp_max_c.is_none_or(|hi| v <= hi)
+    };
     if let Some(since) = watch.band_since {
-        let inside = |v: f64| {
-            watch.temp_min_c.is_none_or(|lo| v >= lo) && watch.temp_max_c.is_none_or(|hi| v <= hi)
-        };
         let deadline = since.saturating_add_secs(TEMP_ARM_SECS);
         let armed = points
             .iter()
@@ -191,6 +191,7 @@ fn temperature(watch: &Watch, buffers: &Buffers, out: &mut Vec<Condition>) {
                     push(out, rule, Verdict::Clear);
                 }
             }
+            push(out, Rule::TempRate, Verdict::Clear);
             return;
         };
         points.retain(|&(t, _)| t >= armed);
@@ -214,6 +215,71 @@ fn temperature(watch: &Watch, buffers: &Buffers, out: &mut Vec<Condition>) {
             lo,
         );
         push(out, Rule::TempLow, verdict);
+    }
+    push(out, Rule::TempRate, rate(watch, &points, inside));
+}
+
+/// Raised when the temperature moved more than the set change within the set window
+/// while staying in the band. Over a rolling median of [`TEMP_CONFIRM_SECS`], so a
+/// lifted probe doesn't count, and only since the reading came into the band, so a
+/// ramp into a new one doesn't either. Out of the band is the band rules' to say.
+fn rate(watch: &Watch, points: &[(Timestamp, f64)], inside: impl Fn(f64) -> bool) -> Verdict {
+    let Some(&(newest, _)) = points.last() else {
+        return Verdict::Unknown;
+    };
+    let p = &watch.params;
+    let from = newest.saturating_add_secs(-p.temp_rate_window_secs);
+    let raw = &points
+        [points.partition_point(|&(t, _)| t < from.saturating_add_secs(-TEMP_CONFIRM_SECS))..];
+    let smoothed: Vec<(Timestamp, f64)> = raw
+        .iter()
+        .enumerate()
+        .filter(|&(_, &(t, _))| t >= from)
+        .map(|(i, &(t, _))| {
+            let lo = raw.partition_point(|&(u, _)| u < t.saturating_add_secs(-TEMP_CONFIRM_SECS));
+            (t, median(raw[lo..=i].iter().map(|&(_, v)| v).collect()))
+        })
+        .collect();
+    let in_band = smoothed
+        .iter()
+        .rposition(|&(_, v)| !inside(v))
+        .map_or(&smoothed[..], |i| &smoothed[i + 1..]);
+    let by_value = |a: &&(Timestamp, f64), b: &&(Timestamp, f64)| a.1.total_cmp(&b.1);
+    let (Some(lo), Some(hi)) = (
+        in_band.iter().min_by(by_value),
+        in_band.iter().max_by(by_value),
+    ) else {
+        return Verdict::Unknown;
+    };
+    let delta = hi.1 - lo.1;
+    if delta > p.temp_rate_delta_c {
+        let (a, b, word) = if lo.0 < hi.0 {
+            (lo, hi, "rose")
+        } else {
+            (hi, lo, "fell")
+        };
+        Verdict::Raise {
+            detail: format!(
+                "{word} {delta:.1} °C in {} ({:.1} → {:.1} °C)",
+                span(a.0.secs_until(b.0)),
+                a.1,
+                b.1
+            ),
+        }
+    } else if delta <= p.temp_rate_delta_c - TEMP_CLEAR_MARGIN_C {
+        Verdict::Clear
+    } else {
+        Verdict::Unknown
+    }
+}
+
+fn median(mut values: Vec<f64>) -> f64 {
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        (values[mid - 1] + values[mid]) / 2.0
+    } else {
+        values[mid]
     }
 }
 
@@ -553,12 +619,105 @@ mod tests {
     }
 
     #[test]
-    fn no_band_is_no_temperature_rule() {
+    fn no_band_is_no_band_rule_but_still_a_rate() {
         let mut w = temp_watch();
         w.temp_min_c = None;
         w.temp_max_c = None;
         let conds = evaluate(&w, &temps([30.0; 50]), at(50 * 30));
-        assert!(conds.is_empty(), "{conds:?}");
+        let rules: Vec<Rule> = conds.iter().map(|c| c.rule).collect();
+        assert_eq!(rules, [Rule::TempRate]);
+        assert_eq!(conds[0].verdict, Verdict::Clear);
+    }
+
+    /// `hold` °C for two hours, then a straight line to `to` over an hour, then held for
+    /// half an hour — a reading every 30 s.
+    fn drift(hold: f64, to: f64) -> Vec<f64> {
+        let mut values = vec![hold; 240];
+        values.extend((1..=120).map(|i| hold + (to - hold) * i as f64 / 120.0));
+        values.extend([to; 60]);
+        values
+    }
+
+    fn wide_watch() -> Watch {
+        let mut w = temp_watch();
+        (w.temp_min_c, w.temp_max_c) = (Some(10.0), Some(25.0));
+        w
+    }
+
+    #[test]
+    fn a_fast_change_inside_the_band_raises_the_rate() {
+        let values = drift(18.0, 15.5);
+        let conds = evaluate(
+            &wide_watch(),
+            &temps(values.clone()),
+            at(values.len() as i64 * 30),
+        );
+        let Verdict::Raise { detail } = verdict(&conds, Rule::TempRate) else {
+            panic!("{conds:?}");
+        };
+        assert!(
+            detail.starts_with("fell 2.5 °C in 1 h (18.0 → 15.5 °C)"),
+            "{detail}"
+        );
+        assert_eq!(verdict(&conds, Rule::TempLow), &Verdict::Clear);
+    }
+
+    #[test]
+    fn the_rate_has_a_margin_and_forgets_after_its_window() {
+        let w = wide_watch();
+        let near = drift(18.0, 16.2);
+        let conds = evaluate(&w, &temps(near.clone()), at(near.len() as i64 * 30));
+        assert_eq!(
+            verdict(&conds, Rule::TempRate),
+            &Verdict::Unknown,
+            "1.8 is in the margin"
+        );
+        let small = drift(18.0, 16.5);
+        let conds = evaluate(&w, &temps(small.clone()), at(small.len() as i64 * 30));
+        assert_eq!(verdict(&conds, Rule::TempRate), &Verdict::Clear);
+
+        let mut settled = drift(18.0, 15.5);
+        settled.extend([15.5; 360]);
+        let conds = evaluate(&w, &temps(settled.clone()), at(settled.len() as i64 * 30));
+        assert_eq!(verdict(&conds, Rule::TempRate), &Verdict::Clear);
+    }
+
+    #[test]
+    fn a_short_spike_does_not_count_toward_the_rate() {
+        let mut values = vec![18.0; 240];
+        values.extend([24.0; 8]);
+        values.extend([18.0; 20]);
+        let conds = evaluate(
+            &wide_watch(),
+            &temps(values.clone()),
+            at(values.len() as i64 * 30),
+        );
+        assert_eq!(verdict(&conds, Rule::TempRate), &Verdict::Clear);
+    }
+
+    #[test]
+    fn a_ramp_into_the_band_is_not_a_rate() {
+        // 12 → 17 into 16–20: only the degree inside the band counts.
+        let values = drift(12.0, 17.0);
+        let conds = evaluate(
+            &temp_watch(),
+            &temps(values.clone()),
+            at(values.len() as i64 * 30),
+        );
+        assert_eq!(verdict(&conds, Rule::TempRate), &Verdict::Clear);
+        assert_eq!(verdict(&conds, Rule::TempLow), &Verdict::Clear);
+    }
+
+    #[test]
+    fn out_of_the_band_is_left_to_the_band_rules() {
+        let values = drift(18.0, 23.0);
+        let conds = evaluate(
+            &temp_watch(),
+            &temps(values.clone()),
+            at(values.len() as i64 * 30),
+        );
+        assert_eq!(verdict(&conds, Rule::TempRate), &Verdict::Unknown);
+        assert!(raised(verdict(&conds, Rule::TempHigh)), "{conds:?}");
     }
 
     fn device(columns: &[&str], rows: impl IntoIterator<Item = (i64, Vec<f64>)>) -> DeviceBuffer {

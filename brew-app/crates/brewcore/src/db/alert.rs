@@ -260,6 +260,7 @@ pub fn build_watches(conn: &Connection, config: &Config) -> Result<Vec<Watch>> {
             band_since: scheduled.map(|(_, since)| since),
             stability: config.stability.params(),
             health: config.health.params(),
+            params: config.alerts.params(),
         });
     }
     Ok(out)
