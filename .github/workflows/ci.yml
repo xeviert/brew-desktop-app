@@ -3,13 +3,7 @@ name: brew-app CI
 on:
   push:
     branches: [main]
-    paths:
-      - "brew-app/**"
-      - ".github/workflows/ci.yml"
   pull_request:
-    paths:
-      - "brew-app/**"
-      - ".github/workflows/ci.yml"
 
 # A second push to the same branch makes the first run's answer worthless.
 concurrency:
@@ -25,10 +19,6 @@ jobs:
     # where the path resolution and the atomic-rename in `config::save` differ.
     runs-on: windows-latest
     timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: brew-app
-
     steps:
       - uses: actions/checkout@v5
 
@@ -37,7 +27,6 @@ jobs:
           # Pinned so CI and the dev machine agree on which install scripts may run.
           node-version: 24
           cache: npm
-          cache-dependency-path: brew-app/package-lock.json
 
       # No `--ignore-scripts`: esbuild's postinstall places the platform binary and
       # `vite build` dies without it. `npm ci` honours `package.json#allowScripts`.
@@ -59,7 +48,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: brew-app
           cache-on-failure: true
 
       - run: cargo fmt --all --check
