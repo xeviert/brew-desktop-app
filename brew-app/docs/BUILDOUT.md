@@ -363,10 +363,11 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
 - [x] `water_profile` — ions as `*_ppm`, never `*_mg_l`: 1c's linter reads a `_l`
       suffix as "stored in litres", so that spelling would pass the lint while
       meaning something else
-- [ ] Seeding `water_profile` from `water-data/valenciennes/tap_brewing-params.csv`
-      is **deferred**: the file's Calcium, Magnesium and Sulfate columns are empty,
-      values are French-decimal (`"7,9"`) and some are censored (`"<0,05"`). An
-      importer would mostly import NULLs. Manual entry until the source fills in
+- [ ] ~~Seeding `water_profile` from `water-data/valenciennes/tap_brewing-params.csv`~~
+      — **dropped**, won't be built: the file's Calcium, Magnesium and Sulfate
+      columns are empty, values are French-decimal (`"7,9"`) and some are censored
+      (`"<0,05"`). An importer would mostly import NULLs. Water profiles are
+      entered by hand
 
 **3b. Recipes, versioned properly**
 - [x] `recipe` (name, beverage_type, archived_at)
@@ -1558,7 +1559,9 @@ steps stay below, unchecked.
       lowest max) from actuals; a set end that would cross the yeast's other end
       stands alone; no band, no rule. Silence is per device by 4f's rule, now pure
       as `calc::health::stale_after_secs`, with 4f's battery/signal guess in the
-      detail
+      detail. The alert waits at least an hour (`SILENT_ALERT_FLOOR_SECS`): a 5 min
+      iSpindle at -88 dBm dropped a send or two most hours and pushed each time. The
+      Home card still calls it silent at 4f's threshold
 - [ ] ~~Optional write-path: `setBeer=`/`setFridge=`/`setActiveProfile=` over the
       brewpi-script socket, behind a confirm; mirror it in our own records because
       Fermentrack's DB won't see it~~ — **v2:** a `Controller` trait whose first

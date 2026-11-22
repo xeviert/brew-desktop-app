@@ -26,6 +26,10 @@ pub const TEMP_CONFIRM_SECS: i64 = 600;
 /// How far back inside the band a temperature must come to clear, so a reading
 /// hovering at the edge raises once rather than at every crossing.
 pub const TEMP_CLEAR_MARGIN_C: f64 = 0.3;
+/// The least quiet a device must be before [`Rule::Silent`] raises, over 4f's stale
+/// threshold. A 5 min iSpindle on weak Wi-Fi drops a send or two most hours; the
+/// Home card still says so at 15 min, but a push is for a device that sank or died.
+pub const SILENT_ALERT_FLOOR_SECS: i64 = 3600;
 
 const DAY: i64 = 86_400;
 
@@ -231,7 +235,8 @@ fn silence(watch: &Watch, buffers: &Buffers, now: Timestamp, out: &mut Vec<Condi
             continue;
         };
         let day = &times[times.partition_point(|&t| t < newest.saturating_add_secs(-DAY))..];
-        let after = health::stale_after_secs(health::median_interval(day));
+        let after = health::stale_after_secs(health::median_interval(day))
+            .max(SILENT_ALERT_FLOOR_SECS);
         let quiet = newest.secs_until(now);
         let verdict = if quiet > after {
             let guess = match guess(buffer, newest, &watch.health) {
@@ -504,27 +509,48 @@ mod tests {
 
     #[test]
     fn a_device_is_silent_past_three_intervals_and_clears_on_a_row() {
-        let rows = (0..20).map(|i| (i * 15 * MIN, vec![1.040, 4.1, -60.0]));
+        let rows = (0..20).map(|i| (i * 30 * MIN, vec![1.040, 4.1, -60.0]));
         let mut b = device(&["gravity", "battery", "rssi"], rows);
-        let newest = 19 * 15 * MIN;
+        let newest = 19 * 30 * MIN;
         let mut buffers = Buffers::from([("ispindel".to_owned(), b.clone())]);
 
-        let conds = evaluate(&silent_watch(), &buffers, at(newest + 45 * MIN));
+        let conds = evaluate(&silent_watch(), &buffers, at(newest + 90 * MIN));
         assert_eq!(conds[0].verdict, Verdict::Clear);
         assert_eq!(conds[0].device.as_deref(), Some("ispindel"));
 
-        let conds = evaluate(&silent_watch(), &buffers, at(newest + 46 * MIN));
+        let conds = evaluate(&silent_watch(), &buffers, at(newest + 91 * MIN));
         assert_eq!(
             conds[0].verdict,
             Verdict::Raise {
-                detail: "no reading for 46 min".into()
+                detail: "no reading for 1 h".into()
             }
         );
 
-        b.push(at(newest + 50 * MIN), &[Some("1.040".into()), None, None]);
+        b.push(at(newest + 95 * MIN), &[Some("1.040".into()), None, None]);
         buffers.insert("ispindel".into(), b);
-        let conds = evaluate(&silent_watch(), &buffers, at(newest + 51 * MIN));
+        let conds = evaluate(&silent_watch(), &buffers, at(newest + 96 * MIN));
         assert_eq!(conds[0].verdict, Verdict::Clear);
+    }
+
+    #[test]
+    fn a_fast_device_dropping_a_few_sends_is_not_silent_for_an_hour() {
+        let rows = (0..100).map(|i| (i * 5 * MIN, vec![1.040, 4.1, -90.0]));
+        let buffers = Buffers::from([(
+            "ispindel".to_owned(),
+            device(&["gravity", "battery", "rssi"], rows),
+        )]);
+        let newest = 99 * 5 * MIN;
+
+        let conds = evaluate(&silent_watch(), &buffers, at(newest + 60 * MIN));
+        assert_eq!(conds[0].verdict, Verdict::Clear);
+
+        let conds = evaluate(&silent_watch(), &buffers, at(newest + 61 * MIN));
+        assert_eq!(
+            conds[0].verdict,
+            Verdict::Raise {
+                detail: "no reading for 1 h — signal likely".into()
+            }
+        );
     }
 
     #[test]
