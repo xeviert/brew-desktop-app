@@ -1,2 +1,7 @@
 __pycache__/
 *.pyc
+
+# Personal: home network and location details
+brew-app/docs/HARDWARE.md
+brew-app/docs/PIHOLE.md
+water-data/

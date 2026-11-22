@@ -1,5 +1,5 @@
 # ESP32 #1 — DS18B20 on GPIO13, publishing to Mosquitto on the Pi.
-# No api: (no Home Assistant) and no thermostat until temp control (see docs/HARDWARE.md).
+# No api: (no Home Assistant) and no thermostat until temp control (see README.md, Hardware).
 
 esphome:
   name: esp32-1

@@ -54,11 +54,11 @@ client that ingests, and it also publishes setpoints (Phase 6).
 
 **v2 spikes** — these gate Phase V, and each ends in a committed capture, not a note
 - [x] Pick the Raspberry Pi model: **Raspberry Pi Zero 2 W**, recorded in
-      [HARDWARE.md](HARDWARE.md)
+      [README — Hardware](../../README.md#hardware)
 - [x] Set up the Pi Zero 2 W: 64-bit Raspberry Pi OS Lite on a high-endurance
       microSD — `brewd` appends a journal line every few seconds, all year, and the
       Zero has no practical SSD boot. Wi-Fi (2.4 GHz only), SSH. Address and MAC in
-      [HARDWARE.md — Raspberry Pi](HARDWARE.md#raspberry-pi)
+      [README — Hardware](../../README.md#hardware)
 - [x] Mosquitto on the Pi: one listener on the LAN, one user for devices and one
       for `brewd`, and persistence off. `brewd`'s journal is the record, not the broker
 - [x] Reflash ESP32 #1 from BrewPi-ESP32 to ESPHome: `dallas_temp` ~~for both probes~~
@@ -363,7 +363,7 @@ produces a correct, gap-free, duplicate-free `reading` table across app restarts
 - [x] `water_profile` — ions as `*_ppm`, never `*_mg_l`: 1c's linter reads a `_l`
       suffix as "stored in litres", so that spelling would pass the lint while
       meaning something else
-- [ ] ~~Seeding `water_profile` from `water-data/valenciennes/tap_brewing-params.csv`~~
+- [ ] ~~Seeding `water_profile` from local tap-water data~~
       — **dropped**, won't be built: the file's Calcium, Magnesium and Sulfate
       columns are empty, values are French-decimal (`"7,9"`) and some are censored
       (`"<0,05"`). An importer would mostly import NULLs. Water profiles are
@@ -683,12 +683,12 @@ laptop is shut. The desktop app does everything else.
       trust model Fermentrack had. `tower-http`'s `ServeFile`; tested end to end
       against `journal::Client`
 - [x] Runs under systemd, restarts on failure. Logs to journald —
-      `crates/brewd/deploy/brewd.service`, running on the Pi (HARDWARE.md, bring-up
+      `crates/brewd/deploy/brewd.service`, running on the Pi (README Setup,
       step 4)
 - [x] Cross-compiled for the Pi Zero 2 W's `aarch64-unknown-linux-gnu` (64-bit OS),
       via `cargo xtask` or `cross`. Never built on the device: 512 MB RAM does not
       link a Rust binary of this size — `cargo xtask build-pi` wraps `cross`. On
-      Windows it needs a one-off `--force-non-host` toolchain (HARDWARE.md, step 4)
+      Windows it needs a one-off `--force-non-host` toolchain (README Setup, step 4)
 - [x] No SQLite on the Pi. `brewery.db` stays on the desktop; `brewd` owns only
       its journals and its config. Revisit only if a second machine needs to write.
       (`brewd` still links rusqlite through `brewcore`; it opens no database)
