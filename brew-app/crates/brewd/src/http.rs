@@ -452,7 +452,7 @@ mod tests {
         let bad = http
             .put(&url)
             .bearer_auth(TOKEN)
-            .body(r#"{"v":2,"watches":[]}"#)
+            .body(format!(r#"{{"v":{},"watches":[]}}"#, brewcore::alert::WATCH_VERSION + 1))
             .send()
             .await
             .unwrap();

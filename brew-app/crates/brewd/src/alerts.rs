@@ -294,6 +294,7 @@ pub(crate) mod tests {
             target_sg: None,
             temp_min_c: None,
             temp_max_c: Some(20.0),
+            band_since: None,
             stability: StabilityParams::default(),
             health: HealthParams::default(),
         }

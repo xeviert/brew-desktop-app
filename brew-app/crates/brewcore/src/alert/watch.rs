@@ -19,7 +19,7 @@ use crate::{
 
 /// The `"v"` a [`WatchSet`] carries. A `brewd` and a desktop that disagree on what a
 /// watch means refuse each other rather than judge half of one.
-pub const WATCH_VERSION: u64 = 1;
+pub const WATCH_VERSION: u64 = 2;
 
 /// One journal column, from the moment it was bound to the batch. Readings before
 /// `since` are the vessel's previous batch.
@@ -57,6 +57,9 @@ pub struct Watch {
     pub target_sg: Option<Sg>,
     pub temp_min_c: Option<f64>,
     pub temp_max_c: Option<f64>,
+    /// When the band began, if it comes from a schedule step: a newly ticked step's
+    /// band isn't judged until the beer gets there.
+    pub band_since: Option<Timestamp>,
     pub stability: StabilityParams,
     pub health: HealthParams,
 }
@@ -157,6 +160,7 @@ pub(crate) mod tests {
             target_sg: None,
             temp_min_c: Some(16.0),
             temp_max_c: Some(20.0),
+            band_since: None,
             stability: StabilityParams::default(),
             health: HealthParams::default(),
         }
@@ -176,8 +180,11 @@ pub(crate) mod tests {
 
     #[test]
     fn another_version_is_refused_before_its_fields_are_read() {
-        let err = WatchSet::from_json(br#"{"v":2,"watches":[{"nonsense":1}]}"#).unwrap_err();
-        assert_eq!(err.code(), "alert.watch_version");
+        for v in [WATCH_VERSION - 1, WATCH_VERSION + 1] {
+            let json = format!(r#"{{"v":{v},"watches":[{{"nonsense":1}}]}}"#);
+            let err = WatchSet::from_json(json.as_bytes()).unwrap_err();
+            assert_eq!(err.code(), "alert.watch_version");
+        }
         let err = WatchSet::from_json(br#"{"watches":[]}"#).unwrap_err();
         assert_eq!(err.code(), "alert.watch_version");
     }

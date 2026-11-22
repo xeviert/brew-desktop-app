@@ -30,6 +30,9 @@ pub const TEMP_CLEAR_MARGIN_C: f64 = 0.3;
 /// threshold. A 5 min iSpindle on weak Wi-Fi drops a send or two most hours; the
 /// Home card still says so at 15 min, but a push is for a device that sank or died.
 pub const SILENT_ALERT_FLOOR_SECS: i64 = 3600;
+/// How long a band from a newly started schedule step waits for the beer to get into
+/// it before judging anyway. A diacetyl rest free-rises over a day; a crash takes one.
+pub const TEMP_ARM_SECS: i64 = DAY;
 
 const DAY: i64 = 86_400;
 
@@ -165,10 +168,33 @@ fn smooth(raw: &[(Timestamp, f64)]) -> Vec<(Timestamp, f64)> {
 
 fn temperature(watch: &Watch, buffers: &Buffers, out: &mut Vec<Condition>) {
     let Some(feed) = &watch.temp else { return };
-    let points = buffers
+    let mut points = buffers
         .get(&feed.device)
         .map(|b| b.series(&feed.column, feed.since))
         .unwrap_or_default();
+    if let Some(since) = watch.band_since {
+        let inside = |v: f64| {
+            watch.temp_min_c.is_none_or(|lo| v >= lo) && watch.temp_max_c.is_none_or(|hi| v <= hi)
+        };
+        let deadline = since.saturating_add_secs(TEMP_ARM_SECS);
+        let armed = points
+            .iter()
+            .find(|&&(t, v)| t >= since && (inside(v) || t >= deadline))
+            .map(|&(t, _)| t);
+        // Not there yet: whatever the old band raised no longer applies.
+        let Some(armed) = armed else {
+            for (rule, end) in [
+                (Rule::TempHigh, watch.temp_max_c),
+                (Rule::TempLow, watch.temp_min_c),
+            ] {
+                if end.is_some() {
+                    push(out, rule, Verdict::Clear);
+                }
+            }
+            return;
+        };
+        points.retain(|&(t, _)| t >= armed);
+    }
     if let Some(hi) = watch.temp_max_c {
         let verdict = band(
             &points,
@@ -235,8 +261,8 @@ fn silence(watch: &Watch, buffers: &Buffers, now: Timestamp, out: &mut Vec<Condi
             continue;
         };
         let day = &times[times.partition_point(|&t| t < newest.saturating_add_secs(-DAY))..];
-        let after = health::stale_after_secs(health::median_interval(day))
-            .max(SILENT_ALERT_FLOOR_SECS);
+        let after =
+            health::stale_after_secs(health::median_interval(day)).max(SILENT_ALERT_FLOOR_SECS);
         let quiet = newest.secs_until(now);
         let verdict = if quiet > after {
             let guess = match guess(buffer, newest, &watch.health) {
@@ -479,6 +505,51 @@ mod tests {
         values.push(19.6);
         let conds = evaluate(&temp_watch(), &temps(values), at(33 * 30));
         assert_eq!(verdict(&conds, Rule::TempHigh), &Verdict::Clear);
+    }
+
+    #[test]
+    fn a_new_steps_band_waits_for_the_beer_to_get_there() {
+        // A diacetyl rest from 10 °C: 16–18, ticked at 0, free-rising half a degree an hour.
+        let mut w = temp_watch();
+        (w.temp_min_c, w.temp_max_c, w.band_since) = (Some(16.0), Some(18.0), Some(at(0)));
+        let rising = |hours: i64| {
+            buffers(
+                "esp32",
+                "vessel_temp",
+                (0..=hours * 4).map(|i| (i * 15 * MIN, 10.0 + 0.5 * (i as f64 / 4.0))),
+            )
+        };
+        let conds = evaluate(&w, &rising(11), at(11 * HOUR));
+        assert_eq!(
+            verdict(&conds, Rule::TempLow),
+            &Verdict::Clear,
+            "on its way"
+        );
+
+        // In at 12 h, then it falls back out and stays out.
+        let mut points: Vec<_> = (0..=48)
+            .map(|i| (i * 15 * MIN, 10.0 + 0.5 * (i as f64 / 4.0)))
+            .collect();
+        points.extend((1..=4).map(|i| (12 * HOUR + i * 15 * MIN, 15.0)));
+        let conds = evaluate(&w, &buffers("esp32", "vessel_temp", points), at(13 * HOUR));
+        assert!(raised(verdict(&conds, Rule::TempLow)), "{conds:?}");
+    }
+
+    #[test]
+    fn a_band_never_reached_is_judged_after_a_day() {
+        let mut w = temp_watch();
+        (w.temp_min_c, w.temp_max_c, w.band_since) = (Some(0.0), Some(2.0), Some(at(0)));
+        let stuck = |end: i64| {
+            buffers(
+                "esp32",
+                "vessel_temp",
+                (0..=end / (15 * MIN)).map(|i| (i * 15 * MIN, 8.0)),
+            )
+        };
+        let conds = evaluate(&w, &stuck(23 * HOUR), at(23 * HOUR));
+        assert_eq!(verdict(&conds, Rule::TempHigh), &Verdict::Clear);
+        let conds = evaluate(&w, &stuck(25 * HOUR), at(25 * HOUR));
+        assert!(raised(verdict(&conds, Rule::TempHigh)), "{conds:?}");
     }
 
     #[test]

@@ -16,6 +16,7 @@ use rusqlite::{Connection, OptionalExtension, params, types::FromSql, types::ToS
 use super::{
     Metric, SourceKind,
     batch::{BATCH_COLUMNS, BatchStatus, batch_from_row, get_batch},
+    schedule::{StepRow, list_steps, step_start},
     stability::expected_fg,
 };
 use crate::{
@@ -238,12 +239,12 @@ pub fn build_watches(conn: &Connection, config: &Config) -> Result<Vec<Watch>> {
             });
         let devices: BTreeSet<String> = feeds.iter().map(|f| f.device.clone()).collect();
 
-        let (yeast_min, yeast_max) = yeast_temp_band(conn, batch.id)?;
-        let mut band = (own.temp_min_c.or(yeast_min), own.temp_max_c.or(yeast_max));
-        // A set end against the yeast's other end can cross; the brewer's word wins.
-        if band.0.zip(band.1).is_some_and(|(lo, hi)| lo > hi) {
-            band = (own.temp_min_c, own.temp_max_c);
-        }
+        let steps = list_steps(conn, batch.id)?;
+        let scheduled = schedule_band(&steps, batch.pitched_at);
+        let mut layers: Vec<_> = scheduled.map(|(band, _)| band).into_iter().collect();
+        layers.push((own.temp_min_c, own.temp_max_c));
+        layers.push(yeast_temp_band(conn, batch.id)?);
+        let band = resolve_band(&layers);
 
         out.push(Watch {
             batch_id: batch.id,
@@ -256,11 +257,45 @@ pub fn build_watches(conn: &Connection, config: &Config) -> Result<Vec<Watch>> {
             target_sg: own.target_sg,
             temp_min_c: band.0,
             temp_max_c: band.1,
+            band_since: scheduled.map(|(_, since)| since),
             stability: config.stability.params(),
             health: config.health.params(),
         });
     }
     Ok(out)
+}
+
+/// The band the schedule sets now and when it began: the current step's, else the
+/// nearest step before it that sets one. Once every step is done, the last that did.
+fn schedule_band(steps: &[StepRow], pitched_at: Option<Timestamp>) -> Option<(Band, Timestamp)> {
+    let current = steps
+        .iter()
+        .position(|s| s.done_event_id.is_none())
+        .unwrap_or(steps.len().saturating_sub(1));
+    let steps_so_far = steps.get(..=current)?;
+    let i = steps_so_far
+        .iter()
+        .rposition(|s| s.temp_min_c.is_some() || s.temp_max_c.is_some())?;
+    Some((
+        (steps[i].temp_min_c, steps[i].temp_max_c),
+        step_start(steps, i, pitched_at)?,
+    ))
+}
+
+type Band = (Option<f64>, Option<f64>);
+
+/// Each end from the first layer that sets it — schedule step, the batch's own, the
+/// yeast's. Where that crosses, the last layer is dropped, then the next: the more
+/// specific word wins.
+fn resolve_band(layers: &[Band]) -> Band {
+    (1..=layers.len())
+        .rev()
+        .map(|n| {
+            let top = &layers[..n];
+            (top.iter().find_map(|l| l.0), top.iter().find_map(|l| l.1))
+        })
+        .find(|band| !band.0.zip(band.1).is_some_and(|(lo, hi)| lo > hi))
+        .unwrap_or_default()
 }
 
 // ------------------------------------------------------------------ alerts
@@ -630,6 +665,65 @@ mod tests {
         };
         let err = set_batch_alert(&conn, id, &inverted).unwrap_err();
         assert_eq!(err.code(), "units.range_inverted");
+    }
+
+    #[test]
+    fn the_current_schedule_steps_band_comes_first() {
+        use crate::db::schedule::{NewStep, add_step, complete_step};
+        let mut conn = db();
+        let id = pitched(&conn, "LAGER-001");
+        let probe = journal(&mut conn, "esp32-1.csv", &[("vessel_temp", Metric::TempC)]);
+        bind(&conn, id, &probe);
+        yeast(&conn, id, (9.0, 15.0));
+        let step = |name: &str, band: Band| NewStep {
+            name: name.into(),
+            temp_min_c: band.0,
+            temp_max_c: band.1,
+            ..NewStep::default()
+        };
+        let primary = add_step(&conn, id, &step("Primary", (None, Some(12.0)))).unwrap();
+        let rest = add_step(&conn, id, &step("Diacetyl rest", (Some(16.0), Some(18.0)))).unwrap();
+        let taste = add_step(&conn, id, &step("Taste", (None, None))).unwrap();
+        let watch = |conn: &Connection| {
+            let w = build_watches(conn, &config(None)).unwrap().remove(0);
+            (w.temp_min_c, w.temp_max_c, w.band_since)
+        };
+
+        assert_eq!(
+            watch(&conn),
+            (Some(9.0), Some(12.0), Some(T0)),
+            "the yeast fills the min"
+        );
+        let rested = T0.saturating_add_secs(72 * 3_600);
+        complete_step(&conn, primary, rested, None).unwrap();
+        // 16 against the yeast's 15 would cross: the step stands alone.
+        assert_eq!(watch(&conn), (Some(16.0), Some(18.0), Some(rested)));
+        complete_step(&conn, rest, rested.saturating_add_secs(3_600), None).unwrap();
+        assert_eq!(
+            watch(&conn),
+            (Some(16.0), Some(18.0), Some(rested)),
+            "kept through a step with none"
+        );
+        complete_step(&conn, taste, rested.saturating_add_secs(7_200), None).unwrap();
+        assert_eq!(
+            watch(&conn),
+            (Some(16.0), Some(18.0), Some(rested)),
+            "and once all are done"
+        );
+    }
+
+    #[test]
+    fn a_batch_with_no_schedule_has_no_band_since() {
+        let mut conn = db();
+        let id = pitched(&conn, "SELTZER-001");
+        let probe = journal(&mut conn, "esp32-1.csv", &[("vessel_temp", Metric::TempC)]);
+        bind(&conn, id, &probe);
+        yeast(&conn, id, (10.0, 25.0));
+        let w = &build_watches(&conn, &config(None)).unwrap()[0];
+        assert_eq!(
+            (w.temp_min_c, w.temp_max_c, w.band_since),
+            (Some(10.0), Some(25.0), None)
+        );
     }
 
     fn record(id: u64, batch_id: i64, event: LogEvent, time: i64) -> LogRecord {

@@ -140,7 +140,7 @@
           <span>°{ui.temp_display}</span>
         </div>
         <small id="alert-band-help">
-          for 10 minutes. Empty takes the pitched yeast's range; no yeast range, no temperature alert.
+          for 10 minutes. A schedule step's band comes first; empty takes the pitched yeast's range; no range at all, no temperature alert.
         </small>
         <div class="row">
           <label for="alert-target">Gravity down to</label>
