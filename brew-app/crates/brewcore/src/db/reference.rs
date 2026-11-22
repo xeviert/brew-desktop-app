@@ -160,6 +160,53 @@ pub fn list_vessels(conn: &Connection, include_archived: bool) -> Result<Vec<Ves
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+pub fn get_vessel(conn: &Connection, id: i64) -> Result<VesselRow> {
+    conn.query_row(
+        "SELECT id, name, kind, capacity_l, notes, archived_at FROM vessel WHERE id = ?",
+        [id],
+        |row| {
+            Ok(VesselRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                kind: row.get(2)?,
+                capacity_l: row.get(3)?,
+                notes: row.get(4)?,
+                archived_at: row.get(5)?,
+            })
+        },
+    )
+    .optional()?
+    .ok_or(Error::NoSuchVessel { vessel_id: id })
+}
+
+/// A rename is free: every batch points at the id. Archived vessels are refused, as
+/// archived batches are.
+pub fn update_vessel(
+    conn: &Connection,
+    id: i64,
+    name: &str,
+    kind: VesselKind,
+    capacity_l: Option<Litres>,
+    notes: Option<&str>,
+) -> Result<()> {
+    if get_vessel(conn, id)?.archived_at.is_some() {
+        return Err(Error::VesselArchived { vessel_id: id });
+    }
+    let name = required_name("vessel", name)?;
+    if let Some(capacity) = capacity_l.filter(|c| c.get() <= 0.0) {
+        return Err(Error::NotPositive {
+            field: "capacity_l",
+            value: capacity.get(),
+        });
+    }
+    conn.execute(
+        "UPDATE vessel SET name = ?, kind = ?, capacity_l = ?, notes = ? WHERE id = ?",
+        params![name, kind, capacity_l, notes, id],
+    )
+    .map_err(duplicate("vessel", name))?;
+    Ok(())
+}
+
 /// Returns whether a row changed — archiving an already-archived vessel is `false`,
 /// not an error.
 pub fn archive_vessel(conn: &Connection, id: i64, at: Timestamp) -> Result<bool> {
@@ -168,6 +215,11 @@ pub fn archive_vessel(conn: &Connection, id: i64, at: Timestamp) -> Result<bool>
         params![at, id],
     )?;
     Ok(changed == 1)
+}
+
+pub fn restore_vessel(conn: &Connection, id: i64) -> Result<bool> {
+    get_vessel(conn, id)?;
+    restore_row(conn, "vessel", id)
 }
 
 /// Replace the streams a pitch into this vessel binds by default. Replaces rather than
@@ -858,7 +910,8 @@ pub fn update_lot(conn: &Connection, lot_id: i64, lot: &NewLot) -> Result<()> {
     Ok(())
 }
 
-/// Until Phase 7's lot consumption, this is how a lot is marked used up.
+/// How a lot leaves the pickers. 7c tracks what is left (`db::inventory`); this stays
+/// the decision that a lot is finished.
 pub fn archive_lot(conn: &Connection, id: i64, at: Timestamp) -> Result<bool> {
     archive_row(conn, "ingredient_lot", id, at)
 }

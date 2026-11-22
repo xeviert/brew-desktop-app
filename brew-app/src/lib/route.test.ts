@@ -5,6 +5,7 @@ describe("parse", () => {
 	it("reads the three screens", () => {
 		expect(parse("#/")).toEqual({ name: "home" });
 		expect(parse("#/batch/17")).toEqual({ name: "batch", id: 17 });
+		expect(parse("#/batch/17/report")).toEqual({ name: "report", id: 17 });
 		expect(parse("#/settings")).toEqual({ name: "settings" });
 	});
 	it("reads a comparison in pick order", () => {
@@ -58,6 +59,7 @@ describe("parse", () => {
 		const routes: Route[] = [
 			{ name: "home" },
 			{ name: "batch", id: 3 },
+			{ name: "report", id: 3 },
 			{ name: "batches" },
 			{ name: "batch-new", version: null },
 			{ name: "batch-new", version: 4 },

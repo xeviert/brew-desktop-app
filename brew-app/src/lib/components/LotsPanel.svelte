@@ -18,6 +18,8 @@
     unitsLike,
     type LotForm,
   } from "$lib/reference";
+  import LotLedger from "./LotLedger.svelte";
+  import { remainingText } from "$lib/inventory";
   import { href } from "$lib/route";
   import { formatMoney, formatTimestamp, type Currency } from "$lib/units";
 
@@ -40,6 +42,8 @@
   /** The lot being edited, `"new"` for the add form, or nothing. */
   let editing = $state<number | "new" | null>(null);
   let form = $state<LotForm>(lotForm(null, "kg", "EUR"));
+  /** The lot whose books are open. */
+  let ledgerFor = $state<number | null>(null);
 
   const units = $derived(unitsLike(ingredient.default_unit));
   const day = { dateStyle: "medium" } as const;
@@ -111,6 +115,7 @@
       <thead>
         <tr>
           <th>Bought</th>
+          <th>Left</th>
           <th>Supplier · lot code</th>
           <th>Cost</th>
           <th>Purchased</th>
@@ -121,8 +126,13 @@
       </thead>
       <tbody>
         {#each lots as lot (lot.id)}
+          {@const left = remainingText(lot.stock.remaining)}
           <tr class:archived={lot.archived_at !== null}>
             <td>{formatQuantity(lot.entry)}</td>
+            <td>
+              <span class:over={left.over}>{left.text}</span>
+              {#if lot.stock.value && !left.empty}<small>{formatMoney(lot.stock.value)}</small>{/if}
+            </td>
             <td>{[lot.supplier, lot.lot_code].filter(Boolean).join(" · ") || "—"}</td>
             <td>
               {#if lot.cost}
@@ -144,15 +154,26 @@
             </td>
             <td class="row-actions">
               <button class="link" onclick={() => edit(lot)}>Edit</button>
+              <button class="link" onclick={() => (ledgerFor = ledgerFor === lot.id ? null : lot.id)}
+                >{ledgerFor === lot.id ? "Hide stock" : "Stock"}</button
+              >
               {#if lot.archived_at === null}
-                <button class="link" onclick={() => setArchived(lot, true)} title="Archives it: batches can no longer pick it"
-                  >Used up</button
+                <button
+                  class="link"
+                  class:nudge={left.empty}
+                  onclick={() => setArchived(lot, true)}
+                  title="Archives it: batches can no longer pick it">{left.empty ? "Used up?" : "Used up"}</button
                 >
               {:else}
                 <button class="link" onclick={() => setArchived(lot, false)}>Restore</button>
               {/if}
             </td>
           </tr>
+          {#if ledgerFor === lot.id}
+            <tr class="ledger-row">
+              <td colspan="8"><LotLedger {lot} {units} onchanged={() => void load().then(onchanged)} /></td>
+            </tr>
+          {/if}
         {/each}
       </tbody>
     </table>
@@ -247,6 +268,19 @@
   .row-actions {
     display: flex;
     gap: 0.75rem;
+  }
+
+  .over,
+  .nudge {
+    color: #e0a35f;
+  }
+
+  td small {
+    display: block;
+  }
+
+  tr.ledger-row > td {
+    padding: 0;
   }
 
   .pair {

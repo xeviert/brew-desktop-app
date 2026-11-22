@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import BatchNew from "$lib/components/BatchNew.svelte";
+  import BatchReport from "$lib/components/BatchReport.svelte";
   import BatchView from "$lib/components/BatchView.svelte";
   import BatchesView from "$lib/components/BatchesView.svelte";
   import CalcView from "$lib/components/CalcView.svelte";
@@ -103,13 +104,16 @@
 </script>
 
 <main>
-  <header>
+  <header class="no-print">
     <h1>Brew</h1>
     <nav>
       <a href={href({ name: "home" })} class:active={route.name === "home"}>Home</a>
       <a
         href={href({ name: "batches" })}
-        class:active={route.name === "batches" || route.name === "batch-new" || route.name === "batch"}>Batches</a
+        class:active={route.name === "batches" ||
+          route.name === "batch-new" ||
+          route.name === "batch" ||
+          route.name === "report"}>Batches</a
       >
       <a href={href({ name: "compare", ids: [] })} class:active={route.name === "compare"}>Compare</a>
       <a href={href({ name: "query", id: null })} class:active={route.name === "query"}>Find batches</a>
@@ -135,6 +139,10 @@
       {/key}
     {:else if route.name === "batch"}
       <BatchView {config} batchId={route.id} syncs={settled} />
+    {:else if route.name === "report"}
+      {#key route.id}
+        <BatchReport batchId={route.id} ui={config.ui} />
+      {/key}
     {:else if route.name === "compare"}
       <CompareView ids={route.ids} ui={config.ui} />
     {:else if route.name === "query"}
@@ -165,7 +173,9 @@
   {/if}
 </main>
 
-<StatusFooter {status} {error} {syncs} {sources} />
+<div class="no-print">
+  <StatusFooter {status} {error} {syncs} {sources} />
+</div>
 
 <style>
   header {

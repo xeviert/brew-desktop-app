@@ -169,3 +169,20 @@ dd {
 .ref.calc input[type="checkbox"] {
   justify-self: start;
 }
+
+/* 7e: printing. Only the report is meant to be printed; the app's chrome stays off paper. */
+@media print {
+  :root {
+    color-scheme: light;
+    background: #fff;
+    color: #111;
+  }
+
+  main {
+    padding: 0;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}

@@ -1,17 +1,23 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    archiveVessel,
     createVessel,
     listStreams,
     listVessels,
+    restoreVessel,
     setStreamMetric,
     setVesselStreams,
     toApiError,
+    updateVessel,
     type ApiError,
     type Stream,
     type Vessel,
     type VesselKind,
   } from "$lib/api";
+  import { hygieneText } from "$lib/cleaning";
+  import VesselCleaning from "$lib/components/VesselCleaning.svelte";
+  import { confirmAction } from "$lib/confirm";
   import { metricName } from "$lib/home";
 
   let vessels = $state<Vessel[]>([]);
@@ -22,6 +28,22 @@
   let name = $state("");
   let kind = $state<VesselKind>("fermenter");
   let capacity = $state<number | null>(null);
+
+  let showArchived = $state(false);
+  let editing = $state<{ id: number; name: string; kind: VesselKind; capacity: number | null; notes: string } | null>(
+    null,
+  );
+  /** Vessels whose cleaning log is open. */
+  let logs = $state<Record<number, boolean>>({});
+
+  const KINDS: [VesselKind, string][] = [
+    ["fermenter", "Fermenter"],
+    ["brite", "Brite tank"],
+    ["carboy", "Carboy"],
+    ["keg", "Keg"],
+    ["kettle", "Kettle"],
+    ["other", "Other"],
+  ];
 
   // Manual streams are left out: they belong to a batch, not to the vessel it is in,
   // and packaging deliberately leaves them bound.
@@ -50,7 +72,7 @@
 
   async function load() {
     try {
-      [vessels, streams] = await Promise.all([listVessels(), listStreams()]);
+      [vessels, streams] = await Promise.all([listVessels(showArchived), listStreams()]);
     } catch (e) {
       error = toApiError(e);
     }
@@ -75,6 +97,37 @@
     }
   }
 
+  async function write(action: () => Promise<unknown>) {
+    busy = true;
+    error = null;
+    try {
+      await action();
+      await load();
+      return true;
+    } catch (e) {
+      error = toApiError(e);
+      return false;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function saveEdit(event: SubmitEvent) {
+    event.preventDefault();
+    const e = editing;
+    if (!e) return;
+    const notes = e.notes.trim() === "" ? null : e.notes.trim();
+    if (await write(() => updateVessel(e.id, e.name, e.kind, e.capacity, notes))) editing = null;
+  }
+
+  async function archive(vessel: Vessel) {
+    const ok = await confirmAction(
+      `Archive ${vessel.name}? It leaves the pickers; batches that used it still show it.`,
+      "Archive",
+    );
+    if (ok) void write(() => archiveVessel(vessel.id));
+  }
+
   async function toggle(vessel: Vessel, streamId: number, on: boolean) {
     const next = on
       ? [...vessel.default_streams, streamId]
@@ -93,19 +146,87 @@
   <h2>Vessels</h2>
   <p class="hint">
     Your fermenters, carboys and kegs. Tick the sensors that live in a vessel; whichever batch is in it gets their
-    readings, from its pitch until it's packaged.
+    readings, from its pitch until it's packaged. Log each clean, and the pitch warns of a vessel not sanitised since
+    its last batch.
   </p>
+  <label class="check show-archived">
+    <input type="checkbox" bind:checked={showArchived} onchange={() => void load()} />
+    <span>Show archived</span>
+  </label>
 
   {#if vessels.length === 0}
     <p class="empty">No vessels yet.</p>
   {:else}
     {#each vessels as vessel (vessel.id)}
-      <div class="vessel">
+      {@const archived = vessel.archived_at !== null}
+      {@const state = hygieneText(vessel.hygiene)}
+      <div class="vessel" class:archived>
         <h3>
           {vessel.name}
-          <small>{vessel.kind}{vessel.capacity_l !== null ? ` · ${vessel.capacity_l} L` : ""}</small>
+          <small
+            >{vessel.kind}{vessel.capacity_l !== null ? ` · ${vessel.capacity_l} L` : ""}{archived
+              ? " · archived"
+              : ""}</small
+          >
         </h3>
-        {#if sensors.length === 0}
+        {#if vessel.notes}<p class="hint">{vessel.notes}</p>{/if}
+        <p class="hygiene">
+          <span class:warn={state.warn}>{state.text}</span>
+          <button class="link" onclick={() => (logs[vessel.id] = !logs[vessel.id])}
+            >{logs[vessel.id] ? "Hide cleaning log" : "Cleaning log"}</button
+          >
+          {#if archived}
+            <button class="link" disabled={busy} onclick={() => write(() => restoreVessel(vessel.id))}>Restore</button>
+          {:else}
+            <button
+              class="link"
+              disabled={busy}
+              onclick={() =>
+                (editing = {
+                  id: vessel.id,
+                  name: vessel.name,
+                  kind: vessel.kind,
+                  capacity: vessel.capacity_l,
+                  notes: vessel.notes ?? "",
+                })}>Edit</button
+            >
+            <button class="link" disabled={busy} onclick={() => archive(vessel)}>Archive</button>
+          {/if}
+        </p>
+        {#if logs[vessel.id]}
+          <VesselCleaning vesselId={vessel.id} readonly={archived} onchanged={() => void load()} />
+        {/if}
+        {#if editing?.id === vessel.id}
+          <form class="edit" onsubmit={saveEdit}>
+            <label>
+              <span>Name</span>
+              <input type="text" required bind:value={editing.name} />
+            </label>
+            <label>
+              <span>Kind</span>
+              <select bind:value={editing.kind}>
+                {#each KINDS as [value, label] (value)}
+                  <option {value}>{label}</option>
+                {/each}
+              </select>
+            </label>
+            <label>
+              <span>Capacity (L)</span>
+              <input type="number" min="0.5" step="0.5" bind:value={editing.capacity} />
+            </label>
+            <label>
+              <span>Notes</span>
+              <input type="text" bind:value={editing.notes} />
+            </label>
+            <div class="actions">
+              <button type="submit" disabled={busy}>Save</button>
+              <button type="button" class="link" onclick={() => (editing = null)}>Cancel</button>
+            </div>
+          </form>
+        {/if}
+        {#if archived}
+          <!-- An archived vessel takes no new pitch, so its sensor defaults are moot. -->
+        {:else if sensors.length === 0}
           <p class="empty">No sensor streams yet — they appear once a source has synced.</p>
         {:else}
           {#each sensors as stream (stream.id)}
@@ -150,12 +271,9 @@
   <label>
     <span>Kind</span>
     <select bind:value={kind}>
-      <option value="fermenter">Fermenter</option>
-      <option value="brite">Brite tank</option>
-      <option value="carboy">Carboy</option>
-      <option value="keg">Keg</option>
-      <option value="kettle">Kettle</option>
-      <option value="other">Other</option>
+      {#each KINDS as [value, label] (value)}
+        <option {value}>{label}</option>
+      {/each}
     </select>
   </label>
   <label>
@@ -180,6 +298,44 @@
   .vessel {
     padding: 0.4rem 0 0.75rem;
     border-bottom: 1px solid #2a2e36;
+  }
+
+  .vessel.archived h3 {
+    color: #9aa0a6;
+  }
+
+  .hygiene {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: baseline;
+    margin: 0 0 0.5rem;
+  }
+
+  .warn {
+    color: #e0a35f;
+  }
+
+  .edit {
+    padding: 0.6rem 0.75rem;
+    margin: 0.4rem 0 0.75rem;
+    background: #1e2127;
+    border-left: 3px solid #2d5d8a;
+  }
+
+  .show-archived {
+    grid-template-columns: auto 1fr;
+  }
+
+  button.link {
+    padding: 0;
+    background: none;
+    color: #7ba7d4;
+  }
+
+  button.link:disabled {
+    color: #4a5160;
+    background: none;
   }
 
   h3 small {

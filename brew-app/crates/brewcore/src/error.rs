@@ -343,8 +343,8 @@ pub enum Error {
     EntryEmpty,
 
     // Phase 3 UI pass, U5.
-    /// Archiving is how a used-up lot is marked until Phase 7 tracks stock, so a new
-    /// addition from one is a pick from the wrong bag.
+    /// Archiving is how a used-up lot is marked, so a new addition or adjustment from
+    /// one is a pick from the wrong bag.
     #[error("lot {lot_id} is archived; restore it to add from it")]
     LotArchived { lot_id: i64 },
 
@@ -384,6 +384,40 @@ pub enum Error {
 
     #[error("reminder {reminder_id} is not done")]
     ReminderNotDone { reminder_id: i64 },
+
+    // Phase 7a.
+    #[error("unknown package format '{0}' in the database")]
+    UnknownPackageFormat(String),
+
+    #[error("packaging record {packaging_id} does not exist")]
+    NoSuchPackaging { packaging_id: i64 },
+
+    /// Size × count is only a default for the volume; with neither there is nothing to
+    /// add up.
+    #[error("give the volume packaged, or the container size and count")]
+    PackagingNoVolume,
+
+    /// The event carries a packaging line's time. As another kind it would leave the
+    /// line on an event the timeline no longer calls packaging.
+    #[error("event {event_id} is a packaging record; edit it under Packaging")]
+    PackagingEventLocked { event_id: i64 },
+
+    // Phase 7b.
+    #[error("vessel {vessel_id} does not exist")]
+    NoSuchVessel { vessel_id: i64 },
+
+    #[error("vessel {vessel_id} is archived; restore it to change it")]
+    VesselArchived { vessel_id: i64 },
+
+    #[error("unknown cleaning kind '{0}' in the database")]
+    UnknownCleaningKind(String),
+
+    #[error("cleaning entry {cleaning_id} does not exist")]
+    NoSuchCleaning { cleaning_id: i64 },
+
+    // Phase 7c.
+    #[error("stock adjustment {adjustment_id} does not exist")]
+    NoSuchAdjustment { adjustment_id: i64 },
 
     #[error("stream binding {binding_id} does not exist")]
     NoSuchBatchStream { binding_id: i64 },
@@ -678,6 +712,15 @@ impl Error {
             Error::NoSuchReminder { .. } => "db.no_such_reminder",
             Error::ReminderDone { .. } => "db.reminder_done",
             Error::ReminderNotDone { .. } => "db.reminder_not_done",
+            Error::UnknownPackageFormat(_) => "db.unknown_package_format",
+            Error::NoSuchPackaging { .. } => "db.no_such_packaging",
+            Error::PackagingNoVolume => "db.packaging_no_volume",
+            Error::PackagingEventLocked { .. } => "db.packaging_event_locked",
+            Error::NoSuchVessel { .. } => "db.no_such_vessel",
+            Error::VesselArchived { .. } => "db.vessel_archived",
+            Error::UnknownCleaningKind(_) => "db.unknown_cleaning_kind",
+            Error::NoSuchCleaning { .. } => "db.no_such_cleaning",
+            Error::NoSuchAdjustment { .. } => "db.no_such_adjustment",
             Error::NoSuchBatchStream { .. } => "db.no_such_batch_stream",
             Error::UsePitchRecorder { .. } => "db.use_pitch_recorder",
             Error::PitchEventLocked { .. } => "db.pitch_event_locked",

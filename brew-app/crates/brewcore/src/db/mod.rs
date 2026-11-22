@@ -3,15 +3,18 @@
 pub mod alert;
 pub mod analytics;
 pub mod batch;
+pub mod cleaning;
 pub mod compare;
 mod connection;
 pub mod dashboard;
 mod enums;
 pub mod health;
 pub mod home;
+pub mod inventory;
 pub mod measurement;
 mod metric;
 pub mod migrations;
+pub mod packaging;
 mod paths;
 pub mod query;
 pub mod recipe;

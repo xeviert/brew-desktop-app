@@ -4,6 +4,7 @@
   import BatchHeader from "$lib/components/BatchHeader.svelte";
   import BatchLifecycle from "$lib/components/BatchLifecycle.svelte";
   import Curve from "$lib/components/Curve.svelte";
+  import Packaging from "$lib/components/Packaging.svelte";
   import Reminders from "$lib/components/Reminders.svelte";
   import Schedule from "$lib/components/Schedule.svelte";
   import StatusCard from "$lib/components/StatusCard.svelte";
@@ -61,6 +62,7 @@
   const tabs = [
     { id: "schedule", label: "Schedule" },
     { id: "ingredients", label: "Ingredients" },
+    { id: "packaging", label: "Packaging" },
   ] as const;
   let tab = $state<(typeof tabs)[number]["id"]>("schedule");
 
@@ -118,6 +120,9 @@
               {revision}
               onchanged={() => void changed()}
             />
+          </div>
+          <div role="tabpanel" id="panel-packaging" aria-labelledby="tab-packaging" hidden={tab !== "packaging"}>
+            <Packaging batchId={batch.id} {readonly} {revision} onchanged={() => void changed()} />
           </div>
         </div>
       </div>

@@ -142,6 +142,9 @@ pub fn update_event(conn: &Connection, event_id: i64, event: &NewBatchEvent) -> 
             batch_id: current.batch_id,
         });
     }
+    if event.kind != current.kind && super::packaging::owns_event(conn, event_id)? {
+        return Err(Error::PackagingEventLocked { event_id });
+    }
     conn.execute(
         "UPDATE batch_event SET ts = ?, kind = ?, payload = ?, note = ? WHERE id = ?",
         params![event.ts, event.kind, event.payload, event.note, event_id],

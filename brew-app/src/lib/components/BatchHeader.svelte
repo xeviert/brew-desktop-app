@@ -104,6 +104,7 @@
         <button class="link" onclick={() => setArchived(false)} disabled={busy}>Restore</button>
       {/if}
       <button class="link" onclick={exportReadings}>Export readings</button>
+      <a href={href({ name: "report", id: batch.id })}>Report</a>
       <a href={href({ name: "compare", ids: [batch.id] })}>Compare with…</a>
     </span>
   </div>

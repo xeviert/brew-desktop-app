@@ -235,7 +235,8 @@ export function onSyncStatus(cb: (status: SourceStatus) => void): () => void {
 /** Mirrors `brewcore::db::reference::VesselKind`. */
 export type VesselKind = "fermenter" | "brite" | "keg" | "carboy" | "kettle" | "other";
 
-/** Mirrors `src-tauri`'s `VesselView`: a `VesselRow` plus its default stream ids. */
+/** Mirrors `src-tauri`'s `VesselView`: a `VesselRow` plus its default stream ids and 7b's
+ * hygiene. */
 export interface Vessel {
 	id: number;
 	name: string;
@@ -245,6 +246,7 @@ export interface Vessel {
 	archived_at: number | null;
 	/** Bound to a batch from its pitch, closed when it is packaged. */
 	default_streams: number[];
+	hygiene: VesselHygiene;
 }
 
 /** Mirrors `brewcore::db::tier1::StreamRow`. */
@@ -257,13 +259,26 @@ export interface Stream {
 	metric: string;
 }
 
-export const listVessels = (): Promise<Vessel[]> => call("list_vessels");
+/** Active vessels; with `includeArchived`, every one. */
+export const listVessels = (includeArchived = false): Promise<Vessel[]> => call("list_vessels", { includeArchived });
 
 export const createVessel = (
 	name: string,
 	kind: VesselKind,
 	capacityL: number | null,
 ): Promise<number> => call("create_vessel", { name, kind, capacityL });
+
+export const updateVessel = (
+	vesselId: number,
+	name: string,
+	kind: VesselKind,
+	capacityL: number | null,
+	notes: string | null,
+): Promise<void> => call("update_vessel", { vesselId, name, kind, capacityL, notes });
+
+export const archiveVessel = (vesselId: number): Promise<boolean> => call("archive_vessel", { vesselId });
+
+export const restoreVessel = (vesselId: number): Promise<boolean> => call("restore_vessel", { vesselId });
 
 export const listStreams = (): Promise<Stream[]> => call("list_streams");
 
@@ -376,6 +391,8 @@ export interface Lot {
 	/** Minor units per gram / litre / unit. */
 	cost_per_canonical_unit: number | null;
 	batch_count: number;
+	/** 7c: what is left of it. */
+	stock: LotStock;
 }
 
 /** Mirrors `src-tauri`'s `LotInput`. `cost` as typed (`12,50`); blank is no cost. */
@@ -1303,10 +1320,12 @@ export const deleteEvent = (eventId: number): Promise<boolean> => call("delete_e
 // ---------------------------------------------------------------------------
 
 /** Mirrors `src-tauri`'s `LotChoice`: a lot with its ingredient, for the additions picker. */
-export interface LotChoice extends Omit<Lot, "cost_per_canonical_unit" | "batch_count"> {
+export interface LotChoice extends Omit<Lot, "cost_per_canonical_unit" | "batch_count" | "stock"> {
 	ingredient: string;
 	category: Category;
 	default_unit: Unit;
+	/** 7c: what is left, in the lot's own unit. */
+	remaining: Quantity;
 }
 
 /** Mirrors `brewcore::db::batch::BatchIngredientRow`. */
@@ -1661,3 +1680,191 @@ export const completeReminder = (reminderId: number, at: number | null, note: st
 
 /** Deletes its `reminder_done` event. */
 export const undoReminder = (reminderId: number): Promise<Reminders> => call("undo_reminder", { reminderId });
+
+// ---------------------------------------------------------------------------
+// Phase 7a: packaging records
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::packaging::PackageFormat`. */
+export type PackageFormat = "bottle" | "can" | "keg" | "other";
+
+/** Mirrors `brewcore::db::packaging::PackagingRow`. */
+export interface PackagingLine {
+	id: number;
+	batch_id: number;
+	event_id: number;
+	/** The `package` event's time. */
+	at: number;
+	format: PackageFormat;
+	container_size_l: number | null;
+	container_count: number | null;
+	volume_l: number;
+	notes: string | null;
+}
+
+/** Mirrors `brewcore::db::packaging::NewPackaging`. `volume_l` null is size × count. */
+export interface PackagingInput {
+	format: PackageFormat;
+	container_size_l: number | null;
+	container_count: number | null;
+	volume_l: number | null;
+	notes: string | null;
+}
+
+/** Mirrors `brewcore::db::packaging::LineCost`. */
+export interface PackagingLineCost {
+	packaging_id: number;
+	cost: Money | null;
+	cost_each: Money | null;
+}
+
+/** Mirrors the `PackagingView` command type: `BatchPackaging` and its cost. */
+export interface Packaging {
+	batch_id: number;
+	lines: PackagingLine[];
+	pitched_at: number | null;
+	/** The batch's volume, or its recipe's target. */
+	volume_l: number | null;
+	packaged_l: number;
+	/** Negative when more was packaged than the batch says it held. */
+	loss_l: number | null;
+	cost: { per_packaged_l: Money | null; lines: PackagingLineCost[] } | null;
+	/** Lots in more than one currency. */
+	cost_error: ApiError | null;
+}
+
+export const batchPackaging = (batchId: number): Promise<Packaging> => call("batch_packaging", { batchId });
+
+/** Writes a `package` event. `at` null is now. */
+export const addPackaging = (batchId: number, at: number | null, line: PackagingInput): Promise<Packaging> =>
+	call("add_packaging", { batchId, at, line });
+
+export const updatePackaging = (packagingId: number, at: number | null, line: PackagingInput): Promise<Packaging> =>
+	call("update_packaging", { packagingId, at, line });
+
+/** Deletes its `package` event too. */
+export const deletePackaging = (packagingId: number): Promise<Packaging> => call("delete_packaging", { packagingId });
+
+/** The move to `packaged` and its lines, at one time. `true` if the batch moved. */
+export const packageBatch = (batchId: number, at: number | null, lines: PackagingInput[]): Promise<boolean> =>
+	call("package_batch", { batchId, at, lines });
+
+// ---------------------------------------------------------------------------
+// Phase 7b: the cleaning log
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::cleaning::CleaningKind`. */
+export type CleaningKind = "clean" | "sanitize" | "clean_and_sanitize" | "rinse";
+
+/** Mirrors `brewcore::db::cleaning::CleaningRow`. */
+export interface Cleaning {
+	id: number;
+	vessel_id: number;
+	cleaned_at: number;
+	kind: CleaningKind;
+	chemical: string | null;
+	notes: string | null;
+}
+
+/** Mirrors `brewcore::db::cleaning::NewCleaning`. */
+export interface CleaningInput {
+	kind: CleaningKind;
+	chemical: string | null;
+	notes: string | null;
+}
+
+/** Mirrors `brewcore::db::cleaning::VesselHygiene`. */
+export interface VesselHygiene {
+	vessel_id: number;
+	last_cleaned: Cleaning | null;
+	last_sanitized: Cleaning | null;
+	/** The latest batch pitched into it. */
+	last_batch: { id: number; code: string; pitched_at: number; in_vessel: boolean } | null;
+	/** Empty, and a batch has been in it since the last sanitise. */
+	needs_sanitizing: boolean;
+}
+
+/** Mirrors `brewcore::db::cleaning::CleaningLog`. Newest first. */
+export interface CleaningLog {
+	entries: Cleaning[];
+	hygiene: VesselHygiene;
+}
+
+export const vesselCleanings = (vesselId: number): Promise<CleaningLog> => call("vessel_cleanings", { vesselId });
+
+export const vesselHygiene = (vesselId: number): Promise<VesselHygiene> => call("vessel_hygiene", { vesselId });
+
+/** `at` null is now. */
+export const addCleaning = (vesselId: number, at: number | null, entry: CleaningInput): Promise<CleaningLog> =>
+	call("add_cleaning", { vesselId, at, entry });
+
+export const updateCleaning = (cleaningId: number, at: number | null, entry: CleaningInput): Promise<CleaningLog> =>
+	call("update_cleaning", { cleaningId, at, entry });
+
+export const deleteCleaning = (cleaningId: number): Promise<CleaningLog> => call("delete_cleaning", { cleaningId });
+
+// ---------------------------------------------------------------------------
+// Phase 7c: inventory
+// ---------------------------------------------------------------------------
+
+/** Mirrors `brewcore::db::inventory::LotStock`. Every amount in the lot's entry unit. */
+export interface LotStock {
+	lot_id: number;
+	bought: Quantity;
+	used: Quantity;
+	/** Net: positive removed, negative found. */
+	adjusted: Quantity;
+	/** Below zero when the books say more went out than came in. */
+	remaining: Quantity;
+	value: Money | null;
+}
+
+/** Mirrors `brewcore::db::inventory::AdjustmentRow`. */
+export interface LotAdjustment {
+	id: number;
+	ingredient_lot_id: number;
+	adjusted_at: number;
+	qty: CanonicalQty;
+	/** Positive removed, negative put back. */
+	entry: Quantity;
+	reason: string;
+}
+
+/** Mirrors `brewcore::db::inventory::NewAdjustment`. */
+export interface AdjustmentInput {
+	entry: Quantity;
+	reason: string;
+}
+
+/** Mirrors `brewcore::db::inventory::LotLedger`. Adjustments newest first. */
+export interface LotLedger {
+	stock: LotStock;
+	adjustments: LotAdjustment[];
+}
+
+/** Mirrors `brewcore::db::inventory::IngredientStock`. Over active lots, in `default_unit`. */
+export interface IngredientStock {
+	ingredient_id: number;
+	on_hand: Quantity;
+	lots: number;
+	value: Money | null;
+}
+
+export const ingredientStock = (): Promise<IngredientStock[]> => call("ingredient_stock");
+
+export const lotLedger = (lotId: number): Promise<LotLedger> => call("lot_ledger", { lotId });
+
+/** `at` null is now. */
+export const addLotAdjustment = (lotId: number, at: number | null, adjustment: AdjustmentInput): Promise<LotLedger> =>
+	call("add_lot_adjustment", { lotId, at, adjustment });
+
+/** A stocktake: `counted` is what is actually left. */
+export const setLotRemaining = (
+	lotId: number,
+	at: number | null,
+	counted: Quantity,
+	reason: string | null,
+): Promise<LotLedger> => call("set_lot_remaining", { lotId, at, counted, reason });
+
+export const deleteLotAdjustment = (adjustmentId: number): Promise<LotLedger> =>
+	call("delete_lot_adjustment", { adjustmentId });

@@ -3,6 +3,7 @@
   import {
     archiveIngredient,
     createIngredient,
+    ingredientStock,
     listIngredients,
     listYeastStrains,
     restoreIngredient,
@@ -12,10 +13,11 @@
     type ApiError,
     type Config,
     type Ingredient,
+    type IngredientStock,
     type YanPreset,
     type YeastStrain,
   } from "$lib/api";
-  import { CATEGORIES, ingredientForm, toIngredientInput, type IngredientForm } from "$lib/reference";
+  import { CATEGORIES, formatQuantity, ingredientForm, toIngredientInput, type IngredientForm } from "$lib/reference";
   import { href, type IngredientsTab } from "$lib/route";
   import IngredientFields from "./IngredientFields.svelte";
   import LotsPanel from "./LotsPanel.svelte";
@@ -24,6 +26,8 @@
   let { tab, config }: { tab: IngredientsTab; config: Config } = $props();
 
   let ingredients = $state<Ingredient[]>([]);
+  /** 7c: on hand per ingredient, over its active lots. */
+  let stock = $state<Record<number, IngredientStock>>({});
   let strains = $state<YeastStrain[]>([]);
   let presets = $state<YanPreset[]>([]);
   let showArchived = $state(false);
@@ -43,7 +47,9 @@
 
   async function loadIngredients() {
     try {
-      ingredients = await listIngredients(showArchived);
+      const [list, onHand] = await Promise.all([listIngredients(showArchived), ingredientStock()]);
+      ingredients = list;
+      stock = Object.fromEntries(onHand.map((s) => [s.ingredient_id, s]));
     } catch (e) {
       error = toApiError(e);
     }
@@ -198,6 +204,7 @@
             title={i.lot_count === 0 ? "Batches can't use it until it has a lot" : "Show its lots"}
           >
             {i.lot_count === 0 ? "none" : `${i.lot_count} lot${i.lot_count === 1 ? "" : "s"}`}
+            {#if stock[i.id]}<small>{formatQuantity(stock[i.id].on_hand)} on hand</small>{/if}
           </button>
           <span class="row-actions">
             <button class="link" onclick={() => edit(i)}>Edit</button>
@@ -322,6 +329,11 @@
 
   .ref button.stock.none {
     color: #d8a657;
+  }
+
+  .ref button.stock small {
+    display: block;
+    color: #6f757d;
   }
 
   .editor {

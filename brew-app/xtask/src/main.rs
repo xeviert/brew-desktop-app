@@ -10,17 +10,20 @@ use brewcore::{
     db::{
         Db, Metric, SourceKind,
         batch::{
-            NewBatch, NewBatchIngredient, add_batch_ingredient, archive_batch, create_batch,
-            set_batch_measurements,
+            BatchStatus, NewBatch, NewBatchIngredient, add_batch_ingredient, archive_batch,
+            create_batch, set_batch_measurements, transition_batch,
         },
+        cleaning::{CleaningKind, NewCleaning, add_cleaning},
+        inventory::set_remaining,
         measurement::{EntryUnit, Instrument, NewMeasurement, record_measurement},
+        packaging::{NewPackaging, PackageFormat, package_batch},
         recipe::{
             BeverageType, NewRecipeItem, NewRecipeVersion, Stage, add_recipe_item, create_recipe,
             create_recipe_version,
         },
         reference::{
-            Category, NewIngredient, NewLot, NewYeastStrain, YAN_ATTR, create_ingredient,
-            create_lot, create_yeast_strain,
+            Category, NewIngredient, NewLot, NewYeastStrain, VesselKind, YAN_ATTR,
+            create_ingredient, create_lot, create_vessel, create_yeast_strain,
         },
         tier1::{create_source, create_stream, insert_readings},
         timeline::{EventKind, NewBatchEvent, add_event, bind_stream, record_pitch},
@@ -220,6 +223,23 @@ fn demo_db(path: Option<PathBuf>) {
         };
         let sucrose_lot = priced(sucrose, Quantity::new(5.0, Unit::Kg)?, 1250, "SUC-2608")?;
         let fermaid_lot = priced(fermaid, Quantity::new(250.0, Unit::G)?, 1890, "FO-0412")?;
+        // 7c: a second bag for SELTZER-007, and the first one counted short.
+        let sucrose_bulk = priced(sucrose, Quantity::new(10.0, Unit::Kg)?, 2200, "SUC-2610")?;
+        // 7b: FV1 holds SELTZER-007 until it is packaged; CIDER-005 is planned into it next.
+        let fv1 = create_vessel(
+            &tx,
+            "FV1",
+            VesselKind::Fermenter,
+            Some(Litres::new(30.0)?),
+            None,
+        )?;
+        create_vessel(
+            &tx,
+            "FV2",
+            VesselKind::Fermenter,
+            Some(Litres::new(30.0)?),
+            None,
+        )?;
         let recipe = create_recipe(&tx, "Citron-Verveine", BeverageType::Seltzer, None)?;
         let v1 = create_recipe_version(
             &tx,
@@ -503,7 +523,7 @@ fn demo_db(path: Option<PathBuf>) {
                     code: code.into(),
                     recipe_version_id: (kind == BeverageType::Seltzer).then_some(v1),
                     beverage_type: kind,
-                    vessel_id: None,
+                    vessel_id: (code == "SELTZER-007").then_some(fv1),
                     volume_l: None,
                     og: Some(Sg::new(og)?),
                     notes: Some("demo: cargo xtask demo-db".into()),
@@ -538,7 +558,64 @@ fn demo_db(path: Option<PathBuf>) {
             if archived {
                 archive_batch(&tx, batch_id, at(days + DAY))?;
             }
+            // 7a–7c: SELTZER-007 sanitised into, fed from the second bag, conditioned and
+            // packaged two days after its readings end — a keg and a case, 2 L short of
+            // the recipe's 20 L — then FV1 rinsed and cleaned but not sanitised, so
+            // CIDER-005's pitch warns.
+            if code == "SELTZER-007" {
+                let sanitised = NewCleaning {
+                    kind: CleaningKind::CleanAndSanitize,
+                    chemical: Some("PBW, then Star San 1.5 mL/L".into()),
+                    notes: None,
+                };
+                add_cleaning(&tx, fv1, at(-3 * HOUR), &sanitised)?;
+                add_batch_ingredient(
+                    &tx,
+                    batch_id,
+                    &NewBatchIngredient {
+                        ingredient_lot_id: sucrose_bulk,
+                        entry: Quantity::new(4.0, Unit::Kg)?,
+                        stage: Stage::Prep,
+                        added_at: None,
+                        notes: None,
+                    },
+                )?;
+                transition_batch(&tx, batch_id, BatchStatus::Conditioning, at(10 * DAY))?;
+                let line =
+                    |format, size: f64, count, volume: f64| -> brewcore::Result<NewPackaging> {
+                        Ok(NewPackaging {
+                            format,
+                            container_size_l: Some(Litres::new(size)?),
+                            container_count: Some(count),
+                            volume_l: Some(Litres::new(volume)?),
+                            notes: None,
+                        })
+                    };
+                package_batch(
+                    &tx,
+                    batch_id,
+                    at(days + 2 * DAY),
+                    &[
+                        line(PackageFormat::Keg, 19.0, 1, 12.0)?,
+                        line(PackageFormat::Bottle, 0.5, 12, 6.0)?,
+                    ],
+                )?;
+                let rinsed = NewCleaning {
+                    kind: CleaningKind::Clean,
+                    chemical: Some("PBW".into()),
+                    notes: Some("sanitise before the next pitch".into()),
+                };
+                add_cleaning(&tx, fv1, at(days + 2 * DAY + 2 * HOUR), &rinsed)?;
+            }
         }
+        // The first bag weighed: 0.7 kg against the 0.8 kg the books say.
+        set_remaining(
+            &tx,
+            sucrose_lot,
+            Timestamp::from_secs(base),
+            Quantity::new(0.7, Unit::Kg)?,
+            None,
+        )?;
 
         create_batch(
             &tx,
@@ -546,7 +623,7 @@ fn demo_db(path: Option<PathBuf>) {
                 code: "CIDER-005".into(),
                 recipe_version_id: None,
                 beverage_type: BeverageType::Cider,
-                vessel_id: None,
+                vessel_id: Some(fv1),
                 volume_l: None,
                 og: None,
                 notes: Some("demo: not pitched yet".into()),

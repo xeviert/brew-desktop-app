@@ -1,14 +1,20 @@
 <script lang="ts">
   import {
+    packageBatch,
     recordPitch,
     toApiError,
     transitionBatch,
     undoPitch,
+    vesselHygiene,
     type ApiError,
     type BatchSummary,
+    type PackagingInput,
   } from "$lib/api";
   import { NEXT, fromLocalDateTime, localDateTime } from "$lib/batch";
+  import { pitchWarning } from "$lib/cleaning";
   import { confirmAction } from "$lib/confirm";
+  import PackagingFields from "$lib/components/PackagingFields.svelte";
+  import { packagingForm, toPackagingInput, type PackagingForm } from "$lib/packaging";
   import { formatTimestamp } from "$lib/units";
 
   // The one move forward from the batch's status, and undoing the pitch. `onchanged`
@@ -26,8 +32,24 @@
   let pitchAt = $state(localDateTime(Date.now() / 1000));
   let pitchNote = $state("");
   let packAt = $state(localDateTime(Date.now() / 1000));
+  // What was packaged, recorded with the move. None is the move alone.
+  let packLines = $state<PackagingForm[]>([]);
 
   const next = $derived(NEXT[batch.status]);
+
+  // 7b: a vessel not sanitised since its last batch. A warning; the pitch still goes in.
+  let hygieneWarning = $state<string | null>(null);
+  $effect(() => {
+    const vesselId = batch.status === "planned" ? batch.vessel_id : null;
+    const name = batch.vessel_name ?? "The vessel";
+    hygieneWarning = null;
+    if (vesselId === null) return;
+    vesselHygiene(vesselId)
+      .then((h) => {
+        if (batch.vessel_id === vesselId) hygieneWarning = pitchWarning(h, name);
+      })
+      .catch(() => {});
+  });
 
   async function attempt(write: () => Promise<unknown>) {
     busy = true;
@@ -66,13 +88,22 @@
 
   function advance() {
     if (!next) return;
-    let t: number | null = null;
-    if (next.to === "packaged") {
-      const v = at(packAt, "packaging time");
-      if (v === undefined) return;
-      t = v;
+    if (next.to !== "packaged") {
+      void attempt(() => transitionBatch(batch.id, next.to, null));
+      return;
     }
-    void attempt(() => transitionBatch(batch.id, next.to, t));
+    const t = at(packAt, "packaging time");
+    if (t === undefined) return;
+    const lines: PackagingInput[] = [];
+    for (const form of packLines) {
+      const line = toPackagingInput(form);
+      if (!line.ok) {
+        error = { code: "form", message: line.error };
+        return;
+      }
+      lines.push(line.value);
+    }
+    void attempt(() => packageBatch(batch.id, t, lines));
   }
 </script>
 
@@ -88,6 +119,9 @@
         <span>Note</span>
         <input type="text" bind:value={pitchNote} placeholder="EC-1118, 10 g rehydrated" />
       </label>
+      {#if hygieneWarning}
+        <p class="warn">{hygieneWarning} Log it under Settings → Vessels.</p>
+      {/if}
       <div class="actions">
         <button onclick={pitch} disabled={busy}>Pitch</button>
         <small>t=0 for the curve, the finish detector and every comparison.</small>
@@ -99,6 +133,15 @@
           <input type="datetime-local" bind:value={packAt} />
           <small>The vessel's sensors stop recording to this batch then.</small>
         </label>
+        {#each packLines as _, i (i)}
+          <div class="pack-line">
+            <PackagingFields bind:form={packLines[i]} />
+            <button class="link" onclick={() => packLines.splice(i, 1)}>Remove</button>
+          </div>
+        {/each}
+        <button class="link" onclick={() => packLines.push(packagingForm(null))}>
+          {packLines.length === 0 ? "Record what was packaged" : "Another line"}
+        </button>
       {/if}
       <div class="actions">
         <button onclick={advance} disabled={busy}>{next.label}</button>
@@ -129,5 +172,20 @@
 
   small {
     color: #6f757d;
+  }
+
+  .warn {
+    color: #e0a35f;
+  }
+
+  .pack-line {
+    padding: 0.6rem 0.75rem;
+    margin-bottom: 0.5rem;
+    background: #1e2127;
+    border-left: 3px solid #2d5d8a;
+  }
+
+  .pack-line > button {
+    margin-top: 0.4rem;
   }
 </style>

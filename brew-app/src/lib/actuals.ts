@@ -9,6 +9,7 @@
  */
 import type { Actual, ActualInput, LotChoice, PlanLine, RecipeItem, Stage, Unit } from "$lib/api";
 import { fromLocalDateTime, localDateTime } from "$lib/batch";
+import { remainingText } from "$lib/inventory";
 import { byStage } from "$lib/recipe";
 import { formatQuantity, parseNumber, unitsLike, type Result } from "$lib/reference";
 
@@ -81,9 +82,11 @@ export function unitsFor(lots: LotChoice[], lot: number | null, fallback: Unit):
 	return unitsLike(picked?.default_unit ?? fallback);
 }
 
+/** "Sucrose — Metro · 1 kg left": the picker says which bag, and what is in it (7c). */
 export function lotLabel(l: LotChoice): string {
 	const tag = l.lot_code ?? l.supplier;
-	return tag ? `${l.ingredient} — ${tag}` : `${l.ingredient} — lot ${l.id}`;
+	const name = tag ? `${l.ingredient} — ${tag}` : `${l.ingredient} — lot ${l.id}`;
+	return `${name} · ${remainingText(l.remaining).text}`;
 }
 
 export function toActualInput(form: ActualForm): Result<ActualInput> {

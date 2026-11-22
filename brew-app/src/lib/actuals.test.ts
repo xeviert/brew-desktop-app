@@ -27,6 +27,7 @@ const lot = (over: Partial<LotChoice>): LotChoice => ({
 	ingredient: "Sucrose",
 	category: "sugar",
 	default_unit: "kg",
+	remaining: { value: 1, unit: "kg" },
 	...over,
 });
 
@@ -109,8 +110,8 @@ describe("the form", () => {
 		expect(lotsFor(lots, null)).toHaveLength(2);
 		expect(unitsFor(lots, 2, "kg")).toContain("g");
 		expect(unitsFor(lots, 2, "kg")).not.toContain("L");
-		expect(lotLabel(lots[1])).toBe("Fermaid O — FO-1");
-		expect(lotLabel(lots[0])).toBe("Sucrose — Metro");
+		expect(lotLabel(lots[1])).toBe("Fermaid O — FO-1 · 1 kg left");
+		expect(lotLabel(lots[0])).toBe("Sucrose — Metro · 1 kg left");
 	});
 
 	it("knows when a planned ingredient has no lot to record from", () => {

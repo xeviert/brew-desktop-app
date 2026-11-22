@@ -9,6 +9,8 @@ export type Route =
 	/** `version` is a recipe_version id to start from, or `null` for a blank form. */
 	| { name: "batch-new"; version: number | null }
 	| { name: "batch"; id: number }
+	/** 7e: the batch's printable record. */
+	| { name: "report"; id: number }
 	| { name: "compare"; ids: number[] }
 	| { name: "query"; id: number | null; preset?: QueryPreset }
 	| { name: "ingredients"; tab: IngredientsTab }
@@ -36,6 +38,8 @@ export function parse(hash: string): Route {
 	if (batchNew) return { name: "batch-new", version: batchNew[1] ? Number(batchNew[1]) : null };
 	const batch = /^\/batch\/(\d+)$/.exec(path);
 	if (batch) return { name: "batch", id: Number(batch[1]) };
+	const report = /^\/batch\/(\d+)\/report$/.exec(path);
+	if (report) return { name: "report", id: Number(report[1]) };
 	// 5b: `#/compare/3,7,12`, in pick order; `#/compare` is an empty pick.
 	const compare = /^\/compare(?:\/(\d+(?:,\d+)*))?$/.exec(path);
 	if (compare) return { name: "compare", ids: compare[1] ? compare[1].split(",").map(Number) : [] };
@@ -72,6 +76,8 @@ export function href(route: Route): string {
 			return route.version === null ? "#/batches/new" : `#/batches/new/${route.version}`;
 		case "batch":
 			return `#/batch/${route.id}`;
+		case "report":
+			return `#/batch/${route.id}/report`;
 		case "compare":
 			return route.ids.length ? `#/compare/${route.ids.join(",")}` : "#/compare";
 		case "query":

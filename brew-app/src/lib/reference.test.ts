@@ -41,6 +41,14 @@ const lot = (over: Partial<Lot>): Lot => ({
 	archived_at: null,
 	cost_per_canonical_unit: 0.25,
 	batch_count: 0,
+	stock: {
+		lot_id: 1,
+		bought: { value: 5, unit: "kg" },
+		used: { value: 0, unit: "kg" },
+		adjusted: { value: 0, unit: "kg" },
+		remaining: { value: 5, unit: "kg" },
+		value: { minor: 1250, currency: "EUR" },
+	},
 	...over,
 });
 

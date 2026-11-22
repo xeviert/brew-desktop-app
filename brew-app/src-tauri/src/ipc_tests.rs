@@ -220,6 +220,13 @@ fn a_vessel_is_created_and_given_default_streams() {
             "notes": null,
             "archived_at": null,
             "default_streams": [stream],
+            "hygiene": {
+                "vessel_id": id,
+                "last_cleaned": null,
+                "last_sanitized": null,
+                "last_batch": null,
+                "needs_sanitizing": false,
+            },
         }])
     );
 }
@@ -2058,4 +2065,229 @@ fn a_schedule_step_is_ticked_off_as_an_event() {
         .invoke("batch_schedule", json!({ "batchId": batch_id }))
         .unwrap();
     assert_eq!(read, deleted);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7a: packaging
+
+fn keg(volume: Value) -> Value {
+    json!({
+        "format": "keg", "container_size_l": 19.0, "container_count": 1,
+        "volume_l": volume, "notes": null,
+    })
+}
+
+#[test]
+fn packaging_moves_the_batch_and_prices_what_was_packaged() {
+    let app = Harness::new();
+    let batch_id = pitched(&app, "SELTZER-001", None);
+    app.invoke(
+        "update_batch",
+        json!({ "batchId": batch_id, "batch": {
+            "code": "SELTZER-001", "vessel_id": null, "volume_l": 20.0, "notes": null,
+        }}),
+    )
+    .unwrap();
+    let sucrose = sugar(&app);
+    let lot = priced_lot(&app, &sucrose, 5.0, "kg", "12,00", "EUR");
+    app.invoke(
+        "add_batch_ingredient",
+        json!({ "batchId": batch_id, "item": actual(&lot, 5.0, "kg", "prep") }),
+    )
+    .unwrap();
+    app.invoke(
+        "transition_batch",
+        json!({ "batchId": batch_id, "to": "conditioning", "at": null }),
+    )
+    .unwrap();
+
+    let err = app.api_error(
+        "package_batch",
+        json!({ "batchId": batch_id, "at": null, "lines": [keg(json!(0.0))] }),
+    );
+    assert_eq!(err["code"], "units.not_positive");
+    let moved = app
+        .invoke(
+            "package_batch",
+            json!({ "batchId": batch_id, "at": null, "lines": [keg(json!(16.0))] }),
+        )
+        .unwrap();
+    assert_eq!(moved, true);
+
+    let view = app
+        .invoke("batch_packaging", json!({ "batchId": batch_id }))
+        .unwrap();
+    assert_eq!(view["packaged_l"], 16.0);
+    assert_eq!(view["loss_l"], 4.0);
+    assert_eq!(view["cost"]["per_packaged_l"]["minor"], 75);
+    assert_eq!(view["lines"][0]["format"], "keg");
+    let id = view["lines"][0]["id"].as_i64().unwrap();
+
+    let added = app
+        .invoke(
+            "add_packaging",
+            json!({ "batchId": batch_id, "at": null, "line": {
+                "format": "bottle", "container_size_l": 0.5, "container_count": 6,
+                "volume_l": null, "notes": "primed",
+            }}),
+        )
+        .unwrap();
+    assert_eq!(added["packaged_l"], 19.0);
+    assert_eq!(added["cost"]["lines"][1]["cost_each"]["minor"], 32);
+
+    let edited = app
+        .invoke(
+            "update_packaging",
+            json!({ "packagingId": id, "at": null, "line": keg(Value::Null) }),
+        )
+        .unwrap();
+    assert_eq!(edited["packaged_l"], 22.0);
+    assert_eq!(edited["loss_l"], -2.0);
+
+    let gone = app
+        .invoke("delete_packaging", json!({ "packagingId": id }))
+        .unwrap();
+    assert_eq!(gone["lines"].as_array().unwrap().len(), 1);
+    let err = app.api_error("delete_packaging", json!({ "packagingId": id }));
+    assert_eq!(err["code"], "db.no_such_packaging");
+    let err = app.api_error(
+        "add_packaging",
+        json!({ "batchId": batch_id, "at": 4_000_000_000i64, "line": keg(Value::Null) }),
+    );
+    assert_eq!(err["code"], "db.in_future");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7b: vessels and the cleaning log
+
+#[test]
+fn a_vessel_is_edited_archived_and_logs_its_cleaning() {
+    let app = Harness::new();
+    let id = app
+        .invoke(
+            "create_vessel",
+            json!({ "name": "FV1", "kind": "fermenter", "capacityL": 30.0 }),
+        )
+        .unwrap();
+    app.invoke(
+        "update_vessel",
+        json!({ "vesselId": id, "name": "FV-1", "kind": "fermenter", "capacityL": 25.0, "notes": " " }),
+    )
+    .unwrap();
+
+    let log = app
+        .invoke(
+            "add_cleaning",
+            json!({ "vesselId": id, "at": null, "entry": {
+                "kind": "clean_and_sanitize", "chemical": "PBW", "notes": null,
+            }}),
+        )
+        .unwrap();
+    let entry = log["entries"][0]["id"].as_i64().unwrap();
+    assert_eq!(log["hygiene"]["last_sanitized"]["chemical"], "PBW");
+    assert_eq!(log["hygiene"]["needs_sanitizing"], false);
+
+    let vessels = app.invoke("list_vessels", json!({})).unwrap();
+    assert_eq!(vessels[0]["name"], "FV-1");
+    assert_eq!(vessels[0]["capacity_l"], 25.0);
+    assert_eq!(vessels[0]["hygiene"]["last_cleaned"]["id"], entry);
+
+    let edited = app
+        .invoke(
+            "update_cleaning",
+            json!({ "cleaningId": entry, "at": null, "entry": {
+                "kind": "rinse", "chemical": null, "notes": "hot water",
+            }}),
+        )
+        .unwrap();
+    assert_eq!(edited["hygiene"]["last_cleaned"], Value::Null);
+    let hygiene = app
+        .invoke("vessel_hygiene", json!({ "vesselId": id }))
+        .unwrap();
+    assert_eq!(hygiene, edited["hygiene"]);
+
+    app.invoke("archive_vessel", json!({ "vesselId": id }))
+        .unwrap();
+    assert_eq!(app.invoke("list_vessels", json!({})).unwrap(), json!([]));
+    let all = app
+        .invoke("list_vessels", json!({ "includeArchived": true }))
+        .unwrap();
+    assert!(all[0]["archived_at"].is_i64());
+    let err = app.api_error("delete_cleaning", json!({ "cleaningId": entry }));
+    assert_eq!(err["code"], "db.vessel_archived");
+
+    app.invoke("restore_vessel", json!({ "vesselId": id }))
+        .unwrap();
+    let gone = app
+        .invoke("delete_cleaning", json!({ "cleaningId": entry }))
+        .unwrap();
+    assert_eq!(gone["entries"], json!([]));
+    let err = app.api_error("vessel_cleanings", json!({ "vesselId": 999 }));
+    assert_eq!(err["code"], "db.no_such_vessel");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7c: inventory
+
+#[test]
+fn a_lot_counts_down_as_batches_draw_from_it_and_a_stocktake_squares_it() {
+    let app = Harness::new();
+    let batch_id = pitched(&app, "SELTZER-001", None);
+    let sucrose = sugar(&app);
+    let lot = priced_lot(&app, &sucrose, 5.0, "kg", "12,50", "EUR");
+    app.invoke(
+        "add_batch_ingredient",
+        json!({ "batchId": batch_id, "item": actual(&lot, 4.0, "kg", "prep") }),
+    )
+    .unwrap();
+
+    let lots = app
+        .invoke(
+            "list_lots",
+            json!({ "ingredientId": sucrose, "includeArchived": false }),
+        )
+        .unwrap();
+    assert_eq!(
+        lots[0]["stock"]["remaining"],
+        json!({ "value": 1.0, "unit": "kg" })
+    );
+    assert_eq!(lots[0]["stock"]["value"]["minor"], 250);
+    let choices = app.invoke("list_lot_choices", json!({})).unwrap();
+    assert_eq!(choices[0]["remaining"]["value"], 1.0);
+
+    let ledger = app
+        .invoke(
+            "add_lot_adjustment",
+            json!({ "lotId": lot, "at": null, "adjustment": {
+                "entry": { "value": 200.0, "unit": "g" }, "reason": "spilt",
+            }}),
+        )
+        .unwrap();
+    assert_eq!(ledger["stock"]["remaining"]["value"], 0.8);
+    let err = app.api_error(
+        "add_lot_adjustment",
+        json!({ "lotId": lot, "at": null, "adjustment": {
+            "entry": { "value": 1.0, "unit": "L" }, "reason": "x",
+        }}),
+    );
+    assert_eq!(err["code"], "units.dimension_mismatch");
+
+    let counted = app
+        .invoke(
+            "set_lot_remaining",
+            json!({ "lotId": lot, "at": null, "counted": { "value": 1.0, "unit": "kg" }, "reason": null }),
+        )
+        .unwrap();
+    assert_eq!(counted["stock"]["remaining"]["value"], 1.0);
+    assert_eq!(counted["adjustments"][0]["reason"], "stocktake");
+    let stock = app.invoke("ingredient_stock", json!({})).unwrap();
+    assert_eq!(stock[0]["on_hand"], json!({ "value": 1.0, "unit": "kg" }));
+
+    let id = counted["adjustments"][0]["id"].clone();
+    let back = app
+        .invoke("delete_lot_adjustment", json!({ "adjustmentId": id }))
+        .unwrap();
+    assert_eq!(back["stock"]["remaining"]["value"], 0.8);
+    let read = app.invoke("lot_ledger", json!({ "lotId": lot })).unwrap();
+    assert_eq!(read, back);
 }

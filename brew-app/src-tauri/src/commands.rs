@@ -19,13 +19,16 @@ use brewcore::{
             self, BatchCost, BatchEdit, BatchIngredientRow, BatchStatus, BatchSummary,
             GravityField, NewBatch, NewBatchIngredient, PlanVsActualRow,
         },
+        cleaning,
         compare::{self, Comparison, RelRange, YAxis, YMode},
         dashboard::{self, BatchDashboard, DisplayGravity},
         health::DeviceHealth,
         home::{self, HomeBatch},
+        inventory,
         measurement::{
             self, MeasurementRow, NewMeasurement, QuickEntry, QuickEntryResult, TimelineItem,
         },
+        packaging,
         query::{
             self, BatchFilter, QueryOptions, QueryResult, SavedQuery, SavedQuerySummary,
             Unevaluated,
@@ -281,24 +284,32 @@ pub async fn sync_status(manager: tauri::State<'_, SyncManager>) -> ApiResult<Ve
 // Phase Ve: vessels and their default streams
 // ---------------------------------------------------------------------------
 
-/// A vessel with the streams a pitch into it binds.
+/// A vessel with the streams a pitch into it binds, and whether it was sanitised since
+/// its last batch (7b).
 #[derive(Debug, serde::Serialize)]
 pub struct VesselView {
     #[serde(flatten)]
     pub vessel: VesselRow,
     pub default_streams: Vec<i64>,
+    pub hygiene: cleaning::VesselHygiene,
 }
 
+/// Active vessels; with `include_archived`, every one.
 #[tauri::command]
-pub async fn list_vessels(db: tauri::State<'_, Db>) -> ApiResult<Vec<VesselView>> {
+pub async fn list_vessels(
+    db: tauri::State<'_, Db>,
+    include_archived: Option<bool>,
+) -> ApiResult<Vec<VesselView>> {
     Ok(db.read(|conn| {
-        reference::list_vessels(conn, false)?
+        reference::list_vessels(conn, include_archived.unwrap_or(false))?
             .into_iter()
             .map(|vessel| {
                 let default_streams = reference::list_vessel_streams(conn, vessel.id)?;
+                let hygiene = cleaning::vessel_hygiene(conn, vessel.id)?;
                 Ok(VesselView {
                     vessel,
                     default_streams,
+                    hygiene,
                 })
             })
             .collect()
@@ -314,6 +325,171 @@ pub async fn create_vessel(
 ) -> ApiResult<i64> {
     let capacity_l = capacity_l.map(Litres::new).transpose()?;
     Ok(db.write(|conn| reference::create_vessel(conn, name.trim(), kind, capacity_l, None))?)
+}
+
+#[tauri::command]
+pub async fn update_vessel(
+    db: tauri::State<'_, Db>,
+    vessel_id: i64,
+    name: String,
+    kind: VesselKind,
+    capacity_l: Option<f64>,
+    notes: Option<String>,
+) -> ApiResult<()> {
+    let capacity_l = capacity_l.map(Litres::new).transpose()?;
+    let notes = notes.as_deref().map(str::trim).filter(|n| !n.is_empty());
+    Ok(db.write(|conn| reference::update_vessel(conn, vessel_id, &name, kind, capacity_l, notes))?)
+}
+
+#[tauri::command]
+pub async fn archive_vessel(db: tauri::State<'_, Db>, vessel_id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| {
+        reference::get_vessel(conn, vessel_id)?;
+        reference::archive_vessel(conn, vessel_id, Timestamp::now())
+    })?)
+}
+
+#[tauri::command]
+pub async fn restore_vessel(db: tauri::State<'_, Db>, vessel_id: i64) -> ApiResult<bool> {
+    Ok(db.write(|conn| reference::restore_vessel(conn, vessel_id))?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7c: inventory
+// ---------------------------------------------------------------------------
+
+/// On hand per ingredient, over its active lots.
+#[tauri::command]
+pub async fn ingredient_stock(
+    db: tauri::State<'_, Db>,
+) -> ApiResult<Vec<inventory::IngredientStock>> {
+    Ok(db.read(|conn| {
+        let mut stock: Vec<_> = inventory::ingredient_stock(conn)?.into_values().collect();
+        stock.sort_by_key(|s| s.ingredient_id);
+        Ok(stock)
+    })?)
+}
+
+#[tauri::command]
+pub async fn lot_ledger(db: tauri::State<'_, Db>, lot_id: i64) -> ApiResult<inventory::LotLedger> {
+    Ok(db.read(|conn| inventory::lot_ledger(conn, lot_id))?)
+}
+
+/// `at` defaults to now and may not be in the future.
+#[tauri::command]
+pub async fn add_lot_adjustment(
+    db: tauri::State<'_, Db>,
+    lot_id: i64,
+    at: Option<Timestamp>,
+    adjustment: inventory::NewAdjustment,
+) -> ApiResult<inventory::LotLedger> {
+    let at = not_in_future(at, "adjustment")?;
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        inventory::add_adjustment(&tx, lot_id, at, &adjustment)?;
+        let ledger = inventory::lot_ledger(&tx, lot_id)?;
+        tx.commit()?;
+        Ok(ledger)
+    })?)
+}
+
+/// A stocktake: `counted` is what is actually left.
+#[tauri::command]
+pub async fn set_lot_remaining(
+    db: tauri::State<'_, Db>,
+    lot_id: i64,
+    at: Option<Timestamp>,
+    counted: Quantity,
+    reason: Option<String>,
+) -> ApiResult<inventory::LotLedger> {
+    let at = not_in_future(at, "stocktake")?;
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        inventory::set_remaining(&tx, lot_id, at, counted, reason.as_deref())?;
+        let ledger = inventory::lot_ledger(&tx, lot_id)?;
+        tx.commit()?;
+        Ok(ledger)
+    })?)
+}
+
+#[tauri::command]
+pub async fn delete_lot_adjustment(
+    db: tauri::State<'_, Db>,
+    adjustment_id: i64,
+) -> ApiResult<inventory::LotLedger> {
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        let lot_id = inventory::delete_adjustment(&tx, adjustment_id)?;
+        let ledger = inventory::lot_ledger(&tx, lot_id)?;
+        tx.commit()?;
+        Ok(ledger)
+    })?)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7b: the cleaning log
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn vessel_cleanings(
+    db: tauri::State<'_, Db>,
+    vessel_id: i64,
+) -> ApiResult<cleaning::CleaningLog> {
+    Ok(db.read(|conn| cleaning::cleaning_log(conn, vessel_id))?)
+}
+
+/// For the pitch: was the vessel sanitised since the last batch left it.
+#[tauri::command]
+pub async fn vessel_hygiene(
+    db: tauri::State<'_, Db>,
+    vessel_id: i64,
+) -> ApiResult<cleaning::VesselHygiene> {
+    Ok(db.read(|conn| cleaning::vessel_hygiene(conn, vessel_id))?)
+}
+
+/// `at` defaults to now and may not be in the future.
+#[tauri::command]
+pub async fn add_cleaning(
+    db: tauri::State<'_, Db>,
+    vessel_id: i64,
+    at: Option<Timestamp>,
+    entry: cleaning::NewCleaning,
+) -> ApiResult<cleaning::CleaningLog> {
+    let at = not_in_future(at, "cleaning")?;
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        cleaning::add_cleaning(&tx, vessel_id, at, &entry)?;
+        let log = cleaning::cleaning_log(&tx, vessel_id)?;
+        tx.commit()?;
+        Ok(log)
+    })?)
+}
+
+#[tauri::command]
+pub async fn update_cleaning(
+    db: tauri::State<'_, Db>,
+    cleaning_id: i64,
+    at: Option<Timestamp>,
+    entry: cleaning::NewCleaning,
+) -> ApiResult<cleaning::CleaningLog> {
+    let at = not_in_future(at, "cleaning")?;
+    Ok(db.write(|conn| {
+        cleaning::write_cleaning(conn, cleaning_id, |tx| {
+            cleaning::update_cleaning(tx, cleaning_id, at, &entry)
+        })
+    })?)
+}
+
+#[tauri::command]
+pub async fn delete_cleaning(
+    db: tauri::State<'_, Db>,
+    cleaning_id: i64,
+) -> ApiResult<cleaning::CleaningLog> {
+    Ok(db.write(|conn| {
+        cleaning::write_cleaning(conn, cleaning_id, |tx| {
+            cleaning::delete_cleaning(tx, cleaning_id)
+        })
+    })?)
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +662,8 @@ pub struct LotView {
     pub cost_per_canonical_unit: Option<f64>,
     /// Distinct batches that drew from it: the count that links to 5c's lot filter.
     pub batch_count: i64,
+    /// 7c: what is left of it.
+    pub stock: inventory::LotStock,
 }
 
 #[tauri::command]
@@ -496,16 +674,17 @@ pub async fn list_lots(
 ) -> ApiResult<Vec<LotView>> {
     Ok(db.read(|conn| {
         let used = reference::lot_batch_counts(conn, ingredient_id)?;
-        Ok(
-            reference::list_lots_for(conn, ingredient_id, include_archived)?
-                .into_iter()
-                .map(|lot| LotView {
+        reference::list_lots_for(conn, ingredient_id, include_archived)?
+            .into_iter()
+            .map(|lot| {
+                Ok(LotView {
                     cost_per_canonical_unit: lot.cost_per_canonical_unit(),
                     batch_count: used.get(&lot.id).copied().unwrap_or(0),
+                    stock: inventory::lot_stock(conn, lot.id)?,
                     lot,
                 })
-                .collect(),
-        )
+            })
+            .collect()
     })?)
 }
 
@@ -1427,9 +1606,12 @@ pub struct LotChoice {
     pub ingredient: String,
     pub category: Category,
     pub default_unit: Unit,
+    /// 7c: what is left, in the lot's own unit.
+    pub remaining: Quantity,
 }
 
-/// Active lots of active ingredients, by ingredient name.
+/// Active lots of active ingredients, by ingredient name, oldest bought first within
+/// each: the bag to finish before opening the next.
 #[tauri::command]
 pub async fn list_lot_choices(db: tauri::State<'_, Db>) -> ApiResult<Vec<LotChoice>> {
     Ok(db.read(|conn| {
@@ -1437,6 +1619,7 @@ pub async fn list_lot_choices(db: tauri::State<'_, Db>) -> ApiResult<Vec<LotChoi
             .into_iter()
             .map(|i| (i.id, i))
             .collect();
+        let stock = inventory::all_lot_stock(conn)?;
         let mut lots: Vec<LotChoice> = reference::list_all_lots(conn, false)?
             .into_iter()
             .filter_map(|lot| {
@@ -1445,6 +1628,7 @@ pub async fn list_lot_choices(db: tauri::State<'_, Db>) -> ApiResult<Vec<LotChoi
                     ingredient: i.name.clone(),
                     category: i.category,
                     default_unit: i.default_unit,
+                    remaining: stock.get(&lot.id)?.remaining,
                     lot,
                 })
             })
@@ -2413,6 +2597,116 @@ pub async fn undo_reminder(
     })?;
     alerts.wake();
     Ok(reminders)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7a: packaging records
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Serialize)]
+pub struct PackagingView {
+    #[serde(flatten)]
+    pub packaging: packaging::BatchPackaging,
+    pub cost: Option<packaging::PackagingCost>,
+    /// Lots in more than one currency, as in [`ActualsView`].
+    pub cost_error: Option<ApiError>,
+}
+
+impl PackagingView {
+    fn new(
+        packaging: packaging::BatchPackaging,
+        cost: brewcore::Result<packaging::PackagingCost>,
+    ) -> brewcore::Result<Self> {
+        let (cost, cost_error) = match cost {
+            Ok(cost) => (Some(cost), None),
+            Err(e @ Error::CurrencyMismatch { .. }) => (None, Some(e.into())),
+            Err(e) => return Err(e),
+        };
+        Ok(Self {
+            packaging,
+            cost,
+            cost_error,
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn batch_packaging(db: tauri::State<'_, Db>, batch_id: i64) -> ApiResult<PackagingView> {
+    Ok(db.read(|conn| {
+        let p = packaging::batch_packaging(conn, batch_id)?;
+        let cost = packaging::packaging_cost(conn, &p);
+        PackagingView::new(p, cost)
+    })?)
+}
+
+/// `at` defaults to now and may not be in the future.
+#[tauri::command]
+pub async fn add_packaging(
+    db: tauri::State<'_, Db>,
+    batch_id: i64,
+    at: Option<Timestamp>,
+    line: packaging::NewPackaging,
+) -> ApiResult<PackagingView> {
+    let at = not_in_future(at, "packaging")?;
+    Ok(db.write(|conn| {
+        let tx = conn.transaction()?;
+        packaging::add_packaging(&tx, batch_id, at, &line)?;
+        let p = packaging::batch_packaging(&tx, batch_id)?;
+        let cost = packaging::packaging_cost(&tx, &p);
+        tx.commit()?;
+        PackagingView::new(p, cost)
+    })?)
+}
+
+#[tauri::command]
+pub async fn update_packaging(
+    db: tauri::State<'_, Db>,
+    packaging_id: i64,
+    at: Option<Timestamp>,
+    line: packaging::NewPackaging,
+) -> ApiResult<PackagingView> {
+    let at = not_in_future(at, "packaging")?;
+    Ok(db.write(|conn| {
+        let p = packaging::write_packaging(conn, packaging_id, |tx| {
+            packaging::update_packaging(tx, packaging_id, at, &line)
+        })?;
+        let cost = packaging::packaging_cost(conn, &p);
+        PackagingView::new(p, cost)
+    })?)
+}
+
+#[tauri::command]
+pub async fn delete_packaging(
+    db: tauri::State<'_, Db>,
+    packaging_id: i64,
+) -> ApiResult<PackagingView> {
+    Ok(db.write(|conn| {
+        let p = packaging::write_packaging(conn, packaging_id, |tx| {
+            packaging::delete_packaging(tx, packaging_id)
+        })?;
+        let cost = packaging::packaging_cost(conn, &p);
+        PackagingView::new(p, cost)
+    })?)
+}
+
+/// The move to `packaged` and its lines commit together or not at all.
+#[tauri::command]
+pub async fn package_batch(
+    db: tauri::State<'_, Db>,
+    alerts: tauri::State<'_, std::sync::Arc<AlertSync>>,
+    batch_id: i64,
+    at: Option<Timestamp>,
+    lines: Vec<packaging::NewPackaging>,
+) -> ApiResult<bool> {
+    let at = not_in_future(at, "status change")?;
+    let moved = db.write(|conn| {
+        let tx = conn.transaction()?;
+        let moved = packaging::package_batch(&tx, batch_id, at, &lines)?;
+        tx.commit()?;
+        Ok(moved)
+    })?;
+    alerts.wake();
+    Ok(moved)
 }
 
 #[tauri::command]

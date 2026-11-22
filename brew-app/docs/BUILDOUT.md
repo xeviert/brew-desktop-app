@@ -1674,11 +1674,69 @@ repeat. Verified 2026-11-20 against a local `brewd` and a stand-in ntfy; not yet
 against the Pi's broker or a real phone.
 
 ### Phase 7 — Production records
-- [ ] Cleaning / sanitation log, per vessel
-- [ ] Packaging records (volume, format, date, loss)
-- [ ] Cost per batch from ingredient lots
-- [ ] Ingredient inventory with lot consumption
-- [ ] Batch report export (PDF or printable HTML)
+
+**Built (2026-11-22): 7a–7e.** Every write follows Phase 6's shape: a migration, a
+`db::` module with its own tests, thin commands with an IPC test sending `api.ts`'s
+argument names, and the wording pure in `src/lib/*.ts` under vitest.
+
+- [x] Cleaning / sanitation log, per vessel. **Done (7b):** `vessel_cleaning`
+      (`0016_cleaning.sql`), on the vessel, not the batch: clean, sanitise, both, or
+      rinse, with what was used. `cleaning::vessel_hygiene` says whether a vessel was
+      sanitised since its last batch left it (packaged or archived; measured from that
+      batch's pitch). The Vessels pane shows it per vessel with the log under it, and
+      gained the missing edit, archive and restore. **Refined:** the pitch form *warns*
+      ("FV1 has no sanitise logged since SELTZER-007 left it") and never refuses. A
+      missing entry is a gap in the log as often as a dirty vessel, and a pitch that
+      happened has to be recordable
+- [x] Packaging records (volume, format, date, loss). **Done (7a):**
+      `packaging_record` (`0015_packaging.sql`), one row per line, so a keg and a case
+      of bottles off one batch are two. Each owns a `package` event that holds its
+      time, so the timeline stays the one record of when. Deleting the event deletes
+      the line, and the event's kind can't change while it has one
+      (`db.packaging_event_locked`). Volume defaults to size × count. **Loss is
+      derived**, never stored: the batch's volume (or its recipe's target) less what
+      was packaged, negative when more went out than the batch says it held.
+      "Mark packaged" takes the lines with the move in one transaction
+      (`package_batch`). Lines added later go in from the Packaging tab
+- [x] Cost per batch from ingredient lots. Done in 3f (`batch_cost`) and shown in U5.
+      **Extended (7d):** `packaging::packaging_cost` shares the batch's cost over what
+      was packaged, by volume, so loss is priced into the beer that was kept. That
+      gives a cost per packaged litre, a cost per line and a cost per container
+      (rounded once, from the total). Mixed currencies are `cost_error`, as in Actuals
+- [x] Ingredient inventory with lot consumption. **Done (7c):** remaining is
+      **derived, never stored**: the lot less every `batch_ingredient` drawn from it
+      less `lot_adjustment` (`0017_lot_adjustment.sql`). Adjustments are a spill or a
+      bag given away (positive), or a find (negative). This is the same rule
+      `update_lot` relies on, so a corrected addition corrects the stock. A stocktake
+      ("counted, left") writes the difference as an adjustment. **Refined:** drawing
+      more than the books hold is allowed and shows as "over by 0.2 kg". The addition
+      records what went in, and the books are the less trustworthy of the two.
+      Archiving is still how a lot leaves the pickers, nudged by "Used up?" at zero.
+      Lots show remaining and its value, the ingredient list shows what is on hand,
+      and the additions picker names what is left in each bag
+- [x] Batch report export (PDF or printable HTML). **Done (7e):** `#/batch/:id/report`,
+      linked from the batch header. **No new backend aggregate:** the report calls the
+      commands the batch screen already uses, so it can't disagree with the screen it
+      was printed from. `report.ts` puts the record together: header facts, sanitise
+      before the pitch, the curve sampled at 0 h, 12 h then daily (weekly after four
+      weeks), ingredients with lots and cost, events, packaging and loss. The curve is
+      a light uPlot taken as an `<img>` in its `draw` hook, because a canvas doesn't
+      print reliably. "Print / Save as PDF" is `window.print()`, and WebView2's dialog
+      saves the PDF, so there is no PDF library and no new plugin. `@media print` hides
+      the app around the report. "Copy as text" gives the same record as plain lines
+      for pasting into notes
+
+**Done when:** a batch can be packaged into a keg and bottles with its loss and its
+cost per packaged litre shown, its vessel's cleaning logged and warned about at the
+next pitch, its lots counted down and squared by a stocktake, and its record printed
+to PDF. **Status:** driven in the running app (WebView2 over CDP) on a `demo-db` file.
+CIDER-005's pitch warned that FV1 had no sanitise since SELTZER-007 left it, and a
+sanitise logged in Settings → Vessels cleared the warning. SELTZER-007's Packaging tab
+opened on a keg and a case: 18 L of 20 L, 2 L lost, €0.49/L packaged. A line of six
+330 mL cans added from the tab moved this to 19.98 L and €0.44/L, and showed up on the
+timeline. The first sucrose bag read 0.7 kg left after the demo's stocktake, and a
+100 g spill took it to 0.6 kg. The report showed the curve and the daily table,
+printed without the app chrome, and copied as text.
 
 ### Cross-cutting
 - [ ] `brewery.db` backup command (file copy + integrity check)

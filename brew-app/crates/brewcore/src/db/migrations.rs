@@ -61,6 +61,9 @@ pub const MIGRATIONS: &[Migration] = &[
     plain(12, include_str!("../../migrations/0012_alert.sql")),
     plain(13, include_str!("../../migrations/0013_schedule.sql")),
     plain(14, include_str!("../../migrations/0014_reminder.sql")),
+    plain(15, include_str!("../../migrations/0015_packaging.sql")),
+    plain(16, include_str!("../../migrations/0016_cleaning.sql")),
+    plain(17, include_str!("../../migrations/0017_lot_adjustment.sql")),
 ];
 
 /// The schema version this build knows about.
