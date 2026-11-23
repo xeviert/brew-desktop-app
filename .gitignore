@@ -111,3 +111,4 @@ docs/PIHOLE.md
 # Demo recordings stay local (cargo xtask demo + docs/demo/record.mjs)
 docs/demo/*.mp4
 docs/demo/*.gif
+docs/demo/vo/

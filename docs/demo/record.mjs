@@ -1,10 +1,17 @@
 // Drives the running brew-app over WebView2's CDP port while ffmpeg records the window.
 // usage: node record.mjs <out.mp4> <scenes.json>
-import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { readFileSync, unlinkSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 const [out, scenesPath] = process.argv.slice(2);
 const scenes = JSON.parse(readFileSync(scenesPath, "utf8"));
+const voDir = dirname(resolve(scenesPath));
+const duration = (file) => Number(execFileSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file]).toString());
+// A scene with `vo` starts a narration clip; the next one waits until it has finished.
+const narration = scenes.filter((s) => s.vo).map((s) => ({ file: resolve(voDir, s.vo), ms: duration(resolve(voDir, s.vo)) * 1000 }));
+const VO_GAP = 450;
+const silent = narration.length ? out.replace(/\.mp4$/, ".silent.mp4") : out;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const targets = await (await fetch("http://127.0.0.1:9222/json")).json();
@@ -86,7 +93,7 @@ async function dblclick() {
 const ffmpeg = spawn("ffmpeg", [
   "-y", "-f", "image2pipe", "-framerate", "30", "-c:v", "mjpeg", "-i", "-",
   "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-  "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out,
+  "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", silent,
 ], { stdio: ["pipe", "ignore", "inherit"] });
 let latest = null;
 ws.addEventListener("message", (e) => {
@@ -152,14 +159,26 @@ const clock = setInterval(() => {
 }, 10);
 await sleep(500);
 
+const placed = [];
+let voEnd = 0;
 for (const s of scenes) {
-  if (s.hash !== undefined) {
-    await evaluate(`location.hash = ${JSON.stringify(s.hash)}`);
-    await sleep(900);
-    await evaluate(helpers);
+  if (s.vo) {
+    const wait = voEnd - (Date.now() - t0);
+    if (wait > 0) await sleep(wait);
+  }
+  // Voice, card and caption land with the screen change, not after the page settles.
+  if (s.hash !== undefined) await evaluate(`location.hash = ${JSON.stringify(s.hash)}`);
+  if (s.vo) {
+    const clip = narration[placed.length], at = Date.now() - t0;
+    placed.push({ ...clip, at });
+    voEnd = at + clip.ms + VO_GAP;
   }
   if (s.card !== undefined) await evaluate(`window.__card(${JSON.stringify(s.card?.[0] ?? null)}, ${JSON.stringify(s.card?.[1] ?? "")})`);
   if (s.caption !== undefined) await evaluate(`window.__caption(${JSON.stringify(s.caption)})`);
+  if (s.hash !== undefined) {
+    await sleep(900);
+    await evaluate(helpers);
+  }
   if (s.js) await evaluate(s.js);
   if (s.drag) await drag(...s.drag);
   if (s.dblclick) await dblclick();
@@ -168,9 +187,24 @@ for (const s of scenes) {
   await sleep(s.hold ?? 3000);
 }
 
+{
+  const wait = voEnd - (Date.now() - t0);
+  if (wait > 0) await sleep(wait);
+}
 clearInterval(clock);
 await send("Page.stopScreencast");
 ffmpeg.stdin.end();
 await new Promise((r) => ffmpeg.on("exit", r));
 ws.close();
+
+if (placed.length) {
+  const inputs = placed.flatMap((p) => ["-i", p.file]);
+  const delays = placed.map((p, i) => `[${i + 1}:a]aresample=48000,adelay=${p.at}:all=1[v${i}]`).join(";");
+  const mix = placed.map((_, i) => `[v${i}]`).join("") + `amix=inputs=${placed.length}:normalize=0,apad[a]`;
+  execFileSync("ffmpeg", [
+    "-v", "error", "-y", "-i", silent, ...inputs, "-filter_complex", `${delays};${mix}`,
+    "-map", "0:v", "-map", "[a]", "-shortest", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out,
+  ], { stdio: "inherit" });
+  unlinkSync(silent);
+}
 console.log("wrote", out);
