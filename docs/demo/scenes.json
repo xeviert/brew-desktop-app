@@ -1,0 +1,18 @@
+[
+  {"hash": "#/", "card": ["Brew", "Fermentation tracking for homebrewers"], "hold": 2800},
+  {"card": null, "hold": 900},
+  {"caption": "Every active batch at a glance", "hold": 3200},
+  {"caption": "Sensor health: silent devices and low batteries", "scroll": 1, "scrollMs": 2000, "hold": 1800},
+  {"hash": "#/batch/1", "caption": "60 days of readings from ESP32 and iSpindel", "hold": 2600},
+  {"caption": "Drag to zoom into any stretch", "drag": [0.3, 0.55], "hold": 2200},
+  {"drag": [0.2, 0.6], "hold": 2000},
+  {"caption": "Double-click to reset", "dblclick": true, "hold": 2000},
+  {"caption": "Timeline: pitch, additions, hydrometer and pH", "scroll": 0.55, "scrollMs": 2600, "hold": 2200},
+  {"hash": "#/compare/1,2,3,4", "caption": "Overlay batches from their pitch", "hold": 4200},
+  {"hash": "#/recipe/1", "caption": "Versioned recipes", "hold": 2200},
+  {"scroll": 1, "scrollMs": 1800, "hold": 1000},
+  {"hash": "#/calc", "caption": "Sugar, nutrient and pitch-rate calculators", "hold": 3000},
+  {"hash": "#/batch/1/report", "caption": "Printable batch report", "hold": 1800},
+  {"scroll": 1, "scrollMs": 2600, "hold": 1200},
+  {"hash": "#/", "caption": "", "card": ["Brew", "Tauri · Svelte · Rust"], "hold": 3000}
+]

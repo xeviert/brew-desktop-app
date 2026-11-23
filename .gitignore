@@ -107,3 +107,7 @@ __pycache__/
 # ─── Personal: home network and location details ────────────────────────────
 docs/HARDWARE.md
 docs/PIHOLE.md
+
+# Demo recordings stay local (cargo xtask demo + docs/demo/record.mjs)
+docs/demo/*.mp4
+docs/demo/*.gif

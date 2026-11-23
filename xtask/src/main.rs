@@ -42,6 +42,7 @@ fn main() {
         Some("gen-fixture") => gen_fixture(args.collect()),
         Some("build-pi") => build_pi(),
         Some("demo-db") => demo_db(args.next().map(PathBuf::from)),
+        Some("demo") => demo(),
         Some(other) => {
             eprintln!("unknown task: {other}");
             usage();
@@ -57,7 +58,8 @@ fn usage() {
          db-status [path]   open a database and print its status\n  \
          gen-fixture [...]  write Fermentrack log fixtures\n  \
          build-pi           cross-compile brewd for the Pi (needs `cross` and Docker)\n  \
-         demo-db [path]     write a 60-day ferment to chart (default target/demo.db)\n\n\
+         demo-db [path]     write a 60-day ferment to chart (default target/demo.db)\n  \
+         demo               run the app on target/demo.db with a blank config\n\n\
          gen-fixture options:\n  \
          --out DIR          default target/fixtures\n  \
          --scenario NAME    nominal | gravity | ugly | v1 | all (default all)\n  \
@@ -654,6 +656,30 @@ fn demo_db(path: Option<PathBuf>) {
 /// The Pi Zero 2 W has 512 MB of RAM and cannot link `brewd`, so it is never built
 /// on the device. `cross` rather than a bare `--target`: rusqlite's bundled SQLite
 /// reaches `brewd` through `brewcore`, and that is C needing an aarch64 toolchain.
+/// The app as it should look in screenshots and recordings: the demo database, and a
+/// config path that doesn't exist, so nothing real (Fermentrack URLs, alert targets)
+/// is shown or polled.
+fn demo() {
+    let root = std::env::current_dir().expect("cwd");
+    let db = root.join("target/demo.db");
+    if !db.exists() {
+        demo_db(Some(db.clone()));
+    }
+    let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
+    let status = std::process::Command::new(npm)
+        .args(["run", "tauri", "dev"])
+        .env("BREWAPP_DB", &db)
+        .env("BREWAPP_CONFIG", root.join("target/demo-config.toml"))
+        .status()
+        .unwrap_or_else(|err| {
+            eprintln!("could not run `{npm}` ({err})");
+            std::process::exit(1);
+        });
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+}
+
 fn build_pi() {
     const TARGET: &str = "aarch64-unknown-linux-gnu";
     let status = std::process::Command::new("cross")

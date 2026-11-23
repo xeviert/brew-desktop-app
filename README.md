@@ -116,6 +116,10 @@ cargo test --workspace
 
 ```sh
 cargo xtask demo-db [path]       # seed a database with demo batches, recipes and curves
+cargo xtask demo                 # run the app on target/demo.db with a blank config
+node docs/demo/record.mjs out.mp4 docs/demo/scenes.json
+                                 # record the demo video; needs the app started with
+                                 #   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222
 cargo xtask gen-fixture …        # generate Fermentrack _full.csv or brewd journal logs
                                  #   --format fermentrack|journal --scenario … --rows … --seed …
 cargo xtask db-status [path]     # print schema version and table counts
