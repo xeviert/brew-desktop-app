@@ -186,7 +186,7 @@
   }
 
   .muted {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   ul {
@@ -214,16 +214,16 @@
   }
 
   li.overdue {
-    border-left-color: #e0a35f;
+    border-left-color: var(--warn);
     background: #e0a35f14;
   }
 
   .day {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   .overdue .when {
-    color: #e0a35f;
+    color: var(--warn);
   }
 
   .actions,
@@ -241,7 +241,7 @@
     gap: 0.4rem 0.5rem;
     margin: 0.5rem 0;
     padding: 0.6rem 0.75rem;
-    border: 1px solid #333842;
+    border: 1px solid var(--border-strong);
   }
 
   #reminder-day {
@@ -250,36 +250,36 @@
 
   input {
     padding: 0.3rem 0.5rem;
-    background: #1e2127;
+    background: var(--surface-2);
     color: inherit;
-    border: 1px solid #4a5160;
-    border-radius: 3px;
+    border: 1px solid var(--border-hover);
+    border-radius: var(--radius-sm);
     font: inherit;
   }
 
   button {
     padding: 0.2rem 0.8rem;
-    background: #2d5d8a;
+    background: var(--accent);
     color: #fff;
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     font: inherit;
     cursor: pointer;
   }
 
   button:disabled {
-    background: #2a2e36;
-    color: #6f757d;
+    background: var(--border);
+    color: var(--text-faint);
   }
 
   button.link {
     padding: 0;
     background: none;
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   button.link:disabled {
-    color: #4a5160;
+    color: var(--border-hover);
     background: none;
   }
 </style>

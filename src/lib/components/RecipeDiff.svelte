@@ -87,11 +87,11 @@
 <style>
   .crumbs {
     margin: 0;
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .crumbs a {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   table {
@@ -107,7 +107,7 @@
 
   th,
   .stage {
-    color: #9aa0a6;
+    color: var(--text-muted);
     font-weight: normal;
   }
 
@@ -116,14 +116,14 @@
   }
 
   .added .change {
-    color: #7fb069;
+    color: var(--ok);
   }
 
   .removed .change {
-    color: #e06c5f;
+    color: var(--danger);
   }
 
   .changed .change {
-    color: #e0a35f;
+    color: var(--warn);
   }
 </style>

@@ -171,18 +171,18 @@
   }
 
   small {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .warn {
-    color: #e0a35f;
+    color: var(--warn);
   }
 
   .pack-line {
     padding: 0.6rem 0.75rem;
     margin-bottom: 0.5rem;
-    background: #1e2127;
-    border-left: 3px solid #2d5d8a;
+    background: var(--surface-2);
+    border-left: 3px solid var(--accent);
   }
 
   .pack-line > button {

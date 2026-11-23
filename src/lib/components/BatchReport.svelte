@@ -220,15 +220,15 @@
 
   .bar a,
   .bar .link {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   .bar button {
     padding: 0.4rem 1rem;
-    background: #2d5d8a;
+    background: var(--accent);
     color: #fff;
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     font: inherit;
     cursor: pointer;
   }
@@ -250,7 +250,7 @@
     padding: 2rem 2.5rem;
     background: #fff;
     color: #111;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     font-size: 13px;
     line-height: 1.45;
   }

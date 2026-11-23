@@ -308,12 +308,12 @@
   }
 
   .where {
-    color: #e6e6e6;
+    color: var(--text);
     font-weight: 600;
   }
 
   .muted {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   ol {
@@ -338,11 +338,11 @@
     top: 1.75rem;
     bottom: 0;
     width: 2px;
-    background: #333842;
+    background: var(--border-strong);
   }
 
   ol > li.done:not(:last-child)::before {
-    background: #7fb069;
+    background: var(--ok);
   }
 
   .marker {
@@ -351,15 +351,15 @@
     width: 1.75rem;
     height: 1.75rem;
     border-radius: 50%;
-    border: 2px solid #4a5160;
-    color: #9aa0a6;
+    border: 2px solid var(--border-hover);
+    color: var(--text-muted);
     font-size: 0.85em;
     font-weight: 600;
   }
 
   .done .marker {
-    background: #7fb069;
-    border-color: #7fb069;
+    background: var(--ok);
+    border-color: var(--ok);
     color: #14161a;
   }
 
@@ -411,19 +411,19 @@
     width: 0.6rem;
     height: 0.6rem;
     border-radius: 50%;
-    background: #4a5160;
+    background: var(--border-hover);
   }
 
   .met .dot {
-    background: #7fb069;
+    background: var(--ok);
   }
 
   .unmet .dot {
-    background: #e0a35f;
+    background: var(--warn);
   }
 
   .label {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   .sr {
@@ -438,7 +438,7 @@
     margin: 0.4rem 0;
     padding: 0.35rem 0.6rem;
     background: #7fb06926;
-    border-left: 3px solid #7fb069;
+    border-left: 3px solid var(--ok);
     color: #b6e09c;
     font-weight: 600;
   }
@@ -468,7 +468,7 @@
     gap: 0.4rem 0.5rem;
     margin: 0.5rem 0;
     padding: 0.6rem 0.75rem;
-    border: 1px solid #333842;
+    border: 1px solid var(--border-strong);
   }
 
   .pair {
@@ -483,19 +483,19 @@
 
   input {
     padding: 0.3rem 0.5rem;
-    background: #1e2127;
+    background: var(--surface-2);
     color: inherit;
-    border: 1px solid #4a5160;
-    border-radius: 3px;
+    border: 1px solid var(--border-hover);
+    border-radius: var(--radius-sm);
     font: inherit;
   }
 
   button {
     padding: 0.35rem 0.9rem;
-    background: #2d5d8a;
+    background: var(--accent);
     color: #fff;
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     font: inherit;
     cursor: pointer;
   }
@@ -505,18 +505,18 @@
   }
 
   button:disabled {
-    background: #2a2e36;
-    color: #6f757d;
+    background: var(--border);
+    color: var(--text-faint);
   }
 
   button.link {
     padding: 0;
     background: none;
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   button.link:disabled {
-    color: #4a5160;
+    color: var(--border-hover);
     background: none;
   }
 </style>

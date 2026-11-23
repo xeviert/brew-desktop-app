@@ -90,13 +90,13 @@
   th,
   td {
     padding: 0.25rem 0.5rem;
-    border-bottom: 1px solid #333842;
+    border-bottom: 1px solid var(--border-strong);
     text-align: left;
     white-space: nowrap;
   }
 
   th {
-    color: #9aa0a6;
+    color: var(--text-muted);
     font-weight: normal;
   }
 
@@ -106,19 +106,19 @@
   }
 
   tr.thin td {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   td.flag {
-    color: #e0a35f;
+    color: var(--warn);
     cursor: help;
   }
 
   .hint {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .hint a {
-    color: #e6e6e6;
+    color: var(--text);
   }
 </style>

@@ -146,11 +146,11 @@
 
 <style>
   .empty {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .empty a {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   /* Narrow: one column, the schedule and ingredients tabs first, then the card, so "Add reading"
@@ -189,7 +189,7 @@
   .tabs {
     display: flex;
     gap: 0.25rem;
-    border-bottom: 1px solid #333842;
+    border-bottom: 1px solid var(--border-strong);
     margin-bottom: 1rem;
   }
 
@@ -199,18 +199,18 @@
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
     padding: 0.5rem 0.9rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
     font: inherit;
     font-weight: 600;
     cursor: pointer;
   }
 
   .tabs button:hover {
-    color: #e6e6e6;
+    color: var(--text);
   }
 
   .tabs button[aria-selected="true"] {
-    color: #e6e6e6;
+    color: var(--text);
     border-bottom-color: #4fb3ff;
   }
 

@@ -154,7 +154,13 @@
     }
   }
 
-  const AXIS = { stroke: "#9aa0a6", grid: { stroke: "#2a2e36" }, ticks: { stroke: "#333842" } };
+  const AXIS = {
+    stroke: "#9aa1ab",
+    grid: { stroke: "#262a33" },
+    ticks: { stroke: "#313642" },
+    font: "12px 'Inter Variable', system-ui, sans-serif",
+    labelFont: "12px 'Inter Variable', system-ui, sans-serif",
+  };
 
   function axesOpts(p: Plot, m: XMode, unit: string): uPlot.Axis[] {
     const axes: uPlot.Axis[] = [
@@ -201,7 +207,7 @@
     const { ctx, bbox } = u;
     const px = uPlot.pxRatio;
     ctx.save();
-    ctx.font = `${11 * px}px system-ui, sans-serif`;
+    ctx.font = `${11 * px}px "Inter Variable", system-ui, sans-serif`;
     ctx.lineWidth = px;
     for (const e of events) {
       const x = Math.round(u.valToPos(toX(e.ts, m, pitchedAt), "x", true));
@@ -430,15 +436,15 @@
   }
 
   .toggle button {
-    background: #1e2127;
-    color: #9aa0a6;
-    border: 1px solid #333842;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    border: 1px solid var(--border-strong);
     padding: 0.25rem 0.6rem;
   }
 
   .toggle button.on {
-    background: #2d5d8a;
-    color: #e6e6e6;
+    background: var(--accent);
+    color: var(--text);
   }
 
   .toggle button:disabled {
@@ -448,7 +454,7 @@
   .hint,
   .key,
   .empty {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .key i {
@@ -477,7 +483,7 @@
     transform: translateX(-50%);
     max-width: 18rem;
     padding: 0.4rem 0.6rem;
-    background: #1e2127;
+    background: var(--surface-2);
     border: 1px solid #4a4f57;
     pointer-events: none;
     z-index: 10;
@@ -485,7 +491,7 @@
 
   .tip span {
     margin-left: 0.5rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   .tip p {
@@ -498,6 +504,6 @@
   }
 
   .wrap :global(.u-legend) {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 </style>

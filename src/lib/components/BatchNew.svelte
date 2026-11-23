@@ -217,11 +217,11 @@
 
   .crumbs {
     margin: 0;
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .crumbs a,
   .actions a {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 </style>

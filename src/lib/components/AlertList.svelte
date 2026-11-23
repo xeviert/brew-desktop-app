@@ -83,17 +83,17 @@
 
   li {
     padding: 0.5rem 0.75rem;
-    background: #1e2127;
-    border: 1px solid #333842;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
     border-left: 3px solid #4a7aa8;
   }
 
   li.urgent {
-    border-left-color: #e0a35f;
+    border-left-color: var(--warn);
   }
 
   li.closed {
-    border-left-color: #333842;
+    border-left-color: var(--border-strong);
     opacity: 0.75;
   }
 
@@ -107,7 +107,7 @@
 
   .head a,
   p[role="alert"] a {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   .head .muted {
@@ -119,7 +119,7 @@
   }
 
   .muted {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .actions {
@@ -130,20 +130,20 @@
 
   button {
     padding: 0.2rem 0.6rem;
-    background: #2a2e36;
-    color: #e6e6e6;
-    border: 1px solid #333842;
-    border-radius: 3px;
+    background: var(--border);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
     font: inherit;
     cursor: pointer;
   }
 
   button:disabled {
-    color: #6f757d;
+    color: var(--text-faint);
     cursor: default;
   }
 
   p[role="alert"] {
-    color: #e06c5f;
+    color: var(--danger);
   }
 </style>

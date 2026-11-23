@@ -200,7 +200,7 @@
 
   .bar a,
   p.muted a {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   .cards {
@@ -212,15 +212,17 @@
 
   .card {
     display: block;
-    background: #1e2127;
-    border: 1px solid #333842;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
     padding: 0.75rem 1rem;
     color: inherit;
+    transition: border-color 0.15s;
     text-decoration: none;
   }
 
   .card:hover {
-    border-color: #4a5160;
+    border-color: var(--border-hover);
   }
 
   .card.attention {
@@ -230,8 +232,8 @@
   .pill {
     padding: 0.05rem 0.45rem;
     border-radius: 999px;
-    background: #2a2e36;
-    color: #9aa0a6;
+    background: var(--border);
+    color: var(--text-muted);
     font-size: 0.8em;
     font-weight: normal;
     vertical-align: 0.1em;
@@ -242,8 +244,8 @@
     width: 4rem;
     height: 0.4rem;
     margin-right: 0.4rem;
-    background: #2a2e36;
-    border-radius: 2px;
+    background: var(--border);
+    border-radius: var(--radius-sm);
     vertical-align: 0.1em;
     overflow: hidden;
   }
@@ -251,11 +253,11 @@
   .bar-fill {
     display: block;
     height: 100%;
-    background: #2d5d8a;
+    background: var(--accent);
   }
 
   .warn {
-    color: #e0a35f;
+    color: var(--warn);
   }
 
   h3 {
@@ -279,7 +281,7 @@
   }
 
   dt {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   dd {
@@ -296,7 +298,7 @@
 
   .raised {
     margin: 0.5rem 0 0;
-    color: #e0a35f;
+    color: var(--warn);
     font-size: 0.9em;
   }
 
@@ -308,12 +310,12 @@
   }
 
   .silent {
-    color: #e0a35f;
+    color: var(--warn);
   }
 
   .unreachable,
   .sync_error,
   .muted {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 </style>

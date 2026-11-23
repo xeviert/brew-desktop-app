@@ -163,7 +163,7 @@
   }
 
   .back {
-    color: #9aa0a6;
+    color: var(--text-muted);
     text-decoration: none;
   }
 
@@ -185,7 +185,7 @@
   .status.archived,
   .detail,
   small {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .detail {
@@ -194,7 +194,7 @@
 
   .detail a,
   .row-actions a {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   .row-actions {

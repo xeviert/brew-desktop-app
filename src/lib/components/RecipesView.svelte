@@ -149,7 +149,7 @@
 
   h3 {
     margin: 1.25rem 0 0.25rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
     font-weight: normal;
     font-size: 0.95rem;
     text-transform: capitalize;
@@ -161,7 +161,7 @@
     align-items: baseline;
     gap: 1rem;
     padding: 0.3rem 0;
-    border-bottom: 1px solid #2a2e36;
+    border-bottom: 1px solid var(--border);
   }
 
   .row a {
@@ -170,6 +170,6 @@
 
   .row.archived a,
   .detail {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 </style>

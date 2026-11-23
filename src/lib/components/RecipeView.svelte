@@ -502,7 +502,7 @@
   .crumbs a,
   .badge a,
   .start {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   header {
@@ -512,31 +512,31 @@
   }
 
   h2.archived {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .detail,
   .hint,
   td small {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .tabs {
     display: flex;
     gap: 1rem;
     margin: 0.75rem 0 1rem;
-    border-bottom: 1px solid #2a2e36;
+    border-bottom: 1px solid var(--border);
   }
 
   .tabs a {
     padding-bottom: 0.3rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
     text-decoration: none;
   }
 
   .tabs a.active {
     color: inherit;
-    border-bottom: 2px solid #2d5d8a;
+    border-bottom: 2px solid var(--accent);
   }
 
   .badge {
@@ -545,8 +545,8 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 0.5rem 0.75rem;
-    background: #1e2127;
-    border-left: 3px solid #e0a35f;
+    background: var(--surface-2);
+    border-left: 3px solid var(--warn);
   }
 
   h3 {
@@ -571,10 +571,10 @@
   }
 
   .lines thead th {
-    color: #6f757d;
+    color: var(--text-faint);
     font-size: 0.85em;
     font-weight: normal;
-    border-bottom: 1px solid #2a2e36;
+    border-bottom: 1px solid var(--border);
   }
 
   .lines .num {
@@ -599,7 +599,7 @@
   }
 
   .lines tr.editing td {
-    background: #1e2127;
+    background: var(--surface-2);
   }
 
   .lines td .notes {
@@ -609,7 +609,7 @@
 
   tr.stage th {
     padding-top: 0.9rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
     font-weight: normal;
     text-transform: capitalize;
   }

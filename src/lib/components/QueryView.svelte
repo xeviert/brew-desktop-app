@@ -507,13 +507,13 @@
   }
 
   .saved a {
-    color: #9aa0a6;
+    color: var(--text-muted);
     text-decoration: none;
   }
 
   .saved a.active {
-    color: #e6e6e6;
-    border-bottom: 2px solid #2d5d8a;
+    color: var(--text);
+    border-bottom: 2px solid var(--accent);
   }
 
   .toolbar {
@@ -541,35 +541,35 @@
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
-    color: #9aa0a6;
+    color: var(--text-muted);
     padding: 0.2rem 0;
     font: inherit;
     cursor: pointer;
   }
 
   .modes button.active {
-    color: #e6e6e6;
-    border-bottom-color: #2d5d8a;
+    color: var(--text);
+    border-bottom-color: var(--accent);
   }
 
   .save {
     margin-top: 1.5rem;
     padding-top: 0.75rem;
-    border-top: 1px solid #2a2e36;
+    border-top: 1px solid var(--border);
   }
 
   button.link {
     background: none;
     border: none;
     padding: 0;
-    color: #7ba7d4;
+    color: var(--accent-text);
     font: inherit;
     cursor: pointer;
   }
 
   .pick {
     flex-basis: 100%;
-    border: 1px solid #333842;
+    border: 1px solid var(--border-strong);
     padding: 0.35rem 0.75rem;
   }
 
@@ -604,7 +604,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem 0.75rem;
-    border: 1px solid #333842;
+    border: 1px solid var(--border-strong);
     margin: 0;
   }
 
@@ -620,7 +620,7 @@
 
   .hint,
   .empty {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   table {
@@ -632,7 +632,7 @@
   th,
   td {
     padding: 0.25rem 0.5rem;
-    border-bottom: 1px solid #333842;
+    border-bottom: 1px solid var(--border-strong);
     text-align: left;
     white-space: nowrap;
   }
@@ -643,18 +643,18 @@
   }
 
   td.missing {
-    color: #6f757d;
+    color: var(--text-faint);
     cursor: help;
   }
 
   tr.archived td {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   .sort {
     background: none;
     border: none;
-    color: #9aa0a6;
+    color: var(--text-muted);
     padding: 0;
     font: inherit;
     cursor: pointer;
@@ -662,7 +662,7 @@
 
   td a,
   .unevaluated a {
-    color: #e6e6e6;
+    color: var(--text);
   }
 
   .unevaluated {

@@ -85,25 +85,25 @@
 
   svg path {
     fill: none;
-    stroke: #7ba7d4;
+    stroke: var(--accent-text);
     stroke-width: 1.25;
   }
 
   svg circle {
-    fill: #7ba7d4;
+    fill: var(--accent-text);
   }
 
   .muted {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .warn,
   .silent {
-    color: #e0a35f;
+    color: var(--warn);
   }
 
   .unreachable,
   .sync_error {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 </style>

@@ -112,8 +112,8 @@
   .entry {
     padding: 0.5rem 0.75rem;
     margin-bottom: 0.75rem;
-    background: #1e2127;
-    border-left: 3px solid #2d5d8a;
+    background: var(--surface-2);
+    border-left: 3px solid var(--accent);
   }
 
   h4 {
@@ -132,6 +132,6 @@
   }
 
   .unit {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 </style>

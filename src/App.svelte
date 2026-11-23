@@ -179,23 +179,44 @@
 
 <style>
   header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 1.5rem;
+    margin: 0 -1.5rem 1.25rem;
+    padding: 0.75rem 1.5rem;
+    background: color-mix(in srgb, var(--bg) 80%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 1.25rem;
   }
 
   nav {
     display: flex;
-    gap: 1rem;
+    gap: 0.25rem;
   }
 
   nav a {
-    color: #9aa0a6;
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
     text-decoration: none;
+    transition: background-color 0.15s, color 0.15s;
+  }
+
+  nav a:hover {
+    background: var(--surface);
+    color: var(--text);
   }
 
   nav a.active {
-    color: inherit;
-    border-bottom: 2px solid #2d5d8a;
+    background: var(--surface-2);
+    color: var(--text);
   }
 </style>

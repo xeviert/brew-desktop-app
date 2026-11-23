@@ -182,7 +182,7 @@
 
   .muted,
   small {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   details {
@@ -191,18 +191,18 @@
 
   summary {
     cursor: pointer;
-    color: #9aa0a6;
+    color: var(--text-muted);
     margin-bottom: 0.5rem;
   }
 
   fieldset {
     margin: 0.75rem 0 0;
     padding: 0.5rem 0.75rem 0.75rem;
-    border: 1px solid #333842;
+    border: 1px solid var(--border-strong);
   }
 
   legend {
-    color: #9aa0a6;
+    color: var(--text-muted);
     padding: 0 0.25rem;
   }
 
@@ -229,10 +229,10 @@
 
   input[type="number"] {
     padding: 0.3rem 0.5rem;
-    background: #1e2127;
+    background: var(--surface-2);
     color: inherit;
-    border: 1px solid #4a5160;
-    border-radius: 3px;
+    border: 1px solid var(--border-hover);
+    border-radius: var(--radius-sm);
     font: inherit;
   }
 
@@ -245,24 +245,24 @@
 
   button {
     padding: 0.35rem 0.9rem;
-    background: #2d5d8a;
+    background: var(--accent);
     color: #fff;
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     font: inherit;
     cursor: pointer;
   }
 
   button:disabled {
-    background: #2a2e36;
-    color: #6f757d;
+    background: var(--border);
+    color: var(--text-faint);
   }
 
   [role="status"] {
-    color: #7fb069;
+    color: var(--ok);
   }
 
   p[role="alert"] {
-    color: #e06c5f;
+    color: var(--danger);
   }
 </style>

@@ -110,11 +110,11 @@
 
 <style>
   .from {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   .from a {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   .must {

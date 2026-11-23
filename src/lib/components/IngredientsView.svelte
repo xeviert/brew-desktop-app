@@ -254,13 +254,13 @@
   }
 
   .tabs a {
-    color: #9aa0a6;
+    color: var(--text-muted);
     text-decoration: none;
   }
 
   .tabs a.active {
     color: inherit;
-    border-bottom: 2px solid #2d5d8a;
+    border-bottom: 2px solid var(--accent);
   }
 
   .tabs .check {
@@ -271,7 +271,7 @@
 
   h3 {
     margin: 1.25rem 0 0.25rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
     font-weight: normal;
     font-size: 0.95rem;
   }
@@ -279,12 +279,12 @@
   .intro {
     max-width: 44rem;
     margin: 0 0 0.5rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
     line-height: 1.45;
   }
 
   .intro strong {
-    color: #e6e6e6;
+    color: var(--text);
     font-weight: normal;
   }
 
@@ -294,18 +294,18 @@
     align-items: baseline;
     gap: 1rem;
     padding: 0.25rem 0;
-    border-bottom: 1px solid #2a2e36;
+    border-bottom: 1px solid var(--border);
   }
 
   .row.head {
     margin-top: 1rem;
-    color: #6f757d;
+    color: var(--text-faint);
     font-size: 0.85rem;
   }
 
   .row.archived,
   .row.archived .detail {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .row.expanded {
@@ -319,12 +319,12 @@
   }
 
   .detail {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   .ref button.stock {
     text-align: left;
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   .ref button.stock.none {
@@ -333,7 +333,7 @@
 
   .ref button.stock small {
     display: block;
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .editor {

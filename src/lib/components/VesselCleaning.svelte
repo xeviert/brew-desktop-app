@@ -187,7 +187,7 @@
   .when,
   small,
   .empty {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   small {
@@ -205,8 +205,8 @@
     grid-column: 1 / -1;
     padding: 0.6rem 0.75rem;
     margin: 0.4rem 0;
-    background: #1e2127;
-    border-left: 3px solid #2d5d8a;
+    background: var(--surface-2);
+    border-left: 3px solid var(--accent);
   }
 
   .entry label {
@@ -221,10 +221,10 @@
   button.link {
     padding: 0;
     background: none;
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   button.link:disabled {
-    color: #4a5160;
+    color: var(--border-hover);
   }
 </style>

@@ -189,12 +189,12 @@
   }
 
   th {
-    color: #6f757d;
+    color: var(--text-faint);
     font-weight: normal;
   }
 
   tr.archived td {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .row-actions {

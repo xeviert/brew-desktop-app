@@ -135,6 +135,6 @@
 
   .hint {
     margin: 0 0 0.75rem 11rem;
-    color: #6f757d;
+    color: var(--text-faint);
   }
 </style>

@@ -120,7 +120,13 @@
     void refresh();
   }
 
-  const AXIS = { stroke: "#9aa0a6", grid: { stroke: "#2a2e36" }, ticks: { stroke: "#333842" } };
+  const AXIS = {
+    stroke: "#9aa1ab",
+    grid: { stroke: "#262a33" },
+    ticks: { stroke: "#313642" },
+    font: "12px 'Inter Variable', system-ui, sans-serif",
+    labelFont: "12px 'Inter Variable', system-ui, sans-serif",
+  };
 
   function yAxis(panel: Panel, unit: string): uPlot.Axis {
     switch (panel) {
@@ -154,7 +160,7 @@
                   label: `${d.code} manual`,
                   stroke: d.color,
                   paths: () => null,
-                  points: { show: true, size: 8, fill: d.color, stroke: "#16181d", width: 2 },
+                  points: { show: true, size: 8, fill: d.color, stroke: "#0f1115", width: 2 },
                 }
               : { label: d.code, stroke: d.color, width: 2, points: { show: false } },
           ),
@@ -372,12 +378,13 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem 1rem;
-    border: 1px solid #333842;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
     margin: 0 0 0.75rem;
   }
 
   .picker label.off {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .picker legend {
@@ -388,12 +395,12 @@
 
   .picker .archived {
     font-size: 0.9rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   .intro {
     max-width: 44rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
     line-height: 1.45;
   }
 
@@ -409,20 +416,20 @@
   }
 
   .toggle button {
-    background: #1e2127;
-    color: #9aa0a6;
-    border: 1px solid #333842;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    border: 1px solid var(--border-strong);
     padding: 0.25rem 0.6rem;
   }
 
   .toggle button.on {
-    background: #2d5d8a;
-    color: #e6e6e6;
+    background: var(--accent);
+    color: var(--text);
   }
 
   .hint,
   .empty {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .key {
@@ -439,12 +446,12 @@
     width: 0.8rem;
     height: 0.8rem;
     margin-right: 0.3rem;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     vertical-align: -0.1rem;
   }
 
   .key a {
-    color: #e6e6e6;
+    color: var(--text);
   }
 
   .panels :global(.u-select) {
@@ -452,6 +459,6 @@
   }
 
   .panels :global(.u-legend) {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 </style>

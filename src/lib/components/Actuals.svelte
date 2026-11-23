@@ -390,18 +390,18 @@
   td {
     text-align: left;
     padding: 0.25rem 0.5rem 0.25rem 0;
-    border-bottom: 1px solid #2a2e36;
+    border-bottom: 1px solid var(--border);
     vertical-align: baseline;
   }
 
   thead th {
-    color: #9aa0a6;
+    color: var(--text-muted);
     font-weight: normal;
   }
 
   tr.stage th {
     padding-top: 0.75rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
     font-weight: normal;
     text-transform: capitalize;
   }
@@ -417,7 +417,7 @@
   small,
   .muted,
   .empty {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   td small {
@@ -430,14 +430,14 @@
 
   .flag,
   .off {
-    color: #e0a35f;
+    color: var(--warn);
   }
 
   .entry {
     padding: 0.75rem;
     margin: 0.25rem 0 0.75rem;
-    background: #1e2127;
-    border-left: 3px solid #2d5d8a;
+    background: var(--surface-2);
+    border-left: 3px solid var(--accent);
   }
 
   .fields {

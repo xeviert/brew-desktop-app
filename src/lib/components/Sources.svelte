@@ -393,7 +393,7 @@
     gap: 0.25rem 1rem;
     align-items: baseline;
     padding: 0.4rem 0;
-    border-bottom: 1px solid #2a2e36;
+    border-bottom: 1px solid var(--border);
   }
 
   .dot {
@@ -414,15 +414,15 @@
   }
 
   .dot.error {
-    background: #e06c5f;
+    background: var(--danger);
   }
 
   .dot.unreachable {
-    background: #e0a35f;
+    background: var(--warn);
   }
 
   .next {
-    color: #6f757d;
+    color: var(--text-faint);
     font-variant-numeric: tabular-nums;
   }
 
@@ -434,8 +434,8 @@
   button.minor {
     padding: 0.15rem 0.5rem;
     background: transparent;
-    color: #9aa0a6;
-    border: 1px solid #333842;
+    color: var(--text-muted);
+    border: 1px solid var(--border-strong);
     font-size: 0.85em;
   }
 
@@ -448,21 +448,21 @@
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .age {
-    color: #9aa0a6;
+    color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }
 
   .err {
     grid-column: 1 / -1;
-    color: #e06c5f;
+    color: var(--danger);
   }
 
   .empty {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   table {
@@ -473,25 +473,25 @@
 
   td {
     padding: 0.3rem 0.5rem 0.3rem 0;
-    border-bottom: 1px solid #2a2e36;
+    border-bottom: 1px solid var(--border);
   }
 
   td.num {
-    color: #9aa0a6;
+    color: var(--text-muted);
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
 
   tr.picked td {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   .tag {
     margin-left: 0.4rem;
     padding: 0 0.3rem;
-    border: 1px solid #333842;
-    border-radius: 3px;
-    color: #9aa0a6;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
     font-size: 0.8em;
   }
 
@@ -504,15 +504,15 @@
   }
 
   label span {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   input {
     padding: 0.35rem 0.5rem;
-    background: #1e2127;
+    background: var(--surface-2);
     color: inherit;
-    border: 1px solid #333842;
-    border-radius: 3px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
     font: inherit;
   }
 
@@ -524,7 +524,7 @@
   }
 
   dt {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   dd {
@@ -539,30 +539,30 @@
 
   button {
     padding: 0.4rem 1rem;
-    background: #2d5d8a;
+    background: var(--accent);
     color: #fff;
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     font: inherit;
     cursor: pointer;
   }
 
   button:disabled {
-    background: #2a2e36;
-    color: #6f757d;
+    background: var(--border);
+    color: var(--text-faint);
     cursor: default;
   }
 
   .warn {
-    color: #e0a35f;
+    color: var(--warn);
   }
 
   .hint {
-    color: #9aa0a6;
+    color: var(--text-muted);
     margin-top: -0.5rem;
   }
 
   p[role="alert"] {
-    color: #e06c5f;
+    color: var(--danger);
   }
 </style>

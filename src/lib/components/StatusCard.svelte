@@ -189,8 +189,9 @@
 
 <style>
   .card {
-    background: #1e2127;
-    border: 1px solid #333842;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
     padding: 0.75rem 1rem;
     margin-bottom: 0.75rem;
   }
@@ -203,7 +204,7 @@
   }
 
   dt {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   dd {
@@ -211,19 +212,19 @@
   }
 
   .muted {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   button {
     margin-left: 0.5rem;
-    background: #1e2127;
-    color: #9aa0a6;
-    border: 1px solid #333842;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    border: 1px solid var(--border-strong);
     padding: 0.1rem 0.5rem;
   }
 
   button.clear {
     border: none;
-    color: #6f757d;
+    color: var(--text-faint);
   }
 </style>

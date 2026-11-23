@@ -176,13 +176,13 @@
     padding: 0;
     background: none;
     border: none;
-    color: #7ba7d4;
+    color: var(--accent-text);
     font: inherit;
     cursor: pointer;
   }
 
   button.link:disabled {
-    color: #6f757d;
+    color: var(--text-faint);
     cursor: default;
   }
 
@@ -190,7 +190,7 @@
     list-style: none;
     padding: 0;
     margin: 0;
-    border-left: 2px solid #333842;
+    border-left: 2px solid var(--border-strong);
   }
 
   li {
@@ -199,7 +199,7 @@
 
   .when {
     font-size: 0.9rem;
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   .line {
@@ -215,7 +215,7 @@
 
   .muted,
   .empty {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .actions {
@@ -225,6 +225,6 @@
   }
 
   p[role="alert"] {
-    color: #e06c5f;
+    color: var(--danger);
   }
 </style>

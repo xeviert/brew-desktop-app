@@ -297,11 +297,11 @@
 
   .vessel {
     padding: 0.4rem 0 0.75rem;
-    border-bottom: 1px solid #2a2e36;
+    border-bottom: 1px solid var(--border);
   }
 
   .vessel.archived h3 {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   .hygiene {
@@ -313,14 +313,14 @@
   }
 
   .warn {
-    color: #e0a35f;
+    color: var(--warn);
   }
 
   .edit {
     padding: 0.6rem 0.75rem;
     margin: 0.4rem 0 0.75rem;
-    background: #1e2127;
-    border-left: 3px solid #2d5d8a;
+    background: var(--surface-2);
+    border-left: 3px solid var(--accent);
   }
 
   .show-archived {
@@ -330,23 +330,23 @@
   button.link {
     padding: 0;
     background: none;
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 
   button.link:disabled {
-    color: #4a5160;
+    color: var(--border-hover);
     background: none;
   }
 
   h3 small {
     margin-left: 0.5rem;
-    color: #6f757d;
+    color: var(--text-faint);
     font-weight: normal;
   }
 
   .empty,
   .hint {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   label {
@@ -358,7 +358,7 @@
   }
 
   label span {
-    color: #9aa0a6;
+    color: var(--text-muted);
   }
 
   label.check {
@@ -367,16 +367,16 @@
   }
 
   .metric {
-    font-family: monospace;
+    font-family: var(--font-mono);
   }
 
   input,
   select {
     padding: 0.35rem 0.5rem;
-    background: #1e2127;
+    background: var(--surface-2);
     color: inherit;
-    border: 1px solid #333842;
-    border-radius: 3px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
     font: inherit;
   }
 
@@ -388,21 +388,21 @@
 
   button {
     padding: 0.4rem 1rem;
-    background: #2d5d8a;
+    background: var(--accent);
     color: #fff;
     border: none;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     font: inherit;
     cursor: pointer;
   }
 
   button:disabled {
-    background: #2a2e36;
-    color: #6f757d;
+    background: var(--border);
+    color: var(--text-faint);
     cursor: default;
   }
 
   p[role="alert"] {
-    color: #e06c5f;
+    color: var(--danger);
   }
 </style>

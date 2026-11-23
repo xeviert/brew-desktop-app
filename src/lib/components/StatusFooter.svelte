@@ -86,9 +86,9 @@
     gap: 1rem;
     align-items: baseline;
     padding: 0.4rem 1.5rem;
-    background: #1b1e24;
-    border-top: 1px solid #2a2e36;
-    color: #9aa0a6;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
     font-variant-numeric: tabular-nums;
   }
 
@@ -101,7 +101,7 @@
   }
 
   .err {
-    color: #e06c5f;
+    color: var(--danger);
   }
 
   .sync.idle {
@@ -113,10 +113,10 @@
   }
 
   .sync.error {
-    color: #e06c5f;
+    color: var(--danger);
   }
 
   .sync.unreachable {
-    color: #e0a35f;
+    color: var(--warn);
   }
 </style>

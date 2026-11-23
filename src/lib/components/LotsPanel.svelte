@@ -237,7 +237,7 @@
   .lots {
     margin: 0 0 0.75rem 0.4rem;
     padding: 0.25rem 0 0.25rem 1rem;
-    border-left: 2px solid #2a2e36;
+    border-left: 2px solid var(--border);
   }
 
   table {
@@ -253,16 +253,16 @@
   }
 
   th {
-    color: #6f757d;
+    color: var(--text-faint);
     font-weight: normal;
   }
 
   tr.archived td {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   td small {
-    color: #6f757d;
+    color: var(--text-faint);
   }
 
   .row-actions {
@@ -272,7 +272,7 @@
 
   .over,
   .nudge {
-    color: #e0a35f;
+    color: var(--warn);
   }
 
   td small {
@@ -302,6 +302,6 @@
   }
 
   a {
-    color: #7ba7d4;
+    color: var(--accent-text);
   }
 </style>
